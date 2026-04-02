@@ -111,7 +111,7 @@ For each `src_ip` and `dst_ip`, `parquethosts` resolves names in this order:
 3. if no log match is found, a persistent reverse-DNS cache hit
 4. if no cache hit is found, a live PTR lookup
 
-Successful PTR results are appended to `<dst>/reverse_dns_cache.jsonl` and reused forever. PTR misses are cached only in memory for the current run.
+Successful PTR results are appended to `<dst>/reverse_dns_cache.jsonl` and reused forever. PTR misses are cached only in memory for the current run. Malformed PTR responses are logged as warnings, treated as misses, and do not stop enrichment.
 
 ### Refresh Behavior
 

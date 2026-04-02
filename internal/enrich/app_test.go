@@ -1,6 +1,7 @@
 package enrich
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -116,6 +117,37 @@ func TestRunCachesReverseLookupsAcrossRuns(t *testing.T) {
 	assert.Equal(t, lookupCount.Load(), int32(2))
 	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
 	assert.Equal(t, *rows[0].SrcHost, "router.home.arpa")
+}
+
+func TestRunIgnoresMalformedPTRResponses(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
+
+	stubReverseLookup(t, func(ipAddress string) ([]string, error) {
+		if ipAddress == "192.0.2.10" {
+			return nil, &net.DNSError{
+				Err:  invalidPTRNameErrorFragment,
+				Name: ipAddress,
+			}
+		}
+
+		return []string{"example.net."}, nil
+	})
+
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, len(rows), 1)
+	assert.Assert(t, rows[0].SrcHost == nil)
+	assert.Assert(t, rows[0].Src2LD == nil)
+	assert.Assert(t, rows[0].SrcTLD == nil)
+	assert.Equal(t, *rows[0].DstHost, "example.net")
+	assert.Equal(t, *rows[0].Dst2LD, "example.net")
+	assert.Equal(t, *rows[0].DstTLD, "net")
 }
 
 func TestRunReportsRowProgressAcrossStaleJobs(t *testing.T) {

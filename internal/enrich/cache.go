@@ -8,10 +8,13 @@ import (
 	"net"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 )
 
 var reverseLookupAddr = net.LookupAddr
+
+const invalidPTRNameErrorFragment = "DNS response contained records which contain invalid names"
 
 type reverseDNSCache struct {
 	filePath    string
@@ -22,14 +25,20 @@ type reverseDNSCache struct {
 }
 
 type lookupState struct {
-	done chan struct{}
-	err  error
-	host string
+	done    chan struct{}
+	err     error
+	host    string
+	warning error
 }
 
 type cacheEntry struct {
 	Host string `json:"host"`
 	IP   string `json:"ip"`
+}
+
+type cacheLookupResult struct {
+	names   *derivedNames
+	warning error
 }
 
 func loadReverseDNSCache(filePath string) (*reverseDNSCache, error) {
@@ -71,44 +80,45 @@ func loadReverseDNSCache(filePath string) (*reverseDNSCache, error) {
 	return cache, nil
 }
 
-func (c *reverseDNSCache) Lookup(ipAddress string) (*derivedNames, error) {
+func (c *reverseDNSCache) Lookup(ipAddress string) (cacheLookupResult, error) {
 	c.mu.Lock()
 	if host, ok := c.hostByIP[ipAddress]; ok {
 		c.mu.Unlock()
 		names := deriveNames(host)
-		return &names, nil
+		return cacheLookupResult{names: &names}, nil
 	}
 
 	if _, ok := c.missByIP[ipAddress]; ok {
 		c.mu.Unlock()
-		return nil, nil
+		return cacheLookupResult{}, nil
 	}
 
 	if pendingState, ok := c.pendingByIP[ipAddress]; ok {
 		c.mu.Unlock()
 		<-pendingState.done
 		if pendingState.err != nil {
-			return nil, pendingState.err
+			return cacheLookupResult{}, pendingState.err
 		}
 
 		if pendingState.host == "" {
-			return nil, nil
+			return cacheLookupResult{warning: pendingState.warning}, nil
 		}
 
 		names := deriveNames(pendingState.host)
-		return &names, nil
+		return cacheLookupResult{names: &names, warning: pendingState.warning}, nil
 	}
 
 	pendingState := &lookupState{done: make(chan struct{})}
 	c.pendingByIP[ipAddress] = pendingState
 	c.mu.Unlock()
 
-	host, err := lookupAddress(ipAddress)
+	host, warning, err := lookupAddress(ipAddress)
 
 	c.mu.Lock()
 	delete(c.pendingByIP, ipAddress)
 	pendingState.err = err
 	pendingState.host = host
+	pendingState.warning = warning
 	if err == nil {
 		if host == "" {
 			c.missByIP[ipAddress] = struct{}{}
@@ -120,19 +130,19 @@ func (c *reverseDNSCache) Lookup(ipAddress string) (*derivedNames, error) {
 	c.mu.Unlock()
 
 	if err != nil {
-		return nil, err
+		return cacheLookupResult{}, err
 	}
 
 	if host == "" {
-		return nil, nil
+		return cacheLookupResult{warning: warning}, nil
 	}
 
 	if err := c.append(ipAddress, host); err != nil {
-		return nil, err
+		return cacheLookupResult{}, err
 	}
 
 	names := deriveNames(host)
-	return &names, nil
+	return cacheLookupResult{names: &names, warning: warning}, nil
 }
 
 func (c *reverseDNSCache) append(ipAddress, host string) error {
@@ -154,15 +164,19 @@ func (c *reverseDNSCache) append(ipAddress, host string) error {
 	return nil
 }
 
-func lookupAddress(ipAddress string) (string, error) {
+func lookupAddress(ipAddress string) (host string, warning, err error) {
 	names, err := reverseLookupAddr(ipAddress)
 	if err != nil {
 		var dnsError *net.DNSError
 		if errors.As(err, &dnsError) && dnsError.IsNotFound {
-			return "", nil
+			return "", nil, nil
 		}
 
-		return "", fmt.Errorf("lookup PTR for %q: %w", ipAddress, err)
+		if isInvalidPTRNameError(err) {
+			return "", fmt.Errorf("lookup PTR for %q: %w", ipAddress, err), nil
+		}
+
+		return "", nil, fmt.Errorf("lookup PTR for %q: %w", ipAddress, err)
 	}
 
 	normalizedNames := make([]string, 0, len(names))
@@ -182,9 +196,18 @@ func lookupAddress(ipAddress string) (string, error) {
 	}
 
 	if len(normalizedNames) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 
 	slices.Sort(normalizedNames)
-	return normalizedNames[0], nil
+	return normalizedNames[0], nil, nil
+}
+
+func isInvalidPTRNameError(err error) bool {
+	var dnsError *net.DNSError
+	if !errors.As(err, &dnsError) {
+		return false
+	}
+
+	return strings.Contains(dnsError.Err, invalidPTRNameErrorFragment)
 }

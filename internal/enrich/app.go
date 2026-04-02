@@ -297,7 +297,16 @@ func resolveNames(ipAddress string, flowStart time.Time, logIndex *dnsIndex, cac
 		return names, nil
 	}
 
-	return cache.Lookup(ipAddress)
+	result, err := cache.Lookup(ipAddress)
+	if err != nil {
+		return nil, err
+	}
+
+	if result.warning != nil {
+		slog.Debug("skipping malformed PTR response", "ip", ipAddress, "error", result.warning)
+	}
+
+	return result.names, nil
 }
 
 func relevantLogFiles(period model.Period, logFiles []model.SourceFile) []model.SourceFile {
