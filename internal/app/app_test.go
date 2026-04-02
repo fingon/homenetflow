@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fingon/go-nfdump2parquet/internal/model"
-	"github.com/fingon/go-nfdump2parquet/internal/parquetout"
+	"github.com/fingon/homenetflow/internal/model"
+	"github.com/fingon/homenetflow/internal/parquetout"
 	"github.com/parquet-go/parquet-go"
 	"gotest.tools/v3/assert"
 )

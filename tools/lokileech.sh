@@ -43,9 +43,8 @@ for i in $(seq 1 "$DAYS"); do
 
 # NB: If you get error about batch size being too small, incrase it -
 # at least 1k doesn't seem to work for me.
-  
-# if using auth:  
+
+# if using auth:
 #    --username="$TENANT_ID" \
 #    --password="$GRAFANA_TOKEN" \
 done
-

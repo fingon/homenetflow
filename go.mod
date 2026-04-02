@@ -8,6 +8,7 @@ require (
 	github.com/alecthomas/kong v1.14.0
 	github.com/parquet-go/parquet-go v0.25.1
 	github.com/phaag/go-nfdump v0.0.5
+	golang.org/x/net v0.52.0
 	golang.org/x/sync v0.20.0
 	gotest.tools/v3 v3.5.2
 )
@@ -215,7 +216,7 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20260209203927-2842357ff358 // indirect
 	golang.org/x/mod v0.34.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/tools v0.43.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect

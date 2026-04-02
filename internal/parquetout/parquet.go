@@ -2,35 +2,45 @@ package parquetout
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
-	"github.com/fingon/go-nfdump2parquet/internal/model"
+	"github.com/fingon/homenetflow/internal/model"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/snappy"
 )
 
 const (
-	manifestMetadataKey  = "go-nfdump2parquet.manifest"
-	writerBufferRowCount = 1024
+	enrichmentManifestMetadataKey = "homenetflow.parquethosts.manifest"
+	manifestMetadataKey           = "go-nfdump2parquet.manifest"
+	readerBufferRowCount          = 1024
+	writerBufferRowCount          = 1024
 )
 
 type Row struct {
 	Bytes       int64   `parquet:"bytes"`
 	DurationNs  int64   `parquet:"duration_ns"`
+	Dst2LD      *string `parquet:"dst_2ld,optional"`
 	DstAS       *int32  `parquet:"dst_as,optional"`
+	DstHost     *string `parquet:"dst_host,optional"`
 	DstIP       string  `parquet:"dst_ip"`
 	DstMask     *int32  `parquet:"dst_mask,optional"`
 	DstPort     int32   `parquet:"dst_port"`
+	DstTLD      *string `parquet:"dst_tld,optional"`
 	NextHopIP   *string `parquet:"next_hop_ip,optional"`
 	Packets     int64   `parquet:"packets"`
 	Protocol    int32   `parquet:"protocol"`
 	RouterIP    *string `parquet:"router_ip,optional"`
+	Src2LD      *string `parquet:"src_2ld,optional"`
 	SrcAS       *int32  `parquet:"src_as,optional"`
+	SrcHost     *string `parquet:"src_host,optional"`
 	SrcIP       string  `parquet:"src_ip"`
 	SrcMask     *int32  `parquet:"src_mask,optional"`
 	SrcPort     int32   `parquet:"src_port"`
+	SrcTLD      *string `parquet:"src_tld,optional"`
 	TCPFlags    *int32  `parquet:"tcp_flags,optional"`
 	TimeEndNs   int64   `parquet:"time_end_ns"`
 	TimeStartNs int64   `parquet:"time_start_ns"`
@@ -42,6 +52,28 @@ type FileWriter struct {
 }
 
 func Create(path string, manifest model.RefreshManifest) (*FileWriter, func() error, error) {
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal manifest: %w", err)
+	}
+
+	return createWithMetadata(path, map[string]string{
+		manifestMetadataKey: string(manifestBytes),
+	})
+}
+
+func CreateEnriched(path string, manifest model.EnrichmentManifest) (*FileWriter, func() error, error) {
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal enrichment manifest: %w", err)
+	}
+
+	return createWithMetadata(path, map[string]string{
+		enrichmentManifestMetadataKey: string(manifestBytes),
+	})
+}
+
+func createWithMetadata(path string, metadata map[string]string) (*FileWriter, func() error, error) {
 	tempPath := path + ".tmp"
 	file, err := os.Create(tempPath)
 	if err != nil {
@@ -49,17 +81,9 @@ func Create(path string, manifest model.RefreshManifest) (*FileWriter, func() er
 	}
 
 	writer := parquet.NewGenericWriter[Row](file, parquet.Compression(&snappy.Codec{}))
-	manifestBytes, err := json.Marshal(manifest)
-	if err != nil {
-		closeErr := file.Close()
-		if closeErr != nil {
-			return nil, nil, fmt.Errorf("marshal manifest: %w; close temp file: %w", err, closeErr)
-		}
-
-		return nil, nil, fmt.Errorf("marshal manifest: %w", err)
+	for key, value := range metadata {
+		writer.SetKeyValueMetadata(key, value)
 	}
-
-	writer.SetKeyValueMetadata(manifestMetadataKey, string(manifestBytes))
 
 	outputWriter := &FileWriter{
 		rows:   make([]Row, 0, writerBufferRowCount),
@@ -105,17 +129,23 @@ func (w *FileWriter) WriteBatch(records []model.FlowRecord) error {
 			Bytes:       record.Bytes,
 			DurationNs:  record.DurationNs,
 			DstAS:       record.DstAS,
+			Dst2LD:      record.Dst2LD,
+			DstHost:     record.DstHost,
 			DstIP:       record.DstIP,
 			DstMask:     record.DstMask,
 			DstPort:     record.DstPort,
+			DstTLD:      record.DstTLD,
 			NextHopIP:   record.NextHopIP,
 			Packets:     record.Packets,
 			Protocol:    record.Protocol,
 			RouterIP:    record.RouterIP,
+			Src2LD:      record.Src2LD,
 			SrcAS:       record.SrcAS,
+			SrcHost:     record.SrcHost,
 			SrcIP:       record.SrcIP,
 			SrcMask:     record.SrcMask,
 			SrcPort:     record.SrcPort,
+			SrcTLD:      record.SrcTLD,
 			TCPFlags:    record.TCPFlags,
 			TimeEndNs:   record.TimeEndNs,
 			TimeStartNs: record.TimeStartNs,
@@ -147,31 +177,97 @@ func (w *FileWriter) flush() error {
 }
 
 func ReadManifest(path string) (model.RefreshManifest, error) {
+	return readMetadata(path, manifestMetadataKey, "manifest", &model.RefreshManifest{})
+}
+
+func ReadEnrichmentManifest(path string) (model.EnrichmentManifest, error) {
+	return readMetadata(path, enrichmentManifestMetadataKey, "enrichment manifest", &model.EnrichmentManifest{})
+}
+
+func ReadFile(path string, emit func(model.FlowRecord) error) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %q: %w", path, err)
+	}
+	defer file.Close()
+
+	reader := parquet.NewGenericReader[Row](file)
+	defer reader.Close()
+
+	rows := make([]Row, readerBufferRowCount)
+	for {
+		rowCount, err := reader.Read(rows)
+		for _, row := range rows[:rowCount] {
+			if emitErr := emit(row.toFlowRecord()); emitErr != nil {
+				return emitErr
+			}
+		}
+
+		if err == nil {
+			continue
+		}
+
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+
+		return fmt.Errorf("read parquet rows from %q: %w", path, err)
+	}
+}
+
+func (r Row) toFlowRecord() model.FlowRecord {
+	return model.FlowRecord{
+		Bytes:       r.Bytes,
+		DurationNs:  r.DurationNs,
+		Dst2LD:      r.Dst2LD,
+		DstAS:       r.DstAS,
+		DstHost:     r.DstHost,
+		DstIP:       r.DstIP,
+		DstMask:     r.DstMask,
+		DstPort:     r.DstPort,
+		DstTLD:      r.DstTLD,
+		NextHopIP:   r.NextHopIP,
+		Packets:     r.Packets,
+		Protocol:    r.Protocol,
+		RouterIP:    r.RouterIP,
+		Src2LD:      r.Src2LD,
+		SrcAS:       r.SrcAS,
+		SrcHost:     r.SrcHost,
+		SrcIP:       r.SrcIP,
+		SrcMask:     r.SrcMask,
+		SrcPort:     r.SrcPort,
+		SrcTLD:      r.SrcTLD,
+		TCPFlags:    r.TCPFlags,
+		TimeEndNs:   r.TimeEndNs,
+		TimeStartNs: r.TimeStartNs,
+	}
+}
+
+func readMetadata[T any](path, metadataKey, description string, target *T) (T, error) {
 	fileInfo, err := os.Stat(path)
 	if err != nil {
-		return model.RefreshManifest{}, fmt.Errorf("stat %q: %w", path, err)
+		return *target, fmt.Errorf("stat %q: %w", path, err)
 	}
 
 	file, err := os.Open(path)
 	if err != nil {
-		return model.RefreshManifest{}, fmt.Errorf("open %q: %w", path, err)
+		return *target, fmt.Errorf("open %q: %w", path, err)
 	}
 	defer file.Close()
 
 	parquetFile, err := parquet.OpenFile(file, fileInfo.Size())
 	if err != nil {
-		return model.RefreshManifest{}, fmt.Errorf("open parquet %q: %w", path, err)
+		return *target, fmt.Errorf("open parquet %q: %w", path, err)
 	}
 
-	manifestValue, ok := parquetFile.Lookup(manifestMetadataKey)
+	manifestValue, ok := parquetFile.Lookup(metadataKey)
 	if !ok {
-		return model.RefreshManifest{}, fmt.Errorf("manifest metadata %q missing", manifestMetadataKey)
+		return *target, fmt.Errorf("%s metadata %q missing", description, metadataKey)
 	}
 
-	var manifest model.RefreshManifest
-	if err := json.Unmarshal([]byte(manifestValue), &manifest); err != nil {
-		return model.RefreshManifest{}, fmt.Errorf("unmarshal manifest for %q: %w", path, err)
+	if err := json.Unmarshal([]byte(manifestValue), target); err != nil {
+		return *target, fmt.Errorf("unmarshal %s for %q: %w", description, path, err)
 	}
 
-	return manifest, nil
+	return *target, nil
 }

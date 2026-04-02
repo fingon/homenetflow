@@ -18,6 +18,19 @@ type Period struct {
 	Start time.Time
 }
 
+func (p Period) End() time.Time {
+	switch p.Kind {
+	case PeriodMonth:
+		return p.Start.AddDate(0, 1, 0)
+	case PeriodDay:
+		return p.Start.AddDate(0, 0, 1)
+	case PeriodHour:
+		return p.Start.Add(time.Hour)
+	default:
+		return p.Start
+	}
+}
+
 func (p Period) Filename() string {
 	return fmt.Sprintf("nfcap_%s.parquet", p.Label())
 }
@@ -58,6 +71,12 @@ type RefreshManifest struct {
 	Sources []SourceManifest `json:"sources"`
 }
 
+type EnrichmentManifest struct {
+	Logs    []SourceManifest `json:"logs"`
+	Source  SourceManifest   `json:"source"`
+	Version int              `json:"version"`
+}
+
 func NewRefreshManifest(sourceFiles []SourceFile) RefreshManifest {
 	manifest := RefreshManifest{
 		Version: 1,
@@ -79,6 +98,32 @@ func NewRefreshManifest(sourceFiles []SourceFile) RefreshManifest {
 	return manifest
 }
 
+func NewEnrichmentManifest(sourceFile SourceFile, logFiles []SourceFile) EnrichmentManifest {
+	manifest := EnrichmentManifest{
+		Logs:    make([]SourceManifest, 0, len(logFiles)),
+		Source:  sourceManifestForFile(sourceFile),
+		Version: 1,
+	}
+
+	for _, logFile := range logFiles {
+		manifest.Logs = append(manifest.Logs, sourceManifestForFile(logFile))
+	}
+
+	sort.Slice(manifest.Logs, func(i, j int) bool {
+		return manifest.Logs[i].Path < manifest.Logs[j].Path
+	})
+
+	return manifest
+}
+
+func sourceManifestForFile(sourceFile SourceFile) SourceManifest {
+	return SourceManifest{
+		Path:      sourceFile.RelPath,
+		SizeByte:  sourceFile.SizeByte,
+		ModTimeNs: sourceFile.ModTime.UnixNano(),
+	}
+}
+
 type FlowRecord struct {
 	TimeStartNs int64
 	TimeEndNs   int64
@@ -97,6 +142,12 @@ type FlowRecord struct {
 	SrcMask     *int32
 	DstMask     *int32
 	TCPFlags    *int32
+	SrcHost     *string
+	DstHost     *string
+	Src2LD      *string
+	Dst2LD      *string
+	SrcTLD      *string
+	DstTLD      *string
 }
 
 type FlowParser interface {

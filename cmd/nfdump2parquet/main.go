@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
-	"github.com/fingon/go-nfdump2parquet/internal/app"
-	"github.com/fingon/go-nfdump2parquet/internal/model"
-	"github.com/fingon/go-nfdump2parquet/internal/nfdumpparser"
+	"github.com/fingon/homenetflow/internal/app"
+	"github.com/fingon/homenetflow/internal/model"
+	"github.com/fingon/homenetflow/internal/nfdumpparser"
 )
 
 type cli struct {

@@ -7,7 +7,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/fingon/go-nfdump2parquet/internal/model"
+	"github.com/fingon/homenetflow/internal/model"
 )
 
 func NeedsRebuild(dstPath string, sourceFiles []model.SourceFile, readManifest func(string) (model.RefreshManifest, error)) (bool, error) {
@@ -34,6 +34,52 @@ func NeedsRebuild(dstPath string, sourceFiles []model.SourceFile, readManifest f
 	}
 
 	return true, nil
+}
+
+func NeedsEnrichmentRebuild(
+	dstPath string,
+	sourceFile model.SourceFile,
+	logFiles []model.SourceFile,
+	readManifest func(string) (model.EnrichmentManifest, error),
+) (bool, error) {
+	if _, err := os.Stat(dstPath); err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+
+		return false, fmt.Errorf("stat %q: %w", dstPath, err)
+	}
+
+	manifest, manifestFound := func() (model.EnrichmentManifest, bool) {
+		manifest, err := readManifest(dstPath)
+		if err != nil {
+			return model.EnrichmentManifest{}, false
+		}
+
+		return manifest, true
+	}()
+	if !manifestFound {
+		return true, nil
+	}
+
+	expectedManifest := model.NewEnrichmentManifest(sourceFile, logFiles)
+	if manifest.Version != expectedManifest.Version || manifest.Source != expectedManifest.Source {
+		return true, nil
+	}
+
+	knownLogs := make(map[string]model.SourceManifest, len(manifest.Logs))
+	for _, logFile := range manifest.Logs {
+		knownLogs[logFile.Path] = logFile
+	}
+
+	for _, logFile := range expectedManifest.Logs {
+		previousLogFile, ok := knownLogs[logFile.Path]
+		if !ok || previousLogFile != logFile {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func CleanupSuperseded(dstRootPath string, period model.Period) error {

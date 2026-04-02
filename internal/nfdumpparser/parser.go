@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/fingon/go-nfdump2parquet/internal/model"
+	"github.com/fingon/homenetflow/internal/model"
 	nfdump "github.com/phaag/go-nfdump"
 )
 

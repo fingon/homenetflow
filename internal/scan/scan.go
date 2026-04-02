@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fingon/go-nfdump2parquet/internal/model"
+	"github.com/fingon/homenetflow/internal/model"
 )
 
 const hierarchyDepth = 5

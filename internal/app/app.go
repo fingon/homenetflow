@@ -11,10 +11,10 @@ import (
 	"slices"
 	"time"
 
-	"github.com/fingon/go-nfdump2parquet/internal/model"
-	"github.com/fingon/go-nfdump2parquet/internal/parquetout"
-	"github.com/fingon/go-nfdump2parquet/internal/refresh"
-	"github.com/fingon/go-nfdump2parquet/internal/scan"
+	"github.com/fingon/homenetflow/internal/model"
+	"github.com/fingon/homenetflow/internal/parquetout"
+	"github.com/fingon/homenetflow/internal/refresh"
+	"github.com/fingon/homenetflow/internal/scan"
 	"golang.org/x/sync/errgroup"
 )
 

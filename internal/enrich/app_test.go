@@ -1,0 +1,183 @@
+package enrich
+
+import (
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/fingon/homenetflow/internal/model"
+	"github.com/fingon/homenetflow/internal/parquetout"
+	"gotest.tools/v3/assert"
+)
+
+func TestRunEnrichesParquetFromLogs(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+	stubReverseLookup(t, nil)
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, model.FlowRecord{
+		SrcIP:       "192.0.2.10",
+		DstIP:       "198.51.100.20",
+		SrcPort:     123,
+		DstPort:     443,
+		Protocol:    6,
+		Packets:     1,
+		Bytes:       2,
+		TimeStartNs: time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC).UnixNano(),
+		TimeEndNs:   time.Date(2026, 4, 1, 12, 30, 1, 0, time.UTC).UnixNano(),
+		DurationNs:  int64(time.Second),
+	})
+
+	logPath := filepath.Join(srcLogDir, "2026-04-01.jsonl")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"192.0.2.10\\\"],\\\"query_name\\\":\\\"www.fingon.iki.fi\\\",\\\"timestamp_end\\\":\\\"2026-04-01T12:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T12:00:00Z\"}\n" +
+		"{\"line\":\"{\\\"message\\\":\\\"1 192.168.1.1/123 reply example.net is 198.51.100.20\\\"}\",\"timestamp\":\"2026-04-01T12:10:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, len(rows), 1)
+	assert.Equal(t, *rows[0].SrcHost, "www.fingon.iki.fi")
+	assert.Equal(t, *rows[0].Src2LD, "iki.fi")
+	assert.Equal(t, *rows[0].SrcTLD, "fi")
+	assert.Equal(t, *rows[0].DstHost, "example.net")
+	assert.Equal(t, *rows[0].Dst2LD, "example.net")
+	assert.Equal(t, *rows[0].DstTLD, "net")
+}
+
+func TestRunDoesNotRebuildWhenRelevantLogIsDeleted(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+	stubReverseLookup(t, nil)
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
+
+	logPath := filepath.Join(srcLogDir, "2026-04-01.jsonl")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"192.0.2.10\\\"],\\\"query_name\\\":\\\"www.fingon.iki.fi\\\",\\\"timestamp_end\\\":\\\"2026-04-01T12:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T12:00:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+	outputPath := filepath.Join(dstDir, "nfcap_2026040112.parquet")
+	firstInfo, err := os.Stat(outputPath)
+	assert.NilError(t, err)
+
+	assert.NilError(t, os.Remove(logPath))
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+
+	secondInfo, err := os.Stat(outputPath)
+	assert.NilError(t, err)
+	assert.Equal(t, secondInfo.ModTime(), firstInfo.ModTime())
+}
+
+func TestRunDeletesOutputWhenSourceParquetDisappears(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+	stubReverseLookup(t, nil)
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+
+	assert.NilError(t, os.Remove(sourcePath))
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+	_, err := os.Stat(filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Assert(t, os.IsNotExist(err))
+}
+
+func TestRunCachesReverseLookupsAcrossRuns(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
+
+	var lookupCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCount.Add(1)
+		return []string{"router.home.arpa."}, nil
+	})
+
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+
+	assert.Equal(t, lookupCount.Load(), int32(2))
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, *rows[0].SrcHost, "router.home.arpa")
+}
+
+func stubReverseLookup(t *testing.T, lookup func(string) ([]string, error)) {
+	t.Helper()
+
+	previousLookup := reverseLookupAddr
+	if lookup == nil {
+		reverseLookupAddr = func(string) ([]string, error) {
+			return nil, nil
+		}
+	} else {
+		reverseLookupAddr = lookup
+	}
+
+	t.Cleanup(func() {
+		reverseLookupAddr = previousLookup
+	})
+}
+
+func sampleEnrichRecord() model.FlowRecord {
+	return model.FlowRecord{
+		SrcIP:       "192.0.2.10",
+		DstIP:       "198.51.100.20",
+		SrcPort:     123,
+		DstPort:     443,
+		Protocol:    6,
+		Packets:     1,
+		Bytes:       2,
+		TimeStartNs: time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC).UnixNano(),
+		TimeEndNs:   time.Date(2026, 4, 1, 12, 30, 1, 0, time.UTC).UnixNano(),
+		DurationNs:  int64(time.Second),
+	}
+}
+
+func writeSourceParquet(t *testing.T, path string, record model.FlowRecord) {
+	t.Helper()
+
+	writer, finalize, err := parquetout.Create(path, model.RefreshManifest{Version: 1})
+	assert.NilError(t, err)
+	assert.NilError(t, writer.Write(record))
+	assert.NilError(t, finalize())
+}
+
+func readRows(t *testing.T, path string) []parquetout.Row {
+	t.Helper()
+
+	records := make([]parquetout.Row, 0, 4)
+	assert.NilError(t, parquetout.ReadFile(path, func(record model.FlowRecord) error {
+		records = append(records, parquetout.Row{
+			Dst2LD:      record.Dst2LD,
+			DstHost:     record.DstHost,
+			DstIP:       record.DstIP,
+			DstPort:     record.DstPort,
+			DstTLD:      record.DstTLD,
+			Src2LD:      record.Src2LD,
+			SrcHost:     record.SrcHost,
+			SrcIP:       record.SrcIP,
+			SrcPort:     record.SrcPort,
+			SrcTLD:      record.SrcTLD,
+			TimeEndNs:   record.TimeEndNs,
+			TimeStartNs: record.TimeStartNs,
+		})
+		return nil
+	}))
+	return records
+}
