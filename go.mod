@@ -1,4 +1,4 @@
-module github.com/fingon/go-nfdump2parquet
+module github.com/fingon/homenetflow
 
 go 1.26.1
 
