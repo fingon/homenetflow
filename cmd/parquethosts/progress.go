@@ -40,6 +40,7 @@ func (p *enrichProgress) callback(doneRowCount, totalRowCount int64) {
 		p.bar = progressbar.NewOptions64(
 			totalRowCount,
 			progressbar.OptionSetDescription(progressDescription),
+			progressbar.OptionSetRenderBlankState(true),
 			progressbar.OptionSetWriter(p.writer),
 		)
 	}

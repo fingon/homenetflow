@@ -1,11 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"testing"
 
 	"gotest.tools/v3/assert"
 )
+
+func TestEnrichProgressCallbackRendersBlankState(t *testing.T) {
+	var output bytes.Buffer
+
+	progress := newEnrichProgress(&output)
+	progress.callback(0, 3)
+
+	assert.Equal(t, progress.done, int64(0))
+	assert.Equal(t, progress.total, int64(3))
+	assert.Assert(t, progress.bar != nil)
+	assert.Assert(t, output.Len() > 0)
+}
 
 func TestEnrichProgressCallback(t *testing.T) {
 	progress := newEnrichProgress(io.Discard)
