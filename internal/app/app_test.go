@@ -418,6 +418,7 @@ func sampleRecordForIP(srcIP string, timeStartNs int64) model.FlowRecord {
 		DurationNs:  2,
 		DstIP:       "198.51.100.1",
 		DstPort:     443,
+		IPVersion:   model.IPVersion4,
 		Packets:     3,
 		Protocol:    6,
 		SrcIP:       srcIP,
@@ -503,7 +504,7 @@ func readRows(t *testing.T, path string) []parquetout.Row {
 
 func rowsContainSrcIP(rows []parquetout.Row, srcIP string) bool {
 	for _, row := range rows {
-		if row.SrcIP == srcIP {
+		if row.SrcIP == srcIP && row.IPVersion == model.IPVersion4 {
 			return true
 		}
 	}

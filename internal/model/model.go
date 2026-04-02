@@ -8,9 +8,12 @@ import (
 )
 
 const (
-	PeriodMonth = "month"
-	PeriodDay   = "day"
-	PeriodHour  = "hour"
+	PeriodMonth            = "month"
+	PeriodDay              = "day"
+	PeriodHour             = "hour"
+	IPVersionUnknown int32 = 0
+	IPVersion4       int32 = 4
+	IPVersion6       int32 = 6
 )
 
 type Period struct {
@@ -128,6 +131,7 @@ type FlowRecord struct {
 	TimeStartNs int64
 	TimeEndNs   int64
 	DurationNs  int64
+	IPVersion   int32
 	Protocol    int32
 	SrcIP       string
 	DstIP       string

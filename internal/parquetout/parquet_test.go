@@ -26,6 +26,7 @@ func TestManifestRoundTrip(t *testing.T) {
 		DurationNs:  2,
 		DstIP:       "198.51.100.1",
 		DstPort:     443,
+		IPVersion:   model.IPVersion4,
 		Packets:     3,
 		Protocol:    6,
 		SrcIP:       "192.0.2.1",
@@ -48,6 +49,7 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 	srcHost := "www.fingon.iki.fi"
 	src2LD := "iki.fi"
 	srcTLD := "fi"
+	dstHost := "example.net"
 
 	writer, finalize, err := CreateEnriched(path, model.EnrichmentManifest{
 		Source:  model.SourceManifest{Path: "nfcap_202603.parquet", SizeByte: 123, ModTimeNs: 456},
@@ -58,7 +60,9 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 		Bytes:       1,
 		DurationNs:  2,
 		DstIP:       "198.51.100.1",
+		DstHost:     &dstHost,
 		DstPort:     443,
+		IPVersion:   model.IPVersion6,
 		Packets:     3,
 		Protocol:    6,
 		Src2LD:      &src2LD,
@@ -81,4 +85,6 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 	assert.Equal(t, *records[0].SrcHost, srcHost)
 	assert.Equal(t, *records[0].Src2LD, src2LD)
 	assert.Equal(t, *records[0].SrcTLD, srcTLD)
+	assert.Equal(t, *records[0].DstHost, dstHost)
+	assert.Equal(t, records[0].IPVersion, model.IPVersion6)
 }

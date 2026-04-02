@@ -193,6 +193,7 @@ Each base parquet row contains:
 - `time_start_ns`
 - `time_end_ns`
 - `duration_ns`
+- `ip_version`
 - `protocol`
 - `src_ip`
 - `dst_ip`
@@ -200,6 +201,8 @@ Each base parquet row contains:
 - `dst_port`
 - `packets`
 - `bytes`
+
+`ip_version` is `4` for IPv4 flows, `6` for IPv6 flows, and `0` when the source record does not expose an IP version.
 
 When present in the source record, these optional columns are also emitted:
 

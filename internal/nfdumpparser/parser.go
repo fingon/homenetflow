@@ -10,6 +10,11 @@ import (
 
 type Parser struct{}
 
+type ipVersionRecord interface {
+	IsIPv4() bool
+	IsIPv6() bool
+}
+
 func (Parser) ParseFile(path string, emit func(model.FlowRecord) error) error {
 	nfFile := nfdump.New()
 	err := nfFile.Open(path)
@@ -48,6 +53,7 @@ func flowRecordFromNFDump(record *nfdump.FlowRecordV3) model.FlowRecord {
 	var startTimeNs int64
 	var endTimeNs int64
 	var durationNs int64
+	ipVersion := ipVersionForRecord(record)
 	var protocol int32
 	var srcPort int32
 	var dstPort int32
@@ -72,7 +78,6 @@ func flowRecordFromNFDump(record *nfdump.FlowRecordV3) model.FlowRecord {
 		srcIP = ipAddress.SrcIP.String()
 		dstIP = ipAddress.DstIP.String()
 	}
-
 	var srcAS *int32
 	var dstAS *int32
 	if asRouting != nil {
@@ -104,6 +109,7 @@ func flowRecordFromNFDump(record *nfdump.FlowRecordV3) model.FlowRecord {
 		TimeStartNs: startTimeNs,
 		TimeEndNs:   endTimeNs,
 		DurationNs:  durationNs,
+		IPVersion:   ipVersion,
 		Protocol:    protocol,
 		SrcIP:       srcIP,
 		DstIP:       dstIP,
@@ -118,6 +124,17 @@ func flowRecordFromNFDump(record *nfdump.FlowRecordV3) model.FlowRecord {
 		SrcMask:     srcMask,
 		DstMask:     dstMask,
 		TCPFlags:    tcpFlags,
+	}
+}
+
+func ipVersionForRecord(record ipVersionRecord) int32 {
+	switch {
+	case record.IsIPv4():
+		return model.IPVersion4
+	case record.IsIPv6():
+		return model.IPVersion6
+	default:
+		return model.IPVersionUnknown
 	}
 }
 

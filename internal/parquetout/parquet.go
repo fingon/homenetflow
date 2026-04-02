@@ -30,6 +30,7 @@ type Row struct {
 	DstMask     *int32  `parquet:"dst_mask,optional"`
 	DstPort     int32   `parquet:"dst_port"`
 	DstTLD      *string `parquet:"dst_tld,optional"`
+	IPVersion   int32   `parquet:"ip_version"`
 	NextHopIP   *string `parquet:"next_hop_ip,optional"`
 	Packets     int64   `parquet:"packets"`
 	Protocol    int32   `parquet:"protocol"`
@@ -135,6 +136,7 @@ func (w *FileWriter) WriteBatch(records []model.FlowRecord) error {
 			DstMask:     record.DstMask,
 			DstPort:     record.DstPort,
 			DstTLD:      record.DstTLD,
+			IPVersion:   record.IPVersion,
 			NextHopIP:   record.NextHopIP,
 			Packets:     record.Packets,
 			Protocol:    record.Protocol,
@@ -263,6 +265,7 @@ func (r Row) toFlowRecord() model.FlowRecord {
 		DstMask:     r.DstMask,
 		DstPort:     r.DstPort,
 		DstTLD:      r.DstTLD,
+		IPVersion:   r.IPVersion,
 		NextHopIP:   r.NextHopIP,
 		Packets:     r.Packets,
 		Protocol:    r.Protocol,
