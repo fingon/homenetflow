@@ -8,6 +8,7 @@ require (
 	github.com/alecthomas/kong v1.14.0
 	github.com/parquet-go/parquet-go v0.25.1
 	github.com/phaag/go-nfdump v0.0.5
+	github.com/schollz/progressbar/v3 v3.18.0
 	golang.org/x/net v0.52.0
 	golang.org/x/sync v0.20.0
 	gotest.tools/v3 v3.5.2
@@ -144,6 +145,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/mgechev/revive v1.15.0 // indirect
+	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/moricho/tparallel v0.3.2 // indirect
@@ -216,6 +218,7 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20260209203927-2842357ff358 // indirect
 	golang.org/x/mod v0.34.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/term v0.41.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/tools v0.43.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect

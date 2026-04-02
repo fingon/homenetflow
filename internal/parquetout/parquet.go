@@ -184,7 +184,39 @@ func ReadEnrichmentManifest(path string) (model.EnrichmentManifest, error) {
 	return readMetadata(path, enrichmentManifestMetadataKey, "enrichment manifest", &model.EnrichmentManifest{})
 }
 
+func RowCount(path string) (int64, error) {
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("stat %q: %w", path, err)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, fmt.Errorf("open %q: %w", path, err)
+	}
+	defer file.Close()
+
+	parquetFile, err := parquet.OpenFile(file, fileInfo.Size())
+	if err != nil {
+		return 0, fmt.Errorf("open parquet %q: %w", path, err)
+	}
+
+	return parquetFile.NumRows(), nil
+}
+
 func ReadFile(path string, emit func(model.FlowRecord) error) error {
+	return ReadFileBatches(path, func(records []model.FlowRecord) error {
+		for _, record := range records {
+			if err := emit(record); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
+func ReadFileBatches(path string, emit func([]model.FlowRecord) error) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open %q: %w", path, err)
@@ -195,10 +227,15 @@ func ReadFile(path string, emit func(model.FlowRecord) error) error {
 	defer reader.Close()
 
 	rows := make([]Row, readerBufferRowCount)
+	records := make([]model.FlowRecord, 0, readerBufferRowCount)
 	for {
 		rowCount, err := reader.Read(rows)
+		records = records[:0]
 		for _, row := range rows[:rowCount] {
-			if emitErr := emit(row.toFlowRecord()); emitErr != nil {
+			records = append(records, row.toFlowRecord())
+		}
+		if len(records) > 0 {
+			if emitErr := emit(records); emitErr != nil {
 				return emitErr
 			}
 		}

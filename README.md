@@ -75,6 +75,8 @@ The tool ignores files and directories that do not match the expected `YYYY/MM/D
 
 `parquethosts` reads flat `nfcap_*.parquet` files plus dnsmasq daily logs and writes a second flat parquet directory with additional host-derived fields.
 
+When enriched parquet files need rebuilding, the tool shows a stderr progress bar based on processed parquet rows.
+
 ### Inputs
 
 - `--src-parquet`: flat directory containing `nfcap_YYYYMM.parquet`, `nfcap_YYYYMMDD.parquet`, and `nfcap_YYYYMMDDHH.parquet`

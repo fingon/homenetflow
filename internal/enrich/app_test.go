@@ -3,6 +3,7 @@ package enrich
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -115,6 +116,70 @@ func TestRunCachesReverseLookupsAcrossRuns(t *testing.T) {
 	assert.Equal(t, lookupCount.Load(), int32(2))
 	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
 	assert.Equal(t, *rows[0].SrcHost, "router.home.arpa")
+}
+
+func TestRunReportsRowProgressAcrossStaleJobs(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+	stubReverseLookup(t, nil)
+
+	writeSourceParquet(t, filepath.Join(srcParquetDir, "nfcap_2026040111.parquet"), sampleEnrichRecord())
+	writeSourceParquet(t, filepath.Join(srcParquetDir, "nfcap_2026040112.parquet"), sampleEnrichRecord())
+
+	type progressUpdate struct {
+		done  int64
+		total int64
+	}
+
+	var (
+		progressMu sync.Mutex
+		updates    []progressUpdate
+	)
+
+	assert.NilError(t, Run(Config{
+		DstPath: dstDir,
+		Progress: func(doneRowCount, totalRowCount int64) {
+			progressMu.Lock()
+			defer progressMu.Unlock()
+			updates = append(updates, progressUpdate{done: doneRowCount, total: totalRowCount})
+		},
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	assert.Assert(t, len(updates) >= 2)
+	assert.Equal(t, updates[0].done, int64(0))
+	assert.Equal(t, updates[0].total, int64(2))
+	for index := 1; index < len(updates); index++ {
+		assert.Assert(t, updates[index].done >= updates[index-1].done)
+		assert.Equal(t, updates[index].total, int64(2))
+	}
+	assert.Equal(t, updates[len(updates)-1].done, int64(2))
+	assert.Equal(t, updates[len(updates)-1].total, int64(2))
+}
+
+func TestRunDoesNotReportProgressWhenNothingRebuilds(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+	stubReverseLookup(t, nil)
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+
+	var progressCalls atomic.Int32
+	assert.NilError(t, Run(Config{
+		DstPath: dstDir,
+		Progress: func(_, _ int64) {
+			progressCalls.Add(1)
+		},
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	assert.Equal(t, progressCalls.Load(), int32(0))
 }
 
 func stubReverseLookup(t *testing.T, lookup func(string) ([]string, error)) {

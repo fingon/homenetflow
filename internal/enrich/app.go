@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fingon/homenetflow/internal/model"
@@ -23,6 +25,7 @@ const reverseDNSCacheFilename = "reverse_dns_cache.jsonl"
 
 type Config struct {
 	DstPath        string
+	Progress       func(doneRowCount, totalRowCount int64)
 	SrcLogPath     string
 	SrcParquetPath string
 }
@@ -71,7 +74,7 @@ func Run(config Config) error {
 		return err
 	}
 
-	if err := rebuildJobs(jobs, logLoader, cache); err != nil {
+	if err := rebuildJobs(jobs, logLoader, cache, config.Progress); err != nil {
 		return err
 	}
 
@@ -137,14 +140,24 @@ func staleJobs(
 	return jobs, nil
 }
 
-func rebuildJobs(jobs []periodJob, logLoader *dnsLogLoader, cache *reverseDNSCache) error {
+func rebuildJobs(
+	jobs []periodJob,
+	logLoader *dnsLogLoader,
+	cache *reverseDNSCache,
+	progress func(doneRowCount, totalRowCount int64),
+) error {
+	reportProgress, err := newProgressReporter(jobs, progress)
+	if err != nil {
+		return err
+	}
+
 	group, ctx := errgroup.WithContext(context.Background())
 	group.SetLimit(max(1, runtime.GOMAXPROCS(0)))
 
 	for _, job := range jobs {
 		job := job
 		group.Go(func() error {
-			if err := rebuildJob(ctx, job, logLoader, cache); err != nil {
+			if err := rebuildJob(ctx, job, logLoader, cache, reportProgress); err != nil {
 				return fmt.Errorf("rebuild %q: %w", job.dstPath, err)
 			}
 
@@ -156,7 +169,50 @@ func rebuildJobs(jobs []periodJob, logLoader *dnsLogLoader, cache *reverseDNSCac
 	return group.Wait()
 }
 
-func rebuildJob(ctx context.Context, job periodJob, logLoader *dnsLogLoader, cache *reverseDNSCache) error {
+func newProgressReporter(
+	jobs []periodJob,
+	progress func(doneRowCount, totalRowCount int64),
+) (func(deltaRowCount int64), error) {
+	if progress == nil || len(jobs) == 0 {
+		return nil, nil
+	}
+
+	var totalRowCount int64
+	for _, job := range jobs {
+		rowCount, err := parquetout.RowCount(job.sourceFile.AbsPath)
+		if err != nil {
+			return nil, fmt.Errorf("read row count for %q: %w", job.sourceFile.AbsPath, err)
+		}
+		totalRowCount += rowCount
+	}
+
+	if totalRowCount == 0 {
+		return nil, nil
+	}
+
+	progress(0, totalRowCount)
+	var doneRowCount atomic.Int64
+	var progressMu sync.Mutex
+
+	return func(deltaRowCount int64) {
+		if deltaRowCount <= 0 {
+			return
+		}
+
+		progressMu.Lock()
+		defer progressMu.Unlock()
+
+		progress(doneRowCount.Add(deltaRowCount), totalRowCount)
+	}, nil
+}
+
+func rebuildJob(
+	ctx context.Context,
+	job periodJob,
+	logLoader *dnsLogLoader,
+	cache *reverseDNSCache,
+	reportProgress func(deltaRowCount int64),
+) error {
 	logIndex, err := logLoader.Load(job.logFiles)
 	if err != nil {
 		return err
@@ -167,18 +223,27 @@ func rebuildJob(ctx context.Context, job periodJob, logLoader *dnsLogLoader, cac
 		return err
 	}
 
-	if err := parquetout.ReadFile(job.sourceFile.AbsPath, func(record model.FlowRecord) error {
+	if err := parquetout.ReadFileBatches(job.sourceFile.AbsPath, func(records []model.FlowRecord) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 
-		enrichedRecord, err := enrichRecord(record, logIndex, cache)
-		if err != nil {
-			return err
+		enrichedRecords := make([]model.FlowRecord, 0, len(records))
+		for _, record := range records {
+			enrichedRecord, enrichErr := enrichRecord(record, logIndex, cache)
+			if enrichErr != nil {
+				return enrichErr
+			}
+
+			enrichedRecords = append(enrichedRecords, enrichedRecord)
 		}
 
-		if err := writer.Write(enrichedRecord); err != nil {
-			return fmt.Errorf("write enriched row for %q: %w", job.sourceFile.AbsPath, err)
+		if err := writer.WriteBatch(enrichedRecords); err != nil {
+			return fmt.Errorf("write enriched rows for %q: %w", job.sourceFile.AbsPath, err)
+		}
+
+		if reportProgress != nil {
+			reportProgress(int64(len(enrichedRecords)))
 		}
 
 		return nil

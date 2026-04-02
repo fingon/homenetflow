@@ -31,8 +31,11 @@ func main() {
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
 
+	progress := newEnrichProgress(os.Stderr)
+
 	if err := enrich.Run(enrich.Config{
 		DstPath:        commandLine.DstPath,
+		Progress:       progress.callback,
 		SrcLogPath:     commandLine.SrcLogPath,
 		SrcParquetPath: commandLine.SrcParquetPath,
 	}); err != nil {
