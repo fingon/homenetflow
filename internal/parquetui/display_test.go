@@ -2,6 +2,8 @@ package parquetui
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"math"
 	"path/filepath"
 	"strings"
@@ -62,6 +64,67 @@ func TestHistogramSVGMarkupAddsAxisLabels(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, "Value: 4000"))
 }
 
+func TestTopBarRendersTimePresetButtons(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, topBar(DashboardData{
+		State: QueryState{
+			FromNs:      10,
+			ToNs:        20,
+			Metric:      MetricBytes,
+			Granularity: Granularity2LD,
+			View:        ViewSplit,
+			Sort:        SortBytes,
+		},
+	}))
+
+	assert.Assert(t, !strings.Contains(markup, `id="preset-select"`))
+	assert.Assert(t, strings.Contains(markup, `name="preset"`))
+	assert.Assert(t, strings.Contains(markup, `value="1d"`))
+}
+
+func TestGraphSVGMarkupUsesDenseHooksForCrowdedGraphs(t *testing.T) {
+	t.Parallel()
+
+	nodes := make([]Node, 0, graphDenseNodeCount)
+	positions := make(map[string]LayoutPoint, graphDenseNodeCount)
+	for index := range graphDenseNodeCount {
+		nodeID := fmt.Sprintf("node-%d", index)
+		nodes = append(nodes, Node{
+			ID:    nodeID,
+			Label: nodeID,
+			Total: int64(graphDenseNodeCount - index),
+		})
+		positions[nodeID] = LayoutPoint{
+			X: float64(10 + index),
+			Y: float64(20 + index),
+		}
+	}
+
+	markup := graphSVGMarkup(QueryState{Metric: MetricBytes}, GraphData{
+		Nodes:         nodes,
+		NodePositions: positions,
+	})
+
+	assert.Assert(t, strings.Contains(markup, `class="graph-svg is-dense"`))
+	assert.Assert(t, strings.Contains(markup, `class="graph-scene"`))
+}
+
+func TestPanelsDoNotRenderNestedPanelWrappers(t *testing.T) {
+	t.Parallel()
+
+	summaryMarkup := renderNodeString(t, SummaryPanel(QueryState{
+		FromNs:      10,
+		ToNs:        20,
+		Metric:      MetricBytes,
+		Granularity: Granularity2LD,
+	}, GraphData{}))
+	tableMarkup := renderNodeString(t, TablePanel(QueryState{}, TableData{}))
+
+	assert.Assert(t, !strings.Contains(summaryMarkup, `class="panel summary-panel"`))
+	assert.Assert(t, !strings.Contains(tableMarkup, `class="panel"`))
+}
+
 func TestServiceGraphKeepsNodePositionsStableAcrossMetrics(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
@@ -120,6 +183,14 @@ func TestServiceGraphKeepsNodePositionsStableAcrossMetrics(t *testing.T) {
 	if restSourceOK && restDestinationOK {
 		assert.Assert(t, restSourcePosition.X < restDestinationPosition.X)
 	}
+}
+
+func renderNodeString(t *testing.T, node interface{ Render(io.Writer) error }) string {
+	t.Helper()
+
+	var builder strings.Builder
+	assert.NilError(t, node.Render(&builder))
+	return builder.String()
 }
 
 func TestBuildLayoutRings(t *testing.T) {

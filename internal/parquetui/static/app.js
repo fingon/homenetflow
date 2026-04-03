@@ -1,11 +1,20 @@
 (function () {
   const errorClassName = "is-error";
+  const graphSceneSelector = ".graph-scene";
   const granularityName = "granularity";
   const idleMessage = "Idle";
   const loadingClassName = "is-loading";
   const loadingMessage = "Loading data...";
   const nodeLimitAutoValue = "auto";
+  const oneDayNs = 24n * 3600n * 1000000000n;
+  const oneHourNs = 3600n * 1000000000n;
+  const presetAllValue = "all";
   const presetBehavior = "preset";
+  const presetDayLegacyValue = "24h";
+  const presetDayValue = "1d";
+  const presetHourValue = "1h";
+  const presetMonthValue = "30d";
+  const presetWeekValue = "7d";
   const searchBehavior = "search";
   const statusErrorMessage = "Request failed.";
   const statusSelector = "#loading-indicator";
@@ -24,12 +33,18 @@
       histogram.dataset.initialized = "true";
       bindHistogram(histogram);
     }
+
+    const graphCanvas = root.querySelector("#graph-canvas");
+    if (graphCanvas && !graphCanvas.dataset.initialized) {
+      graphCanvas.dataset.initialized = "true";
+      bindGraph(graphCanvas);
+    }
   }
 
   function bindForm(form) {
-    const presetSelect = form.querySelector(`[data-behavior="${presetBehavior}"]`);
     const searchInput = form.querySelector(`[data-behavior="${searchBehavior}"]`);
     const nodeLimitSelect = form.querySelector("#node-limit");
+    const sortInput = form.querySelector(`input[name="sort"]`);
 
     form.addEventListener("change", (event) => {
       const target = event.target;
@@ -37,10 +52,14 @@
         return;
       }
 
-      if (target.matches(`[data-behavior="${presetBehavior}"]`)) {
+      if (target.getAttribute("name") === presetBehavior) {
         applyPreset(form, target.value);
         submitForm(form);
         return;
+      }
+
+      if (target.getAttribute("name") === "metric" && sortInput) {
+        sortInput.value = defaultSortForMetric(target.value);
       }
 
       if (target.getAttribute("name") === granularityName && nodeLimitSelect) {
@@ -57,8 +76,9 @@
       });
     }
 
-    if (presetSelect) {
-      applyPreset(form, presetSelect.value);
+    const presetValue = selectedPresetValue(form);
+    if (presetValue) {
+      applyPreset(form, presetValue);
     }
   }
 
@@ -136,9 +156,9 @@
       return;
     }
 
-    const spanStartNs = Number.parseInt(appShell.dataset.spanStartNs || "0", 10);
-    const spanEndNs = Number.parseInt(appShell.dataset.spanEndNs || "0", 10);
-    if (!spanStartNs || !spanEndNs) {
+    const spanStartNs = parseBigIntValue(appShell.dataset.spanStartNs);
+    const spanEndNs = parseBigIntValue(appShell.dataset.spanEndNs);
+    if (spanStartNs === null || spanEndNs === null) {
       return;
     }
 
@@ -146,23 +166,24 @@
     let toNs = spanEndNs;
 
     switch (presetValue) {
-      case "1h":
-        fromNs = Math.max(spanStartNs, spanEndNs - 3600e9);
+      case presetHourValue:
+        fromNs = maxBigInt(spanStartNs, spanEndNs - oneHourNs);
         break;
-      case "24h":
-        fromNs = Math.max(spanStartNs, spanEndNs - 24 * 3600e9);
+      case presetDayValue:
+      case presetDayLegacyValue:
+        fromNs = maxBigInt(spanStartNs, spanEndNs - oneDayNs);
         break;
-      case "7d":
-        fromNs = Math.max(spanStartNs, spanEndNs - 7 * 24 * 3600e9);
+      case presetWeekValue:
+        fromNs = maxBigInt(spanStartNs, spanEndNs - 7n * oneDayNs);
         break;
-      case "30d":
-        fromNs = Math.max(spanStartNs, spanEndNs - 30 * 24 * 3600e9);
+      case presetMonthValue:
+        fromNs = maxBigInt(spanStartNs, spanEndNs - 30n * oneDayNs);
         break;
       default:
         break;
     }
 
-    setRange(form, String(fromNs), String(toNs));
+    setRange(form, fromNs.toString(), toNs.toString());
   }
 
   function setRange(form, fromNs, toNs) {
@@ -184,14 +205,119 @@
 
     setRange(form, appShell.dataset.spanStartNs || "", appShell.dataset.spanEndNs || "");
 
-    const presetSelect = form.querySelector(`[data-behavior="${presetBehavior}"]`);
-    if (presetSelect) {
-      presetSelect.value = "all";
+    const allPresetInput = form.querySelector(`input[name="${presetBehavior}"][value="${presetAllValue}"]`);
+    if (allPresetInput instanceof HTMLInputElement) {
+      allPresetInput.checked = true;
     }
   }
 
   function submitForm(form) {
     form.requestSubmit();
+  }
+
+  function bindGraph(graphCanvas) {
+    const svg = graphCanvas.querySelector("svg");
+    const scene = svg ? svg.querySelector(graphSceneSelector) : null;
+    if (!svg || !scene) {
+      return;
+    }
+
+    let isDragging = false;
+    let lastClientX = 0;
+    let lastClientY = 0;
+    let scale = 1;
+    let translateX = 0;
+    let translateY = 0;
+
+    function updateTransform() {
+      scene.setAttribute("transform", `translate(${translateX} ${translateY}) scale(${scale})`);
+    }
+
+    function resetView() {
+      isDragging = false;
+      scale = 1;
+      translateX = 0;
+      translateY = 0;
+      graphCanvas.classList.remove("is-panning");
+      updateTransform();
+    }
+
+    svg.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      const zoomFactor = event.deltaY < 0 ? 1.12 : 0.9;
+      scale = Math.max(0.6, Math.min(4, scale * zoomFactor));
+      updateTransform();
+    }, { passive: false });
+
+    svg.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+      isDragging = true;
+      lastClientX = event.clientX;
+      lastClientY = event.clientY;
+      svg.setPointerCapture(event.pointerId);
+      graphCanvas.classList.add("is-panning");
+    });
+
+    svg.addEventListener("pointermove", (event) => {
+      if (!isDragging) {
+        return;
+      }
+      translateX += event.clientX - lastClientX;
+      translateY += event.clientY - lastClientY;
+      lastClientX = event.clientX;
+      lastClientY = event.clientY;
+      updateTransform();
+    });
+
+    function stopDragging(event) {
+      if (!isDragging) {
+        return;
+      }
+      isDragging = false;
+      if (typeof event.pointerId === "number") {
+        svg.releasePointerCapture(event.pointerId);
+      }
+      graphCanvas.classList.remove("is-panning");
+    }
+
+    svg.addEventListener("pointerup", stopDragging);
+    svg.addEventListener("pointercancel", stopDragging);
+
+    svg.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      resetView();
+    });
+
+    updateTransform();
+  }
+
+  function defaultSortForMetric(metricValue) {
+    return metricValue === "connections" ? "connections" : "bytes";
+  }
+
+  function maxBigInt(leftValue, rightValue) {
+    return leftValue > rightValue ? leftValue : rightValue;
+  }
+
+  function parseBigIntValue(value) {
+    if (!value) {
+      return null;
+    }
+    try {
+      return BigInt(value);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function selectedPresetValue(form) {
+    const checkedInput = form.querySelector(`input[name="${presetBehavior}"]:checked`);
+    if (!(checkedInput instanceof HTMLInputElement)) {
+      return "";
+    }
+    return checkedInput.value;
   }
 
   function statusElement() {

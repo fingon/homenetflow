@@ -182,10 +182,16 @@ input[type="search"] {
 .graph-canvas {
   min-height: 34rem;
   width: 100%;
+  overflow: hidden;
   border-radius: 18px;
+  cursor: grab;
   background:
     linear-gradient(135deg, rgba(255,255,255,0.9), rgba(250,244,235,0.85)),
     repeating-linear-gradient(90deg, transparent, transparent 48px, rgba(0,0,0,0.03) 48px, rgba(0,0,0,0.03) 49px);
+}
+
+.graph-canvas.is-panning {
+  cursor: grabbing;
 }
 
 .histogram {
@@ -277,6 +283,11 @@ svg.histogram-svg {
   overflow: visible;
 }
 
+.graph-scene {
+  transition: transform 120ms ease;
+  transform-origin: center center;
+}
+
 .graph-label {
   fill: var(--text);
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
@@ -289,6 +300,22 @@ svg.histogram-svg {
 
 .graph-node {
   cursor: pointer;
+}
+
+.graph-node.is-selected .graph-label {
+  font-weight: 700;
+}
+
+.graph-svg.is-dense .graph-label {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.graph-svg.is-dense .graph-node.is-selected .graph-label,
+.graph-svg.is-dense .graph-node.is-synthetic .graph-label,
+.graph-svg.is-dense .graph-node:hover .graph-label,
+.graph-svg.is-dense .graph-node:focus-within .graph-label {
+  opacity: 1;
 }
 
 .graph-svg path {

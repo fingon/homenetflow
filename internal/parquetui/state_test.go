@@ -21,6 +21,15 @@ func TestParseQueryStateDefaults(t *testing.T) {
 	assert.Equal(t, state.View, defaultView)
 }
 
+func TestParseQueryStateDefaultsSortForConnectionsMetric(t *testing.T) {
+	request := httptest.NewRequest("GET", "/?metric=connections", nil)
+
+	state := ParseQueryState(request)
+
+	assert.Equal(t, state.Metric, MetricConnections)
+	assert.Equal(t, state.Sort, SortConnections)
+}
+
 func TestQueryStateNormalizedAppliesSpanAndNodeLimit(t *testing.T) {
 	state := QueryState{
 		Granularity: GranularityHostname,
@@ -52,6 +61,34 @@ func TestQueryStateNormalizedExpandsPresetIntoRange(t *testing.T) {
 
 	assert.Equal(t, normalized.ToNs, int64(48*time.Hour))
 	assert.Equal(t, normalized.FromNs, int64(24*time.Hour))
+}
+
+func TestQueryStateNormalizedSupportsLegacyDayPreset(t *testing.T) {
+	state := QueryState{
+		Preset: presetDayLegacy,
+	}
+
+	normalized := state.Normalized(TimeSpan{
+		StartNs: 10,
+		EndNs:   int64(48 * time.Hour),
+	})
+
+	assert.Equal(t, normalized.ToNs, int64(48*time.Hour))
+	assert.Equal(t, normalized.FromNs, int64(24*time.Hour))
+}
+
+func TestQueryStateNormalizedDefaultsSortForMetric(t *testing.T) {
+	state := QueryState{
+		Metric: MetricConnections,
+		Sort:   "",
+	}
+
+	normalized := state.Normalized(TimeSpan{
+		StartNs: 10,
+		EndNs:   100,
+	})
+
+	assert.Equal(t, normalized.Sort, SortConnections)
 }
 
 func TestQueryStateValuesSkipPreset(t *testing.T) {

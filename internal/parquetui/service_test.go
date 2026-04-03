@@ -121,6 +121,58 @@ func TestServiceHistogramAggregatesIntoOrderedBins(t *testing.T) {
 	assert.Equal(t, bins[len(bins)-1].Value, int64(200))
 }
 
+func TestServiceTableDefaultsSortToMetric(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("host-a", "dst-one", "host-a", "lan", "lan", "dst-one", "one.test", "test", 500, 10, 20),
+		sampleRecord("host-a", "dst-one", "host-a", "lan", "lan", "dst-one", "one.test", "test", 500, 30, 40),
+		sampleRecord("host-a", "dst-two", "host-a", "lan", "lan", "dst-two", "two.test", "test", 1200, 50, 60),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	table, err := service.Table(context.Background(), QueryState{
+		Granularity: GranularityHostname,
+		Metric:      MetricConnections,
+	})
+	assert.NilError(t, err)
+
+	assert.Equal(t, table.Sort, SortConnections)
+	assert.Equal(t, table.VisibleRows[0].Destination, "dst-one")
+	assert.Equal(t, table.VisibleRows[0].Connections, int64(2))
+}
+
+func TestServiceGraphPresetRangeDiffersAcrossFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_20260320.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 300, time.Date(2026, time.March, 20, 12, 0, 0, 0, time.UTC).UnixNano(), time.Date(2026, time.March, 20, 13, 0, 0, 0, time.UTC).UnixNano()),
+	})
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_20260402.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.11", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 700, time.Date(2026, time.April, 2, 12, 0, 0, 0, time.UTC).UnixNano(), time.Date(2026, time.April, 2, 13, 0, 0, 0, time.UTC).UnixNano()),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	dayGraph, err := service.Graph(context.Background(), QueryState{
+		Metric: MetricBytes,
+		Preset: presetDayValue,
+	})
+	assert.NilError(t, err)
+
+	monthGraph, err := service.Graph(context.Background(), QueryState{
+		Metric: MetricBytes,
+		Preset: presetMonthValue,
+	})
+	assert.NilError(t, err)
+
+	assert.Equal(t, dayGraph.Totals.Bytes, int64(700))
+	assert.Equal(t, monthGraph.Totals.Bytes, int64(1000))
+}
+
 func TestServiceSearchFiltersCaseInsensitively(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{

@@ -18,7 +18,8 @@ const (
 	defaultView      = ViewSplit
 	presetAllValue   = "all"
 	presetHourValue  = "1h"
-	presetDayValue   = "24h"
+	presetDayValue   = "1d"
+	presetDayLegacy  = "24h"
 	presetWeekValue  = "7d"
 	presetMonthValue = "30d"
 )
@@ -116,7 +117,7 @@ func ParseQueryState(r *http.Request) QueryState {
 		SelectedEdgeDst: strings.TrimSpace(query.Get("selected_edge_dst")),
 		SelectedEdgeSrc: strings.TrimSpace(query.Get("selected_edge_src")),
 		SelectedEntity:  strings.TrimSpace(query.Get("selected_entity")),
-		Sort:            SortBytes,
+		Sort:            defaultSortForMetric(MetricBytes),
 		View:            defaultView,
 		Metric:          MetricBytes,
 		Preset:          strings.TrimSpace(query.Get("preset")),
@@ -124,6 +125,7 @@ func ParseQueryState(r *http.Request) QueryState {
 
 	if metric := Metric(query.Get("metric")); metric.valid() {
 		state.Metric = metric
+		state.Sort = defaultSortForMetric(metric)
 	}
 
 	if granularity := Granularity(query.Get("granularity")); granularity.valid() {
@@ -172,7 +174,7 @@ func (s QueryState) Normalized(span TimeSpan) QueryState {
 		state.View = defaultView
 	}
 	if !state.Sort.valid() {
-		state.Sort = SortBytes
+		state.Sort = defaultSortForMetric(state.Metric)
 	}
 	if state.EdgeLimit < 0 {
 		state.EdgeLimit = defaultEdgeLimit
@@ -315,7 +317,7 @@ func (s QueryState) layoutCacheState() QueryState {
 	state := s.Clone()
 	state.Metric = MetricBytes
 	state.View = defaultView
-	state.Sort = SortBytes
+	state.Sort = defaultSortForMetric(state.Metric)
 	state.Page = defaultPage
 	state.PageSize = defaultPageSize
 	state.Preset = ""
@@ -335,6 +337,13 @@ func defaultNodeLimit(granularity Granularity) int {
 	default:
 		return 100
 	}
+}
+
+func defaultSortForMetric(metric Metric) TableSort {
+	if metric == MetricConnections {
+		return SortConnections
+	}
+	return SortBytes
 }
 
 func presetRange(preset string, span TimeSpan) (int64, int64, bool) {
@@ -358,7 +367,7 @@ func presetDuration(preset string) time.Duration {
 	switch preset {
 	case presetHourValue:
 		return time.Hour
-	case presetDayValue:
+	case presetDayValue, presetDayLegacy:
 		return 24 * time.Hour
 	case presetWeekValue:
 		return 7 * 24 * time.Hour

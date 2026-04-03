@@ -15,6 +15,7 @@ import (
 
 const (
 	graphHeightPx           = 560
+	graphDenseNodeCount     = 36
 	graphPrimaryRingCount   = 12
 	graphWidthPx            = 960
 	histogramAxisTickCount  = 5
@@ -88,6 +89,7 @@ func AppShell(dashboard DashboardData) g.Node {
 						Class("legend-line"),
 						Span(Class("legend-item"), g.Text("Node size = selected metric")),
 						Span(Class("legend-item"), g.Text("Edge width = selected metric")),
+						Span(Class("legend-item"), g.Text("Scroll to zoom, drag to pan")),
 					),
 				),
 				Div(
@@ -127,7 +129,7 @@ func AppShell(dashboard DashboardData) g.Node {
 
 func SummaryPanel(state QueryState, graph GraphData) g.Node {
 	return Div(
-		Class("panel summary-panel"),
+		Class("summary-panel"),
 		sectionTitle("Active Filters"),
 		Div(
 			Class("filter-list"),
@@ -214,7 +216,6 @@ func selectedPanel(state QueryState, graph GraphData) g.Node {
 
 func TablePanel(state QueryState, table TableData) g.Node {
 	return Div(
-		Class("panel"),
 		Div(
 			Class("panel-heading"),
 			H2(g.Text("Flows Table")),
@@ -280,16 +281,14 @@ func topBar(dashboard DashboardData) g.Node {
 				hiddenStateFields(state),
 				Div(
 					Class("group"),
-					Label(For("preset-select"), g.Text("Time")),
-					Select(
-						ID("preset-select"),
-						Name("preset"),
-						Data("behavior", "preset"),
-						optionValue(presetAllValue, "All", selectedPreset(state) == presetAllValue),
-						optionValue(presetHourValue, presetHourValue, selectedPreset(state) == presetHourValue),
-						optionValue(presetDayValue, presetDayValue, selectedPreset(state) == presetDayValue),
-						optionValue(presetWeekValue, presetWeekValue, selectedPreset(state) == presetWeekValue),
-						optionValue(presetMonthValue, presetMonthValue, selectedPreset(state) == presetMonthValue),
+					Label(g.Text("Time")),
+					Div(
+						Class("button-row"),
+						toggleRadio("preset", presetAllValue, "All", selectedPreset(state) == presetAllValue),
+						toggleRadio("preset", presetHourValue, presetHourValue, selectedPreset(state) == presetHourValue),
+						toggleRadio("preset", presetDayValue, presetDayValue, selectedPreset(state) == presetDayValue),
+						toggleRadio("preset", presetWeekValue, presetWeekValue, selectedPreset(state) == presetWeekValue),
+						toggleRadio("preset", presetMonthValue, presetMonthValue, selectedPreset(state) == presetMonthValue),
 					),
 				),
 				Div(
@@ -391,7 +390,7 @@ func renderGraphSVG(state QueryState, graph GraphData) g.Node {
 func graphSVGMarkup(state QueryState, graph GraphData) string {
 	var builder strings.Builder
 
-	fmt.Fprintf(&builder, `<svg class="graph-svg" viewBox="0 0 %d %d" role="img" aria-label="Traffic graph">`, graphWidthPx, graphHeightPx)
+	fmt.Fprintf(&builder, `<svg class="%s" viewBox="0 0 %d %d" role="img" aria-label="Traffic graph">`, graphSVGClass(graph), graphWidthPx, graphHeightPx)
 	if len(graph.Nodes) == 0 {
 		builder.WriteString(labelTextMarkup(float64(graphWidthPx)/2, float64(graphHeightPx)/2, "No graph data", "middle"))
 		builder.WriteString(`</svg>`)
@@ -402,7 +401,8 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 	if len(positions) == 0 {
 		positions = computeNodePositions(graph.Nodes, graphWidthPx, graphHeightPx)
 	}
-	builder.WriteString(`<g>`)
+	builder.WriteString(`<g class="graph-scene">`)
+	builder.WriteString(`<g class="graph-edges">`)
 	for _, edge := range graph.Edges {
 		source, sourceOK := positions[edge.Source]
 		destination, destinationOK := positions[edge.Destination]
@@ -426,14 +426,14 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 			edgePathMarkup(source, destination))
 		builder.WriteString(`</a>`)
 	}
-	builder.WriteString(`</g><g>`)
+	builder.WriteString(`</g><g class="graph-nodes">`)
 
 	maxTotal := maxNodeTotal(graph.Nodes)
 	for _, node := range graph.Nodes {
 		position := positions[node.ID]
 		radius := nodeRadius(node.Total, maxTotal)
 		builder.WriteString(`<a ` + navAttrString(selectEntityStateURL(state, node.ID)) + `>`)
-		fmt.Fprintf(&builder, `<g class="graph-node" transform="translate(%0.2f, %0.2f)">`, position.X, position.Y)
+		fmt.Fprintf(&builder, `<g class="%s" transform="translate(%0.2f, %0.2f)">`, graphNodeClass(node), position.X, position.Y)
 		fmt.Fprintf(&builder, `<circle r="%0.2f" fill="%s" stroke="%s" stroke-width="%s">`,
 			radius,
 			nodeFill(node),
@@ -448,7 +448,7 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 		builder.WriteString(`</g></a>`)
 	}
 
-	builder.WriteString(`</g></svg>`)
+	builder.WriteString(`</g></g></svg>`)
 	return builder.String()
 }
 
@@ -734,6 +734,24 @@ func selectedPreset(state QueryState) string {
 	default:
 		return presetAllValue
 	}
+}
+
+func graphSVGClass(graph GraphData) string {
+	if len(graph.Nodes) >= graphDenseNodeCount {
+		return "graph-svg is-dense"
+	}
+	return "graph-svg"
+}
+
+func graphNodeClass(node Node) string {
+	className := "graph-node"
+	if node.Selected {
+		className += " is-selected"
+	}
+	if node.Synthetic {
+		className += " is-synthetic"
+	}
+	return className
 }
 
 func edgeStroke(selected bool) string {
