@@ -80,6 +80,15 @@ type EnrichmentManifest struct {
 	Version int              `json:"version"`
 }
 
+type UISummaryManifest struct {
+	Granularity string         `json:"granularity"`
+	Kind        string         `json:"kind"`
+	Source      SourceManifest `json:"source"`
+	SpanEndNs   int64          `json:"spanEndNs"`
+	SpanStartNs int64          `json:"spanStartNs"`
+	Version     int            `json:"version"`
+}
+
 func NewRefreshManifest(sourceFiles []SourceFile) RefreshManifest {
 	manifest := RefreshManifest{
 		Version: 1,
@@ -124,6 +133,17 @@ func sourceManifestForFile(sourceFile SourceFile) SourceManifest {
 		Path:      sourceFile.RelPath,
 		SizeByte:  sourceFile.SizeByte,
 		ModTimeNs: sourceFile.ModTime.UnixNano(),
+	}
+}
+
+func NewUISummaryManifest(sourceFile SourceFile, kind, granularity string, spanStartNs, spanEndNs int64) UISummaryManifest {
+	return UISummaryManifest{
+		Granularity: granularity,
+		Kind:        kind,
+		Source:      sourceManifestForFile(sourceFile),
+		SpanEndNs:   spanEndNs,
+		SpanStartNs: spanStartNs,
+		Version:     1,
 	}
 }
 

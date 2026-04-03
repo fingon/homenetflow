@@ -1,9 +1,10 @@
 # homenetflow
 
-`homenetflow` contains two Go tools for turning flow captures into parquet and then enriching those parquet files with host-derived metadata.
+`homenetflow` contains tools for turning flow captures into parquet, enriching those parquet files with host-derived metadata, and browsing the enriched parquet in a web UI.
 
 - `nfdump2parquet`: converts a `YYYY/MM/DD/HH/nfcapd.*` tree into flat `nfcap_*.parquet` files
 - `parquethosts`: reads those flat parquet files plus dnsmasq `.jsonl` logs and writes enriched parquet files with host, `_2ld`, and `_tld` fields
+- `parquetflowui`: serves a web UI for browsing enriched parquet netflows with graph, timeline, and table views
 
 The current parser targets nfdump v2 files produced by nfdump 1.7.x.
 
@@ -13,6 +14,7 @@ The current parser targets nfdump v2 files produced by nfdump 1.7.x.
 rtk make lint
 rtk make test
 rtk make build
+rtk make ui
 prek run --all-files
 ```
 
@@ -149,6 +151,51 @@ Field meaning:
 - `_tld`: top-level suffix value, such as `fi` from `www.fingon.iki.fi` or `co.uk` from `foo.bar.co.uk`
 
 For local names, the tool falls back to label-based derivation. For example, `cer.lan` produces `_2ld=cer.lan` and `_tld=lan`.
+
+## `parquetflowui`
+
+`parquetflowui` serves a mostly server-rendered browser UI for investigating enriched parquet netflows.
+
+The UI includes:
+
+- a server-rendered graph of aggregated entities and connections
+- a server-rendered timeline histogram with brush-based zooming
+- metric scaling by bytes or connections
+- global granularity switching across `tld`, `2ld`, `hostname`, and `ip`
+- entity selection, include/exclude filtering, and a sortable flows table
+- capped node counts at granular levels with explicit `Rest Sources` and `Rest Destinations` buckets
+
+The UI uses htmx for navigation and filter updates, with only a small amount of custom JavaScript for histogram brushing and request status handling.
+
+### Input
+
+- flat directory containing enriched parquet output from `parquethosts`
+
+The UI expects enriched parquet files and validates that they carry the enrichment manifest metadata.
+
+### Usage
+
+```bash
+go run ./cmd/parquetflowui /flows/parquet-hosts
+go run ./cmd/parquetflowui /flows/parquet-hosts --port 8081
+go run ./cmd/parquetflowui /flows/parquet-hosts -v
+rtk make ui
+```
+
+Flags:
+
+- `--src-parquet`: flat input directory containing enriched `nfcap_*.parquet` files
+- `--port`: HTTP port, default `8080`
+- `--reload-interval`: polling interval for parquet refresh, default `1m`
+- `-v`: enable debug logging
+
+The `rtk make ui` target runs:
+
+```bash
+go run ./cmd/parquetflowui --src-parquet data/parquet
+```
+
+Open `http://localhost:8080` after starting the server.
 
 ## End-to-End Example
 

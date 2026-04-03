@@ -17,5 +17,9 @@ test:
 build:
 	go build ./...
 
+.PHONY: ui
+ui:
+	go run ./cmd/parquetflowui data/parquet -v
+
 .PHONY: check
 check: lint test build
