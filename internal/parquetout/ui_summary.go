@@ -14,12 +14,20 @@ import (
 const uiSummaryManifestMetadataKey = "homenetflow.parquetflowui.summary.manifest"
 
 type EdgeSummaryRow struct {
-	Bytes       int64  `parquet:"bytes"`
-	Connections int64  `parquet:"connections"`
-	Destination string `parquet:"dst_entity"`
-	FirstSeenNs int64  `parquet:"first_seen_ns"`
-	LastSeenNs  int64  `parquet:"last_seen_ns"`
-	Source      string `parquet:"src_entity"`
+	Bytes                 int64  `parquet:"bytes"`
+	Connections           int64  `parquet:"connections"`
+	Destination           string `parquet:"dst_entity"`
+	DstPrivateBytes       int64  `parquet:"dst_private_bytes"`
+	DstPrivateConnections int64  `parquet:"dst_private_connections"`
+	DstPublicBytes        int64  `parquet:"dst_public_bytes"`
+	DstPublicConnections  int64  `parquet:"dst_public_connections"`
+	FirstSeenNs           int64  `parquet:"first_seen_ns"`
+	LastSeenNs            int64  `parquet:"last_seen_ns"`
+	Source                string `parquet:"src_entity"`
+	SrcPrivateBytes       int64  `parquet:"src_private_bytes"`
+	SrcPrivateConnections int64  `parquet:"src_private_connections"`
+	SrcPublicBytes        int64  `parquet:"src_public_bytes"`
+	SrcPublicConnections  int64  `parquet:"src_public_connections"`
 }
 
 type HistogramSummaryRow struct {

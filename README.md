@@ -121,6 +121,7 @@ Each enriched parquet file carries embedded metadata describing:
 
 - the exact source parquet file used to build it
 - the overlapping dnsmasq log files used to enrich it
+- the enrichment `logicVersion` used to produce the file
 
 The tool rebuilds an enriched parquet file when:
 
@@ -128,6 +129,7 @@ The tool rebuilds an enriched parquet file when:
 - the source parquet file changed
 - a new overlapping log file appears
 - an overlapping log file changes
+- the stored enrichment `logicVersion` differs from the current enrichment logic
 
 The tool does not rebuild a parquet file only because an overlapping log file disappeared.
 
@@ -143,12 +145,17 @@ The enriched parquet output preserves all original columns and adds these option
 - `dst_2ld`
 - `src_tld`
 - `dst_tld`
+- `src_is_private`
+- `dst_is_private`
 
 Field meaning:
 
 - `_host`: normalized hostname chosen for the IP
 - `_2ld`: one label above the `_tld`, such as `iki.fi` from `www.fingon.iki.fi`
 - `_tld`: top-level suffix value, such as `fi` from `www.fingon.iki.fi` or `co.uk` from `foo.bar.co.uk`
+- `_is_private`: whether the IP falls into the private/local ranges recognized by enrichment
+
+Private/local classification includes IPv4 RFC1918 space plus IPv6 ULA, site-local, and link-local ranges. IPv6 global unicast remains public.
 
 For local names, the tool falls back to label-based derivation. For example, `cer.lan` produces `_2ld=cer.lan` and `_tld=lan`.
 
@@ -164,6 +171,7 @@ The UI includes:
 - global granularity switching across `tld`, `2ld`, `hostname`, and `ip`
 - entity selection, include/exclude filtering, and a sortable flows table
 - capped node counts at granular levels with explicit `Rest Sources` and `Rest Destinations` buckets
+- private-aware graph coloring: private nodes are green, mixed nodes are yellow, public nodes use the default blue
 
 The UI uses htmx for navigation and filter updates, with only a small amount of custom JavaScript for histogram brushing and request status handling.
 
@@ -172,6 +180,9 @@ The UI uses htmx for navigation and filter updates, with only a small amount of 
 - flat directory containing enriched parquet output from `parquethosts`
 
 The UI expects enriched parquet files and validates that they carry the enrichment manifest metadata.
+The UI also builds summary parquet files with an embedded summary `logicVersion`, and stale summaries are rebuilt automatically when summary logic changes.
+
+At `tld` and `2ld` granularities, unresolved entities are split into `Unknown private` and `Unknown public` instead of a single `Unknown` bucket.
 
 ### Usage
 

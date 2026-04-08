@@ -260,6 +260,8 @@ func rebuildJob(
 
 func enrichRecord(record model.FlowRecord, logIndex *dnsIndex, cache *reverseDNSCache) (model.FlowRecord, error) {
 	flowStart := time.Unix(0, record.TimeStartNs).UTC()
+	record.SrcIsPrivate = isPrivateIPAddress(record.SrcIP)
+	record.DstIsPrivate = isPrivateIPAddress(record.DstIP)
 
 	srcNames, err := resolveNames(record.SrcIP, flowStart, logIndex, cache)
 	if err != nil {

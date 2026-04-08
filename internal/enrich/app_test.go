@@ -54,6 +54,8 @@ func TestRunEnrichesParquetFromLogs(t *testing.T) {
 	assert.Equal(t, *rows[0].DstHost, "example.net")
 	assert.Equal(t, *rows[0].Dst2LD, "example.net")
 	assert.Equal(t, *rows[0].DstTLD, "net")
+	assert.Assert(t, !rows[0].SrcIsPrivate)
+	assert.Assert(t, !rows[0].DstIsPrivate)
 }
 
 func TestRunDoesNotRebuildWhenRelevantLogIsDeleted(t *testing.T) {
@@ -215,6 +217,35 @@ func TestRunDoesNotReportProgressWhenNothingRebuilds(t *testing.T) {
 	assert.Equal(t, progressCalls.Load(), int32(0))
 }
 
+func TestIsPrivateIPAddress(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		ipAddress string
+		name      string
+		private   bool
+	}{
+		{name: "ipv4 class a", ipAddress: "10.0.0.1", private: true},
+		{name: "ipv4 172 lower bound", ipAddress: "172.16.0.1", private: true},
+		{name: "ipv4 172 upper bound", ipAddress: "172.31.255.255", private: true},
+		{name: "ipv4 172 public below", ipAddress: "172.15.255.255", private: false},
+		{name: "ipv4 172 public above", ipAddress: "172.32.0.1", private: false},
+		{name: "ipv4 class c", ipAddress: "192.168.1.10", private: true},
+		{name: "ipv4 public", ipAddress: "192.0.2.10", private: false},
+		{name: "ipv6 ula", ipAddress: "fd00::1", private: true},
+		{name: "ipv6 site local", ipAddress: "fec0::1", private: true},
+		{name: "ipv6 link local", ipAddress: "fe80::1", private: true},
+		{name: "ipv6 gua", ipAddress: "2001:db8::1", private: false},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, isPrivateIPAddress(testCase.ipAddress), testCase.private)
+		})
+	}
+}
+
 func stubReverseLookup(t *testing.T, lookup func(string) ([]string, error)) {
 	t.Helper()
 
@@ -263,19 +294,21 @@ func readRows(t *testing.T, path string) []parquetout.Row {
 	records := make([]parquetout.Row, 0, 4)
 	assert.NilError(t, parquetout.ReadFile(path, func(record model.FlowRecord) error {
 		records = append(records, parquetout.Row{
-			Dst2LD:      record.Dst2LD,
-			DstHost:     record.DstHost,
-			DstIP:       record.DstIP,
-			DstPort:     record.DstPort,
-			DstTLD:      record.DstTLD,
-			IPVersion:   record.IPVersion,
-			Src2LD:      record.Src2LD,
-			SrcHost:     record.SrcHost,
-			SrcIP:       record.SrcIP,
-			SrcPort:     record.SrcPort,
-			SrcTLD:      record.SrcTLD,
-			TimeEndNs:   record.TimeEndNs,
-			TimeStartNs: record.TimeStartNs,
+			Dst2LD:       record.Dst2LD,
+			DstHost:      record.DstHost,
+			DstIP:        record.DstIP,
+			DstIsPrivate: record.DstIsPrivate,
+			DstPort:      record.DstPort,
+			DstTLD:       record.DstTLD,
+			IPVersion:    record.IPVersion,
+			Src2LD:       record.Src2LD,
+			SrcHost:      record.SrcHost,
+			SrcIP:        record.SrcIP,
+			SrcIsPrivate: record.SrcIsPrivate,
+			SrcPort:      record.SrcPort,
+			SrcTLD:       record.SrcTLD,
+			TimeEndNs:    record.TimeEndNs,
+			TimeStartNs:  record.TimeStartNs,
 		})
 		return nil
 	}))

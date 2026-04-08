@@ -284,8 +284,7 @@ svg.histogram-svg {
 }
 
 .graph-scene {
-  transition: transform 120ms ease;
-  transform-origin: center center;
+  transform-origin: 0 0;
 }
 
 .graph-label {

@@ -63,7 +63,9 @@ func NeedsEnrichmentRebuild(
 	}
 
 	expectedManifest := model.NewEnrichmentManifest(sourceFile, logFiles)
-	if manifest.Version != expectedManifest.Version || manifest.Source != expectedManifest.Source {
+	if manifest.Version != expectedManifest.Version ||
+		manifest.LogicVersion != expectedManifest.LogicVersion ||
+		manifest.Source != expectedManifest.Source {
 		return true, nil
 	}
 

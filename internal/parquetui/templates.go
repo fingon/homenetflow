@@ -26,11 +26,9 @@ const (
 	hxSelectAppShellValue   = "#app-shell"
 	hxSwapOuterHTMLValue    = "outerHTML"
 	hxTargetAppShellValue   = "#app-shell"
+	mixedEntityNodeFill     = "#c4a237"
 	nodeBaseRadiusPx        = 10
 	nodeRadiusScalePx       = 24
-	privateClassAIPPrefix   = "10."
-	privateClassBIPPrefix   = "172."
-	privateClassCIPPrefix   = "192.168."
 	privateEntityNodeFill   = "#4d6f52"
 	selectedEdgeStroke      = "#b14d24"
 	selectedNodeStroke      = "#943a15"
@@ -798,16 +796,13 @@ func nodeFill(node Node) string {
 	if node.Selected {
 		return selectedRegularNodeFill
 	}
-	if privateEntity(node.ID) {
+	if node.AddressClass == nodeAddressClassPrivate {
 		return privateEntityNodeFill
 	}
+	if node.AddressClass == nodeAddressClassMixed {
+		return mixedEntityNodeFill
+	}
 	return unselectedNodeFill
-}
-
-func privateEntity(entity string) bool {
-	return strings.HasPrefix(entity, privateClassAIPPrefix) ||
-		strings.HasPrefix(entity, privateClassBIPPrefix) ||
-		strings.HasPrefix(entity, privateClassCIPPrefix)
 }
 
 func edgePathMarkup(source, destination LayoutPoint) string {

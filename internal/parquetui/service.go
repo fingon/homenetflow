@@ -41,10 +41,12 @@ var requiredColumns = []string{
 	"dst_2ld",
 	"dst_host",
 	"dst_ip",
+	"dst_is_private",
 	"dst_tld",
 	"src_2ld",
 	"src_host",
 	"src_ip",
+	"src_is_private",
 	"src_tld",
 	"time_end_ns",
 	"time_start_ns",
@@ -83,14 +85,17 @@ type Totals struct {
 }
 
 type Node struct {
-	CollapsedEntityCount int    `json:"collapsedEntityCount"`
-	ID                   string `json:"id"`
-	Inbound              int64  `json:"inbound"`
-	Label                string `json:"label"`
-	Outbound             int64  `json:"outbound"`
-	Selected             bool   `json:"selected"`
-	Synthetic            bool   `json:"synthetic"`
-	Total                int64  `json:"total"`
+	CollapsedEntityCount int              `json:"collapsedEntityCount"`
+	AddressClass         nodeAddressClass `json:"addressClass"`
+	ID                   string           `json:"id"`
+	Inbound              int64            `json:"inbound"`
+	Label                string           `json:"label"`
+	Outbound             int64            `json:"outbound"`
+	PrivateMetric        int64
+	PublicMetric         int64
+	Selected             bool  `json:"selected"`
+	Synthetic            bool  `json:"synthetic"`
+	Total                int64 `json:"total"`
 }
 
 type Edge struct {
@@ -680,7 +685,7 @@ func (s *Service) querySpan(ctx context.Context) (TimeSpan, error) {
 func (s *Service) filteredCTE(state QueryState) (string, []any) {
 	srcExpr, dstExpr := entityExpressions(state.Granularity)
 	whereClause, args := filterClause(state, srcExpr, dstExpr)
-	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, bytes, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
+	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, bytes, dst_is_private, src_is_private, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
 		filteredCTEName,
 		srcExpr,
 		dstExpr,
@@ -701,15 +706,35 @@ func (s *Service) queryNodeTotals(ctx context.Context, state QueryState) ([]Node
 	cte, args := s.filteredCTE(state)
 	valueExpr := metricValueExpression(state.Metric)
 	query := fmt.Sprintf(`%s
-SELECT entity, SUM(total_metric) AS total_metric, SUM(inbound_metric) AS inbound_metric, SUM(outbound_metric) AS outbound_metric
+SELECT entity,
+  SUM(total_metric) AS total_metric,
+  SUM(inbound_metric) AS inbound_metric,
+  SUM(outbound_metric) AS outbound_metric,
+  SUM(private_metric) AS private_metric,
+  SUM(public_metric) AS public_metric
 FROM (
-  SELECT src_entity AS entity, %s AS total_metric, 0 AS inbound_metric, %s AS outbound_metric FROM %s
+  SELECT src_entity AS entity, %s AS total_metric, 0 AS inbound_metric, %s AS outbound_metric,
+    %s AS private_metric, %s AS public_metric
+  FROM %s
   UNION ALL
-  SELECT dst_entity AS entity, %s AS total_metric, %s AS inbound_metric, 0 AS outbound_metric FROM %s
+  SELECT dst_entity AS entity, %s AS total_metric, %s AS inbound_metric, 0 AS outbound_metric,
+    %s AS private_metric, %s AS public_metric
+  FROM %s
 ) aggregate_nodes
 GROUP BY entity
 ORDER BY total_metric DESC, entity
-`, cte, valueExpr, valueExpr, filteredCTEName, valueExpr, valueExpr, filteredCTEName)
+`, cte,
+		valueExpr,
+		valueExpr,
+		privateMetricExpression("src_is_private", state.Metric),
+		publicMetricExpression("src_is_private", state.Metric),
+		filteredCTEName,
+		valueExpr,
+		valueExpr,
+		privateMetricExpression("dst_is_private", state.Metric),
+		publicMetricExpression("dst_is_private", state.Metric),
+		filteredCTEName,
+	)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -720,10 +745,11 @@ ORDER BY total_metric DESC, entity
 	nodes := make([]Node, 0, 128)
 	for rows.Next() {
 		var node Node
-		if err := rows.Scan(&node.ID, &node.Total, &node.Inbound, &node.Outbound); err != nil {
+		if err := rows.Scan(&node.ID, &node.Total, &node.Inbound, &node.Outbound, &node.PrivateMetric, &node.PublicMetric); err != nil {
 			return nil, fmt.Errorf("scan node total row: %w", err)
 		}
 		node.Label = node.ID
+		node.AddressClass = classifyNodeAddress(node.PrivateMetric, node.PublicMetric)
 		nodes = append(nodes, node)
 	}
 	if err := rows.Err(); err != nil {
@@ -996,9 +1022,9 @@ LIMIT %d
 func entityExpressions(granularity Granularity) (string, string) {
 	switch granularity {
 	case GranularityTLD:
-		return coalescedEntityExpressionWithDefault(unknownEntityLabel, "src_tld"), coalescedEntityExpressionWithDefault(unknownEntityLabel, "dst_tld")
+		return coalescedEntityExpressionWithPrivateUnknown("src_is_private", "src_tld"), coalescedEntityExpressionWithPrivateUnknown("dst_is_private", "dst_tld")
 	case Granularity2LD:
-		return coalescedEntityExpressionWithDefault(unknownEntityLabel, "src_2ld", "src_tld"), coalescedEntityExpressionWithDefault(unknownEntityLabel, "dst_2ld", "dst_tld")
+		return coalescedEntityExpressionWithPrivateUnknown("src_is_private", "src_2ld", "src_tld"), coalescedEntityExpressionWithPrivateUnknown("dst_is_private", "dst_2ld", "dst_tld")
 	case GranularityHostname:
 		return coalescedEntityExpression("src_host", "src_2ld", "src_tld", "src_ip"), coalescedEntityExpression("dst_host", "dst_2ld", "dst_tld", "dst_ip")
 	case GranularityIP:
@@ -1010,6 +1036,16 @@ func entityExpressions(granularity Granularity) (string, string) {
 
 func coalescedEntityExpression(fields ...string) string {
 	return coalescedEntityExpressionWithDefault("", fields...)
+}
+
+func coalescedEntityExpressionWithPrivateUnknown(privateColumn string, fields ...string) string {
+	return fmt.Sprintf(
+		"COALESCE(%s, CASE WHEN %s THEN %s ELSE %s END)",
+		coalescedEntityExpression(fields...),
+		privateColumn,
+		quoteLiteral(unknownPrivateEntityLabel),
+		quoteLiteral(unknownPublicEntityLabel),
+	)
 }
 
 func coalescedEntityExpressionWithDefault(defaultValue string, fields ...string) string {
@@ -1058,6 +1094,22 @@ func metricValueExpression(metric Metric) string {
 		return "1"
 	}
 	return "bytes"
+}
+
+func privateMetricExpression(privateColumn string, metric Metric) string {
+	if metric == MetricConnections {
+		return fmt.Sprintf("CASE WHEN %s THEN 1 ELSE 0 END", privateColumn)
+	}
+
+	return fmt.Sprintf("CASE WHEN %s THEN bytes ELSE 0 END", privateColumn)
+}
+
+func publicMetricExpression(privateColumn string, metric Metric) string {
+	if metric == MetricConnections {
+		return fmt.Sprintf("CASE WHEN %s THEN 0 ELSE 1 END", privateColumn)
+	}
+
+	return fmt.Sprintf("CASE WHEN %s THEN 0 ELSE bytes END", privateColumn)
 }
 
 func metricOrderExpression(metric Metric) string {

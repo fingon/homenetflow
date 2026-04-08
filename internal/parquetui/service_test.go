@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -351,7 +352,7 @@ func TestServiceTLDUsesUnknownForUnresolvedIPs(t *testing.T) {
 		Metric:      MetricBytes,
 	})
 	assert.NilError(t, err)
-	assert.Assert(t, containsNode(graph.Nodes, unknownEntityLabel))
+	assert.Assert(t, containsNode(graph.Nodes, unknownPublicEntityLabel))
 	assert.Assert(t, !containsNode(graph.Nodes, "192.0.2.10"))
 	assert.Assert(t, !containsNode(graph.Nodes, "2001:db8::1"))
 }
@@ -371,9 +372,51 @@ func TestService2LDUsesUnknownForUnresolvedIPs(t *testing.T) {
 		Metric:      MetricBytes,
 	})
 	assert.NilError(t, err)
-	assert.Assert(t, containsNode(graph.Nodes, unknownEntityLabel))
+	assert.Assert(t, containsNode(graph.Nodes, unknownPublicEntityLabel))
 	assert.Assert(t, !containsNode(graph.Nodes, "192.0.2.10"))
 	assert.Assert(t, !containsNode(graph.Nodes, "2001:db8::1"))
+}
+
+func TestServiceTLDSplitsUnknownPrivateAndPublic(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "", "", "", "", "", "", 100, 10, 20),
+		sampleRecord("2001:db8::1", "198.51.100.10", "", "", "", "", "", "", 50, 30, 40),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	graph, err := service.Graph(context.Background(), QueryState{
+		Granularity: GranularityTLD,
+		Metric:      MetricBytes,
+	})
+	assert.NilError(t, err)
+	assert.Assert(t, containsNode(graph.Nodes, unknownPrivateEntityLabel))
+	assert.Assert(t, containsNode(graph.Nodes, unknownPublicEntityLabel))
+}
+
+func TestServiceGraphClassifiesPrivateAndMixedNodes(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+		sampleRecord("2001:db8::1", "8.8.4.4", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 50, 30, 40),
+		sampleRecord("fd00::1", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 75, 50, 60),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	graph, err := service.Graph(context.Background(), QueryState{
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+	})
+	assert.NilError(t, err)
+
+	assert.Equal(t, nodeAddressClassForID(graph.Nodes, "alpha.lan"), nodeAddressClassMixed)
+	assert.Equal(t, nodeAddressClassForID(graph.Nodes, "beta.lan"), nodeAddressClassPrivate)
 }
 
 func containsNode(nodes []Node, nodeID string) bool {
@@ -383,6 +426,16 @@ func containsNode(nodes []Node, nodeID string) bool {
 		}
 	}
 	return false
+}
+
+func nodeAddressClassForID(nodes []Node, nodeID string) nodeAddressClass {
+	for _, node := range nodes {
+		if node.ID == nodeID {
+			return node.AddressClass
+		}
+	}
+
+	return ""
 }
 
 func writeBaseParquet(t *testing.T, path string) {
@@ -403,7 +456,10 @@ func writeBaseParquet(t *testing.T, path string) {
 func writeEnrichedParquet(t *testing.T, path string, records []model.FlowRecord) {
 	t.Helper()
 
-	writer, finalize, err := parquetout.CreateEnriched(path, model.EnrichmentManifest{Version: 1})
+	writer, finalize, err := parquetout.CreateEnriched(path, model.EnrichmentManifest{
+		LogicVersion: model.EnrichmentLogicVersion,
+		Version:      model.EnrichmentManifestVersion,
+	})
 	assert.NilError(t, err)
 	assert.NilError(t, writer.WriteBatch(records))
 	assert.NilError(t, finalize())
@@ -411,18 +467,43 @@ func writeEnrichedParquet(t *testing.T, path string, records []model.FlowRecord)
 
 func sampleRecord(srcIP, dstIP, srcHost, src2LD, srcTLD, dstHost, dst2LD, dstTLD string, bytes, startNs, endNs int64) model.FlowRecord {
 	return model.FlowRecord{
-		Bytes:       bytes,
-		Dst2LD:      strPtr(dst2LD),
-		DstHost:     strPtr(dstHost),
-		DstIP:       dstIP,
-		DstTLD:      strPtr(dstTLD),
-		Src2LD:      strPtr(src2LD),
-		SrcHost:     strPtr(srcHost),
-		SrcIP:       srcIP,
-		SrcTLD:      strPtr(srcTLD),
-		TimeEndNs:   endNs,
-		TimeStartNs: startNs,
+		Bytes:        bytes,
+		Dst2LD:       strPtr(dst2LD),
+		DstHost:      strPtr(dstHost),
+		DstIP:        dstIP,
+		DstIsPrivate: testIsPrivate(dstIP),
+		DstTLD:       strPtr(dstTLD),
+		Src2LD:       strPtr(src2LD),
+		SrcHost:      strPtr(srcHost),
+		SrcIP:        srcIP,
+		SrcIsPrivate: testIsPrivate(srcIP),
+		SrcTLD:       strPtr(srcTLD),
+		TimeEndNs:    endNs,
+		TimeStartNs:  startNs,
 	}
+}
+
+func testIsPrivate(ipAddress string) bool {
+	address, err := netip.ParseAddr(ipAddress)
+	if err != nil {
+		return false
+	}
+
+	privatePrefixes := []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("172.16.0.0/12"),
+		netip.MustParsePrefix("192.168.0.0/16"),
+		netip.MustParsePrefix("fc00::/7"),
+		netip.MustParsePrefix("fec0::/10"),
+		netip.MustParsePrefix("fe80::/10"),
+	}
+	for _, prefix := range privatePrefixes {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func strPtr(value string) *string {

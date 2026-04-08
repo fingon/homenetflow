@@ -26,8 +26,6 @@ const (
 	summaryEdgeKind          = "edges"
 	summaryFilenamePrefix    = "ui_summary_"
 	summaryHistogramKind     = "histogram"
-	summaryManifestVersion   = 1
-	unknownEntityLabel       = "Unknown"
 )
 
 type summarySnapshot struct {
@@ -149,7 +147,11 @@ func inspectSourceSummary(job summaryJob) (summarySourceStatus, error) {
 	expectedKinds := []string{summaryEdgeKind, summaryEdgeKind, summaryHistogramKind}
 	expectedGranularities := []string{string(GranularityTLD), string(Granularity2LD), ""}
 	for index, manifest := range manifests {
-		if manifest.Version != summaryManifestVersion || manifest.Kind != expectedKinds[index] || manifest.Granularity != expectedGranularities[index] || manifest.Source != expectedSource {
+		if manifest.Version != model.UISummaryManifestVersion ||
+			manifest.LogicVersion != model.UISummaryLogicVersion ||
+			manifest.Kind != expectedKinds[index] ||
+			manifest.Granularity != expectedGranularities[index] ||
+			manifest.Source != expectedSource {
 			return summarySourceStatus{
 				histogramManifest: histogramManifest,
 				state:             summarySourceStateStale,
@@ -279,6 +281,14 @@ func rebuildEdgeSummary(
 SELECT %s AS src_entity, %s AS dst_entity,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   COUNT(*) AS connection_total,
+  COALESCE(SUM(CASE WHEN src_is_private THEN bytes ELSE 0 END), 0) AS src_private_bytes,
+  COALESCE(SUM(CASE WHEN src_is_private THEN 1 ELSE 0 END), 0) AS src_private_connections,
+  COALESCE(SUM(CASE WHEN src_is_private THEN 0 ELSE bytes END), 0) AS src_public_bytes,
+  COALESCE(SUM(CASE WHEN src_is_private THEN 0 ELSE 1 END), 0) AS src_public_connections,
+  COALESCE(SUM(CASE WHEN dst_is_private THEN bytes ELSE 0 END), 0) AS dst_private_bytes,
+  COALESCE(SUM(CASE WHEN dst_is_private THEN 1 ELSE 0 END), 0) AS dst_private_connections,
+  COALESCE(SUM(CASE WHEN dst_is_private THEN 0 ELSE bytes END), 0) AS dst_public_bytes,
+  COALESCE(SUM(CASE WHEN dst_is_private THEN 0 ELSE 1 END), 0) AS dst_public_connections,
   COALESCE(MIN(time_start_ns), 0) AS first_seen_ns,
   COALESCE(MAX(time_end_ns), 0) AS last_seen_ns
 FROM read_parquet(%s)
@@ -300,7 +310,22 @@ ORDER BY src_entity, dst_entity
 	batch := make([]parquetout.EdgeSummaryRow, 0, summaryBuildRowBatchSize)
 	for rows.Next() {
 		var row parquetout.EdgeSummaryRow
-		if err := rows.Scan(&row.Source, &row.Destination, &row.Bytes, &row.Connections, &row.FirstSeenNs, &row.LastSeenNs); err != nil {
+		if err := rows.Scan(
+			&row.Source,
+			&row.Destination,
+			&row.Bytes,
+			&row.Connections,
+			&row.SrcPrivateBytes,
+			&row.SrcPrivateConnections,
+			&row.SrcPublicBytes,
+			&row.SrcPublicConnections,
+			&row.DstPrivateBytes,
+			&row.DstPrivateConnections,
+			&row.DstPublicBytes,
+			&row.DstPublicConnections,
+			&row.FirstSeenNs,
+			&row.LastSeenNs,
+		); err != nil {
 			return fmt.Errorf("scan %s summary edge row for %q: %w", granularity, sourceFile.RelPath, err)
 		}
 		batch = append(batch, row)

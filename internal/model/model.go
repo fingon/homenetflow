@@ -8,12 +8,17 @@ import (
 )
 
 const (
-	PeriodMonth            = "month"
-	PeriodDay              = "day"
-	PeriodHour             = "hour"
-	IPVersionUnknown int32 = 0
-	IPVersion4       int32 = 4
-	IPVersion6       int32 = 6
+	EnrichmentLogicVersion          = 2
+	EnrichmentManifestVersion       = 1
+	IPVersionUnknown          int32 = 0
+	IPVersion4                int32 = 4
+	IPVersion6                int32 = 6
+	PeriodDay                       = "day"
+	PeriodHour                      = "hour"
+	PeriodMonth                     = "month"
+	RefreshManifestVersion          = 1
+	UISummaryLogicVersion           = 2
+	UISummaryManifestVersion        = 1
 )
 
 type Period struct {
@@ -75,23 +80,25 @@ type RefreshManifest struct {
 }
 
 type EnrichmentManifest struct {
-	Logs    []SourceManifest `json:"logs"`
-	Source  SourceManifest   `json:"source"`
-	Version int              `json:"version"`
+	LogicVersion int              `json:"logicVersion"`
+	Logs         []SourceManifest `json:"logs"`
+	Source       SourceManifest   `json:"source"`
+	Version      int              `json:"version"`
 }
 
 type UISummaryManifest struct {
-	Granularity string         `json:"granularity"`
-	Kind        string         `json:"kind"`
-	Source      SourceManifest `json:"source"`
-	SpanEndNs   int64          `json:"spanEndNs"`
-	SpanStartNs int64          `json:"spanStartNs"`
-	Version     int            `json:"version"`
+	Granularity  string         `json:"granularity"`
+	Kind         string         `json:"kind"`
+	LogicVersion int            `json:"logicVersion"`
+	Source       SourceManifest `json:"source"`
+	SpanEndNs    int64          `json:"spanEndNs"`
+	SpanStartNs  int64          `json:"spanStartNs"`
+	Version      int            `json:"version"`
 }
 
 func NewRefreshManifest(sourceFiles []SourceFile) RefreshManifest {
 	manifest := RefreshManifest{
-		Version: 1,
+		Version: RefreshManifestVersion,
 		Sources: make([]SourceManifest, 0, len(sourceFiles)),
 	}
 
@@ -112,9 +119,10 @@ func NewRefreshManifest(sourceFiles []SourceFile) RefreshManifest {
 
 func NewEnrichmentManifest(sourceFile SourceFile, logFiles []SourceFile) EnrichmentManifest {
 	manifest := EnrichmentManifest{
-		Logs:    make([]SourceManifest, 0, len(logFiles)),
-		Source:  sourceManifestForFile(sourceFile),
-		Version: 1,
+		LogicVersion: EnrichmentLogicVersion,
+		Logs:         make([]SourceManifest, 0, len(logFiles)),
+		Source:       sourceManifestForFile(sourceFile),
+		Version:      EnrichmentManifestVersion,
 	}
 
 	for _, logFile := range logFiles {
@@ -138,40 +146,43 @@ func sourceManifestForFile(sourceFile SourceFile) SourceManifest {
 
 func NewUISummaryManifest(sourceFile SourceFile, kind, granularity string, spanStartNs, spanEndNs int64) UISummaryManifest {
 	return UISummaryManifest{
-		Granularity: granularity,
-		Kind:        kind,
-		Source:      sourceManifestForFile(sourceFile),
-		SpanEndNs:   spanEndNs,
-		SpanStartNs: spanStartNs,
-		Version:     1,
+		Granularity:  granularity,
+		Kind:         kind,
+		LogicVersion: UISummaryLogicVersion,
+		Source:       sourceManifestForFile(sourceFile),
+		SpanEndNs:    spanEndNs,
+		SpanStartNs:  spanStartNs,
+		Version:      UISummaryManifestVersion,
 	}
 }
 
 type FlowRecord struct {
-	TimeStartNs int64
-	TimeEndNs   int64
-	DurationNs  int64
-	IPVersion   int32
-	Protocol    int32
-	SrcIP       string
-	DstIP       string
-	SrcPort     int32
-	DstPort     int32
-	Packets     int64
-	Bytes       int64
-	RouterIP    *string
-	NextHopIP   *string
-	SrcAS       *int32
-	DstAS       *int32
-	SrcMask     *int32
-	DstMask     *int32
-	TCPFlags    *int32
-	SrcHost     *string
-	DstHost     *string
-	Src2LD      *string
-	Dst2LD      *string
-	SrcTLD      *string
-	DstTLD      *string
+	TimeStartNs  int64
+	TimeEndNs    int64
+	DurationNs   int64
+	IPVersion    int32
+	Protocol     int32
+	SrcIP        string
+	DstIP        string
+	SrcPort      int32
+	DstPort      int32
+	Packets      int64
+	Bytes        int64
+	RouterIP     *string
+	NextHopIP    *string
+	SrcAS        *int32
+	DstAS        *int32
+	SrcMask      *int32
+	DstMask      *int32
+	TCPFlags     *int32
+	SrcHost      *string
+	DstHost      *string
+	Src2LD       *string
+	Dst2LD       *string
+	SrcTLD       *string
+	DstTLD       *string
+	SrcIsPrivate bool
+	DstIsPrivate bool
 }
 
 type FlowParser interface {

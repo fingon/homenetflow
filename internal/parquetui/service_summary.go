@@ -16,12 +16,20 @@ type summaryGraphSnapshotData struct {
 }
 
 type summaryEdgeAggregate struct {
-	Bytes       int64
-	Connections int64
-	Destination string
-	FirstSeenNs int64
-	LastSeenNs  int64
-	Source      string
+	Bytes                 int64
+	Connections           int64
+	Destination           string
+	DstPrivateBytes       int64
+	DstPrivateConnections int64
+	DstPublicBytes        int64
+	DstPublicConnections  int64
+	FirstSeenNs           int64
+	LastSeenNs            int64
+	Source                string
+	SrcPrivateBytes       int64
+	SrcPrivateConnections int64
+	SrcPublicBytes        int64
+	SrcPublicConnections  int64
 }
 
 type summaryMetricView struct {
@@ -232,6 +240,14 @@ func (s *Service) summaryGraphSnapshot(ctx context.Context, granularity Granular
 SELECT src_entity, dst_entity,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   COALESCE(SUM(connections), 0) AS connection_total,
+  COALESCE(SUM(src_private_bytes), 0) AS src_private_bytes,
+  COALESCE(SUM(src_private_connections), 0) AS src_private_connections,
+  COALESCE(SUM(src_public_bytes), 0) AS src_public_bytes,
+  COALESCE(SUM(src_public_connections), 0) AS src_public_connections,
+  COALESCE(SUM(dst_private_bytes), 0) AS dst_private_bytes,
+  COALESCE(SUM(dst_private_connections), 0) AS dst_private_connections,
+  COALESCE(SUM(dst_public_bytes), 0) AS dst_public_bytes,
+  COALESCE(SUM(dst_public_connections), 0) AS dst_public_connections,
   COALESCE(MIN(first_seen_ns), 0) AS first_seen_ns,
   COALESCE(MAX(last_seen_ns), 0) AS last_seen_ns
 FROM read_parquet(%s)
@@ -250,7 +266,22 @@ GROUP BY src_entity, dst_entity
 	}
 	for rows.Next() {
 		var edge summaryEdgeAggregate
-		if err := rows.Scan(&edge.Source, &edge.Destination, &edge.Bytes, &edge.Connections, &edge.FirstSeenNs, &edge.LastSeenNs); err != nil {
+		if err := rows.Scan(
+			&edge.Source,
+			&edge.Destination,
+			&edge.Bytes,
+			&edge.Connections,
+			&edge.SrcPrivateBytes,
+			&edge.SrcPrivateConnections,
+			&edge.SrcPublicBytes,
+			&edge.SrcPublicConnections,
+			&edge.DstPrivateBytes,
+			&edge.DstPrivateConnections,
+			&edge.DstPublicBytes,
+			&edge.DstPublicConnections,
+			&edge.FirstSeenNs,
+			&edge.LastSeenNs,
+		); err != nil {
 			return nil, fmt.Errorf("scan summary graph snapshot row: %w", err)
 		}
 		snapshot.edges = append(snapshot.edges, edge)
@@ -284,15 +315,21 @@ func buildSummaryMetricView(snapshot *summaryGraphSnapshotData, metric Metric) s
 		sourceNode := nodeTotalsByID[aggregate.Source]
 		sourceNode.ID = aggregate.Source
 		sourceNode.Label = aggregate.Source
+		sourceNode.PrivateMetric += summaryMetricValue(metric, aggregate.SrcPrivateBytes, aggregate.SrcPrivateConnections)
+		sourceNode.PublicMetric += summaryMetricValue(metric, aggregate.SrcPublicBytes, aggregate.SrcPublicConnections)
 		sourceNode.Outbound += edge.MetricValue
 		sourceNode.Total += edge.MetricValue
+		sourceNode.AddressClass = classifyNodeAddress(sourceNode.PrivateMetric, sourceNode.PublicMetric)
 		nodeTotalsByID[aggregate.Source] = sourceNode
 
 		destinationNode := nodeTotalsByID[aggregate.Destination]
 		destinationNode.ID = aggregate.Destination
 		destinationNode.Label = aggregate.Destination
+		destinationNode.PrivateMetric += summaryMetricValue(metric, aggregate.DstPrivateBytes, aggregate.DstPrivateConnections)
+		destinationNode.PublicMetric += summaryMetricValue(metric, aggregate.DstPublicBytes, aggregate.DstPublicConnections)
 		destinationNode.Inbound += edge.MetricValue
 		destinationNode.Total += edge.MetricValue
+		destinationNode.AddressClass = classifyNodeAddress(destinationNode.PrivateMetric, destinationNode.PublicMetric)
 		nodeTotalsByID[aggregate.Destination] = destinationNode
 	}
 
@@ -327,6 +364,14 @@ func buildSummaryMetricView(snapshot *summaryGraphSnapshotData, metric Metric) s
 		edges:      edges,
 		nodeTotals: nodeTotals,
 	}
+}
+
+func summaryMetricValue(metric Metric, bytesValue, connectionValue int64) int64 {
+	if metric == MetricConnections {
+		return connectionValue
+	}
+
+	return bytesValue
 }
 
 func buildSummaryVisibleGraph(view summaryMetricView, keepEntities []string, state QueryState) ([]Edge, map[string]Node) {

@@ -21,30 +21,32 @@ const (
 )
 
 type Row struct {
-	Bytes       int64   `parquet:"bytes"`
-	DurationNs  int64   `parquet:"duration_ns"`
-	Dst2LD      *string `parquet:"dst_2ld,optional"`
-	DstAS       *int32  `parquet:"dst_as,optional"`
-	DstHost     *string `parquet:"dst_host,optional"`
-	DstIP       string  `parquet:"dst_ip"`
-	DstMask     *int32  `parquet:"dst_mask,optional"`
-	DstPort     int32   `parquet:"dst_port"`
-	DstTLD      *string `parquet:"dst_tld,optional"`
-	IPVersion   int32   `parquet:"ip_version"`
-	NextHopIP   *string `parquet:"next_hop_ip,optional"`
-	Packets     int64   `parquet:"packets"`
-	Protocol    int32   `parquet:"protocol"`
-	RouterIP    *string `parquet:"router_ip,optional"`
-	Src2LD      *string `parquet:"src_2ld,optional"`
-	SrcAS       *int32  `parquet:"src_as,optional"`
-	SrcHost     *string `parquet:"src_host,optional"`
-	SrcIP       string  `parquet:"src_ip"`
-	SrcMask     *int32  `parquet:"src_mask,optional"`
-	SrcPort     int32   `parquet:"src_port"`
-	SrcTLD      *string `parquet:"src_tld,optional"`
-	TCPFlags    *int32  `parquet:"tcp_flags,optional"`
-	TimeEndNs   int64   `parquet:"time_end_ns"`
-	TimeStartNs int64   `parquet:"time_start_ns"`
+	Bytes        int64   `parquet:"bytes"`
+	DurationNs   int64   `parquet:"duration_ns"`
+	Dst2LD       *string `parquet:"dst_2ld,optional"`
+	DstAS        *int32  `parquet:"dst_as,optional"`
+	DstHost      *string `parquet:"dst_host,optional"`
+	DstIP        string  `parquet:"dst_ip"`
+	DstIsPrivate bool    `parquet:"dst_is_private"`
+	DstMask      *int32  `parquet:"dst_mask,optional"`
+	DstPort      int32   `parquet:"dst_port"`
+	DstTLD       *string `parquet:"dst_tld,optional"`
+	IPVersion    int32   `parquet:"ip_version"`
+	NextHopIP    *string `parquet:"next_hop_ip,optional"`
+	Packets      int64   `parquet:"packets"`
+	Protocol     int32   `parquet:"protocol"`
+	RouterIP     *string `parquet:"router_ip,optional"`
+	Src2LD       *string `parquet:"src_2ld,optional"`
+	SrcAS        *int32  `parquet:"src_as,optional"`
+	SrcHost      *string `parquet:"src_host,optional"`
+	SrcIP        string  `parquet:"src_ip"`
+	SrcIsPrivate bool    `parquet:"src_is_private"`
+	SrcMask      *int32  `parquet:"src_mask,optional"`
+	SrcPort      int32   `parquet:"src_port"`
+	SrcTLD       *string `parquet:"src_tld,optional"`
+	TCPFlags     *int32  `parquet:"tcp_flags,optional"`
+	TimeEndNs    int64   `parquet:"time_end_ns"`
+	TimeStartNs  int64   `parquet:"time_start_ns"`
 }
 
 type FileWriter struct {
@@ -127,30 +129,32 @@ func (w *FileWriter) Write(record model.FlowRecord) error {
 func (w *FileWriter) WriteBatch(records []model.FlowRecord) error {
 	for _, record := range records {
 		w.rows = append(w.rows, Row{
-			Bytes:       record.Bytes,
-			DurationNs:  record.DurationNs,
-			DstAS:       record.DstAS,
-			Dst2LD:      record.Dst2LD,
-			DstHost:     record.DstHost,
-			DstIP:       record.DstIP,
-			DstMask:     record.DstMask,
-			DstPort:     record.DstPort,
-			DstTLD:      record.DstTLD,
-			IPVersion:   record.IPVersion,
-			NextHopIP:   record.NextHopIP,
-			Packets:     record.Packets,
-			Protocol:    record.Protocol,
-			RouterIP:    record.RouterIP,
-			Src2LD:      record.Src2LD,
-			SrcAS:       record.SrcAS,
-			SrcHost:     record.SrcHost,
-			SrcIP:       record.SrcIP,
-			SrcMask:     record.SrcMask,
-			SrcPort:     record.SrcPort,
-			SrcTLD:      record.SrcTLD,
-			TCPFlags:    record.TCPFlags,
-			TimeEndNs:   record.TimeEndNs,
-			TimeStartNs: record.TimeStartNs,
+			Bytes:        record.Bytes,
+			DurationNs:   record.DurationNs,
+			DstAS:        record.DstAS,
+			Dst2LD:       record.Dst2LD,
+			DstHost:      record.DstHost,
+			DstIP:        record.DstIP,
+			DstIsPrivate: record.DstIsPrivate,
+			DstMask:      record.DstMask,
+			DstPort:      record.DstPort,
+			DstTLD:       record.DstTLD,
+			IPVersion:    record.IPVersion,
+			NextHopIP:    record.NextHopIP,
+			Packets:      record.Packets,
+			Protocol:     record.Protocol,
+			RouterIP:     record.RouterIP,
+			Src2LD:       record.Src2LD,
+			SrcAS:        record.SrcAS,
+			SrcHost:      record.SrcHost,
+			SrcIP:        record.SrcIP,
+			SrcIsPrivate: record.SrcIsPrivate,
+			SrcMask:      record.SrcMask,
+			SrcPort:      record.SrcPort,
+			SrcTLD:       record.SrcTLD,
+			TCPFlags:     record.TCPFlags,
+			TimeEndNs:    record.TimeEndNs,
+			TimeStartNs:  record.TimeStartNs,
 		})
 
 		if len(w.rows) < writerBufferRowCount {
@@ -256,30 +260,32 @@ func ReadFileBatches(path string, emit func([]model.FlowRecord) error) error {
 
 func (r Row) toFlowRecord() model.FlowRecord {
 	return model.FlowRecord{
-		Bytes:       r.Bytes,
-		DurationNs:  r.DurationNs,
-		Dst2LD:      r.Dst2LD,
-		DstAS:       r.DstAS,
-		DstHost:     r.DstHost,
-		DstIP:       r.DstIP,
-		DstMask:     r.DstMask,
-		DstPort:     r.DstPort,
-		DstTLD:      r.DstTLD,
-		IPVersion:   r.IPVersion,
-		NextHopIP:   r.NextHopIP,
-		Packets:     r.Packets,
-		Protocol:    r.Protocol,
-		RouterIP:    r.RouterIP,
-		Src2LD:      r.Src2LD,
-		SrcAS:       r.SrcAS,
-		SrcHost:     r.SrcHost,
-		SrcIP:       r.SrcIP,
-		SrcMask:     r.SrcMask,
-		SrcPort:     r.SrcPort,
-		SrcTLD:      r.SrcTLD,
-		TCPFlags:    r.TCPFlags,
-		TimeEndNs:   r.TimeEndNs,
-		TimeStartNs: r.TimeStartNs,
+		Bytes:        r.Bytes,
+		DurationNs:   r.DurationNs,
+		Dst2LD:       r.Dst2LD,
+		DstAS:        r.DstAS,
+		DstHost:      r.DstHost,
+		DstIP:        r.DstIP,
+		DstIsPrivate: r.DstIsPrivate,
+		DstMask:      r.DstMask,
+		DstPort:      r.DstPort,
+		DstTLD:       r.DstTLD,
+		IPVersion:    r.IPVersion,
+		NextHopIP:    r.NextHopIP,
+		Packets:      r.Packets,
+		Protocol:     r.Protocol,
+		RouterIP:     r.RouterIP,
+		Src2LD:       r.Src2LD,
+		SrcAS:        r.SrcAS,
+		SrcHost:      r.SrcHost,
+		SrcIP:        r.SrcIP,
+		SrcIsPrivate: r.SrcIsPrivate,
+		SrcMask:      r.SrcMask,
+		SrcPort:      r.SrcPort,
+		SrcTLD:       r.SrcTLD,
+		TCPFlags:     r.TCPFlags,
+		TimeEndNs:    r.TimeEndNs,
+		TimeStartNs:  r.TimeStartNs,
 	}
 }
 

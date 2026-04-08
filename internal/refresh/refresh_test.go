@@ -27,3 +27,21 @@ func TestNeedsEnrichmentRebuildIgnoresDeletedLogs(t *testing.T) {
 	})
 	assert.Assert(t, rebuild || err != nil)
 }
+
+func TestNeedsEnrichmentRebuildOnLogicVersionMismatch(t *testing.T) {
+	t.Parallel()
+
+	sourceFile := model.SourceFile{
+		RelPath:  "nfcap_20260329.parquet",
+		SizeByte: 10,
+		ModTime:  time.Unix(1, 0).UTC(),
+	}
+
+	rebuild, err := NeedsEnrichmentRebuild("unused", sourceFile, nil, func(string) (model.EnrichmentManifest, error) {
+		manifest := model.NewEnrichmentManifest(sourceFile, nil)
+		manifest.LogicVersion--
+		return manifest, nil
+	})
+	assert.NilError(t, err)
+	assert.Assert(t, rebuild)
+}

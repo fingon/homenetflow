@@ -52,26 +52,29 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 	dstHost := "example.net"
 
 	writer, finalize, err := CreateEnriched(path, model.EnrichmentManifest{
-		Source:  model.SourceManifest{Path: "nfcap_202603.parquet", SizeByte: 123, ModTimeNs: 456},
-		Version: 1,
+		LogicVersion: model.EnrichmentLogicVersion,
+		Source:       model.SourceManifest{Path: "nfcap_202603.parquet", SizeByte: 123, ModTimeNs: 456},
+		Version:      model.EnrichmentManifestVersion,
 	})
 	assert.NilError(t, err)
 	assert.NilError(t, writer.Write(model.FlowRecord{
-		Bytes:       1,
-		DurationNs:  2,
-		DstIP:       "198.51.100.1",
-		DstHost:     &dstHost,
-		DstPort:     443,
-		IPVersion:   model.IPVersion6,
-		Packets:     3,
-		Protocol:    6,
-		Src2LD:      &src2LD,
-		SrcHost:     &srcHost,
-		SrcIP:       "192.0.2.1",
-		SrcPort:     12345,
-		SrcTLD:      &srcTLD,
-		TimeEndNs:   20,
-		TimeStartNs: 10,
+		Bytes:        1,
+		DurationNs:   2,
+		DstIP:        "198.51.100.1",
+		DstHost:      &dstHost,
+		DstIsPrivate: true,
+		DstPort:      443,
+		IPVersion:    model.IPVersion6,
+		Packets:      3,
+		Protocol:     6,
+		Src2LD:       &src2LD,
+		SrcHost:      &srcHost,
+		SrcIP:        "192.0.2.1",
+		SrcIsPrivate: false,
+		SrcPort:      12345,
+		SrcTLD:       &srcTLD,
+		TimeEndNs:    20,
+		TimeStartNs:  10,
 	}))
 	assert.NilError(t, finalize())
 
@@ -87,4 +90,6 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 	assert.Equal(t, *records[0].SrcTLD, srcTLD)
 	assert.Equal(t, *records[0].DstHost, dstHost)
 	assert.Equal(t, records[0].IPVersion, model.IPVersion6)
+	assert.Assert(t, records[0].DstIsPrivate)
+	assert.Assert(t, !records[0].SrcIsPrivate)
 }

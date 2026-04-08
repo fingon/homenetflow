@@ -131,6 +131,28 @@ func TestGraphSVGMarkupMarksPersistentLabels(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `data-label-persistent="true"`))
 }
 
+func TestGraphSVGMarkupColorsPrivateAndMixedNodes(t *testing.T) {
+	t.Parallel()
+
+	markup := graphSVGMarkup(QueryState{Metric: MetricBytes}, GraphData{
+		Nodes: []Node{
+			{ID: "private", Label: "private", Total: 10, AddressClass: nodeAddressClassPrivate},
+			{ID: "mixed", Label: "mixed", Total: 9, AddressClass: nodeAddressClassMixed},
+			{ID: "public", Label: "public", Total: 8, AddressClass: nodeAddressClassPublic},
+		},
+		NodePositions: map[string]LayoutPoint{
+			"private": {X: 100, Y: 100},
+			"mixed":   {X: 200, Y: 100},
+			"public":  {X: 300, Y: 100},
+		},
+	})
+
+	assert.Assert(t, strings.Contains(markup, `data-node-id="private"`))
+	assert.Assert(t, strings.Contains(markup, fmt.Sprintf(`fill="%s"`, privateEntityNodeFill)))
+	assert.Assert(t, strings.Contains(markup, fmt.Sprintf(`fill="%s"`, mixedEntityNodeFill)))
+	assert.Assert(t, strings.Contains(markup, fmt.Sprintf(`fill="%s"`, unselectedNodeFill)))
+}
+
 func TestPanelsDoNotRenderNestedPanelWrappers(t *testing.T) {
 	t.Parallel()
 
