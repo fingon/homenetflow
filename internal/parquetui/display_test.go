@@ -168,6 +168,76 @@ func TestPanelsDoNotRenderNestedPanelWrappers(t *testing.T) {
 	assert.Assert(t, !strings.Contains(tableMarkup, `class="panel"`))
 }
 
+func TestSummaryPanelDoesNotRenderRankings(t *testing.T) {
+	t.Parallel()
+
+	summaryMarkup := renderNodeString(t, SummaryPanel(QueryState{
+		FromNs:      10,
+		ToNs:        20,
+		Metric:      MetricBytes,
+		Granularity: Granularity2LD,
+	}, GraphData{
+		ActiveMetric: MetricBytes,
+		TopEntities: []Node{
+			{ID: "alpha.lan", Label: "alpha.lan", Total: 100},
+		},
+		TopEdges: []Edge{
+			{Source: "alpha.lan", Destination: "dns.google", MetricValue: 100},
+		},
+	}))
+
+	assert.Assert(t, !strings.Contains(summaryMarkup, "Top Entities"))
+	assert.Assert(t, !strings.Contains(summaryMarkup, "Top Flows"))
+}
+
+func TestAppShellRendersSeparateRankingsSection(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, AppShell(DashboardData{
+		State: QueryState{
+			FromNs:      10,
+			ToNs:        20,
+			Metric:      MetricBytes,
+			Granularity: Granularity2LD,
+			View:        ViewSplit,
+		},
+		Span: TimeSpan{StartNs: 10, EndNs: 20},
+		Graph: GraphData{
+			ActiveMetric: MetricBytes,
+			TopEntities: []Node{
+				{ID: "alpha.lan", Label: "alpha.lan", Total: 100},
+			},
+			TopEdges: []Edge{
+				{Source: "alpha.lan", Destination: "dns.google", MetricValue: 100},
+			},
+		},
+	}))
+
+	assert.Assert(t, strings.Contains(markup, `id="rankings-section"`))
+	assert.Assert(t, strings.Contains(markup, `class="rankings-section"`))
+	assert.Assert(t, strings.Contains(markup, `class="rankings-panel"`))
+	assert.Assert(t, strings.Contains(markup, "Top Entities"))
+	assert.Assert(t, strings.Contains(markup, "Top Flows"))
+}
+
+func TestAppShellHidesRankingsSectionInTableView(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, AppShell(DashboardData{
+		State: QueryState{
+			FromNs:      10,
+			ToNs:        20,
+			Metric:      MetricBytes,
+			Granularity: Granularity2LD,
+			View:        ViewTable,
+		},
+		Span: TimeSpan{StartNs: 10, EndNs: 20},
+	}))
+
+	assert.Assert(t, strings.Contains(markup, `id="rankings-section"`))
+	assert.Assert(t, strings.Contains(markup, `class="rankings-section hidden"`))
+}
+
 func TestServiceGraphKeepsNodePositionsStableAcrossMetrics(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{

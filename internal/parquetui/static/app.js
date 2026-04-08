@@ -234,6 +234,13 @@
     let labelFramePending = false;
     let cachedLabels = cacheGraphLabels(scene);
 
+    function interactiveGraphTarget(target) {
+      if (!(target instanceof Element)) {
+        return null;
+      }
+      return target.closest("a");
+    }
+
     function updateTransform() {
       scene.setAttribute("transform", `matrix(${scale} 0 0 ${scale} ${translateX} ${translateY})`);
       scheduleLabelVisibilityUpdate();
@@ -304,6 +311,9 @@
 
     svg.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) {
+        return;
+      }
+      if (interactiveGraphTarget(event.target)) {
         return;
       }
       isDragging = true;

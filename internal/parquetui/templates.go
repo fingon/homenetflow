@@ -75,6 +75,21 @@ func AppShell(dashboard DashboardData) g.Node {
 		Div(Class("breadcrumbs"), renderNodes(buildBreadcrumbs(state), func(item string) g.Node {
 			return Span(Class("chip"), g.Text(item))
 		})),
+		Section(
+			Class(sectionClasses("histogram-panel", state.View == ViewTable)),
+			Div(
+				Class("panel-heading"),
+				H2(g.Text("Timeline")),
+				Span(Class("panel-subtle"), g.Text("Drag to zoom, double-click to reset")),
+			),
+			Div(
+				ID("histogram"),
+				Class("histogram"),
+				Data("span-start-ns", strconv.FormatInt(dashboard.Span.StartNs, 10)),
+				Data("span-end-ns", strconv.FormatInt(dashboard.Span.EndNs, 10)),
+				renderHistogramSVG(state.Metric, dashboard.Histogram),
+			),
+		),
 		Div(
 			Class(sectionClasses("content-grid", state.View == ViewTable)),
 			Section(
@@ -104,19 +119,9 @@ func AppShell(dashboard DashboardData) g.Node {
 			),
 		),
 		Section(
-			Class(sectionClasses("histogram-panel", state.View == ViewTable)),
-			Div(
-				Class("panel-heading"),
-				H2(g.Text("Timeline")),
-				Span(Class("panel-subtle"), g.Text("Drag to zoom, double-click to reset")),
-			),
-			Div(
-				ID("histogram"),
-				Class("histogram"),
-				Data("span-start-ns", strconv.FormatInt(dashboard.Span.StartNs, 10)),
-				Data("span-end-ns", strconv.FormatInt(dashboard.Span.EndNs, 10)),
-				renderHistogramSVG(state.Metric, dashboard.Histogram),
-			),
+			Class(sectionClasses("rankings-section", state.View == ViewTable)),
+			ID("rankings-section"),
+			RankingsPanel(state, dashboard.Graph),
 		),
 		Section(
 			Class(sectionClasses("table-panel", state.View == ViewGraph)),
@@ -151,21 +156,32 @@ func SummaryPanel(state QueryState, graph GraphData) g.Node {
 			statBlock("Connections", formatMetricValue(MetricConnections, graph.Totals.Connections)),
 		),
 		selectedPanel(state, graph),
-		sectionTitle("Top Entities"),
-		Ul(
-			Class("rank-list"),
-			renderNodes(graph.TopEntities, func(node Node) g.Node {
-				return Li(navLink(selectEntityStateURL(state, node.ID), "list-button", fmt.Sprintf("%s (%s)", node.Label, formatMetricValue(graph.ActiveMetric, node.Total))))
-			}),
-		),
-		sectionTitle("Top Flows"),
-		Ul(
-			Class("rank-list"),
-			renderNodes(graph.TopEdges, func(edge Edge) g.Node {
-				return Li(navLink(selectEdgeStateURL(state, edge.Source, edge.Destination), "list-button", fmt.Sprintf("%s -> %s (%s)", edge.Source, edge.Destination, formatMetricValue(graph.ActiveMetric, edge.MetricValue))))
-			}),
-		),
 	)
+}
+
+func RankingsPanel(state QueryState, graph GraphData) g.Node {
+	return g.Group([]g.Node{
+		Section(
+			Class("rankings-panel"),
+			sectionTitle("Top Entities"),
+			Ul(
+				Class("rank-list"),
+				renderNodes(graph.TopEntities, func(node Node) g.Node {
+					return Li(navLink(selectEntityStateURL(state, node.ID), "list-button", fmt.Sprintf("%s (%s)", node.Label, formatMetricValue(graph.ActiveMetric, node.Total))))
+				}),
+			),
+		),
+		Section(
+			Class("rankings-panel"),
+			sectionTitle("Top Flows"),
+			Ul(
+				Class("rank-list"),
+				renderNodes(graph.TopEdges, func(edge Edge) g.Node {
+					return Li(navLink(selectEdgeStateURL(state, edge.Source, edge.Destination), "list-button", fmt.Sprintf("%s -> %s (%s)", edge.Source, edge.Destination, formatMetricValue(graph.ActiveMetric, edge.MetricValue))))
+				}),
+			),
+		),
+	})
 }
 
 func selectedPanel(state QueryState, graph GraphData) g.Node {
