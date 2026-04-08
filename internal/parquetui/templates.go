@@ -70,17 +70,13 @@ func AppShell(dashboard DashboardData) g.Node {
 			ID("loading-indicator"),
 			Class("loading-indicator"),
 			g.Attr("aria-live", "polite"),
-			g.Text("Idle"),
 		),
-		Div(Class("breadcrumbs"), renderNodes(buildBreadcrumbs(state), func(item string) g.Node {
-			return Span(Class("chip"), g.Text(item))
-		})),
 		Section(
 			Class(sectionClasses("histogram-panel", state.View == ViewTable)),
 			Div(
 				Class("panel-heading"),
 				H2(g.Text("Timeline")),
-				Span(Class("panel-subtle"), g.Text("Drag to zoom, double-click to reset")),
+				Span(Class("panel-subtle"), g.Text("Drag to zoom")),
 			),
 			Div(
 				ID("histogram"),
@@ -138,8 +134,6 @@ func SummaryPanel(state QueryState, graph GraphData) g.Node {
 		Div(
 			Class("filter-list"),
 			Span(Class("chip"), g.Text("Time: "+formatNsRange(state.FromNs, state.ToNs))),
-			Span(Class("chip"), g.Text("Metric: "+string(state.Metric))),
-			Span(Class("chip"), g.Text("Granularity: "+string(state.Granularity))),
 			renderNodes(state.Include, func(item string) g.Node {
 				return Span(Class("chip"), g.Text("Entity: "+item))
 			}),

@@ -190,6 +190,25 @@ func TestSummaryPanelDoesNotRenderRankings(t *testing.T) {
 	assert.Assert(t, !strings.Contains(summaryMarkup, "Top Flows"))
 }
 
+func TestSummaryPanelActiveFiltersOnlyRenderTimeAndEntityFilters(t *testing.T) {
+	t.Parallel()
+
+	summaryMarkup := renderNodeString(t, SummaryPanel(QueryState{
+		FromNs:      10,
+		ToNs:        20,
+		Metric:      MetricConnections,
+		Granularity: GranularityHostname,
+		Include:     []string{"alpha.lan"},
+		Exclude:     []string{"dns.google"},
+	}, GraphData{}))
+
+	assert.Assert(t, strings.Contains(summaryMarkup, "Time:"))
+	assert.Assert(t, strings.Contains(summaryMarkup, "Entity: alpha.lan"))
+	assert.Assert(t, strings.Contains(summaryMarkup, "Exclude: dns.google"))
+	assert.Assert(t, !strings.Contains(summaryMarkup, "Metric:"))
+	assert.Assert(t, !strings.Contains(summaryMarkup, "Granularity:"))
+}
+
 func TestAppShellRendersSeparateRankingsSection(t *testing.T) {
 	t.Parallel()
 
@@ -218,6 +237,25 @@ func TestAppShellRendersSeparateRankingsSection(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `class="rankings-panel"`))
 	assert.Assert(t, strings.Contains(markup, "Top Entities"))
 	assert.Assert(t, strings.Contains(markup, "Top Flows"))
+}
+
+func TestAppShellDoesNotRenderBreadcrumbsOrIdleStatus(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, AppShell(DashboardData{
+		State: QueryState{
+			FromNs:      10,
+			ToNs:        20,
+			Metric:      MetricBytes,
+			Granularity: Granularity2LD,
+			View:        ViewSplit,
+		},
+		Span: TimeSpan{StartNs: 10, EndNs: 20},
+	}))
+
+	assert.Assert(t, !strings.Contains(markup, `class="breadcrumbs"`))
+	assert.Assert(t, strings.Contains(markup, `id="loading-indicator"`))
+	assert.Assert(t, !strings.Contains(markup, ">Idle<"))
 }
 
 func TestAppShellHidesRankingsSectionInTableView(t *testing.T) {

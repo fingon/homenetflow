@@ -2,7 +2,6 @@
   const errorClassName = "is-error";
   const graphSceneSelector = ".graph-scene";
   const granularityName = "granularity";
-  const idleMessage = "Idle";
   const loadingClassName = "is-loading";
   const loadingMessage = "Loading data...";
   const maxGraphScale = 6;
@@ -523,7 +522,7 @@
       return;
     }
 
-    element.textContent = idleMessage;
+    element.textContent = "";
     element.classList.remove(loadingClassName, errorClassName);
   }
 
