@@ -172,6 +172,7 @@ type Service struct {
 	layoutCache           *resultCache[map[string]LayoutPoint]
 	reloadInterval        time.Duration
 	srcParquetPath        string
+	summaryGraphCache     *resultCache[*summaryGraphSnapshotData]
 	summaryRefreshPending bool
 	summaryRefreshRunning bool
 	tableCache            *resultCache[TableData]
@@ -200,15 +201,16 @@ func NewService(ctx context.Context, srcParquetPath string, reloadInterval time.
 	db := sql.OpenDB(connector)
 
 	service := &Service{
-		bgCtx:          ctx,
-		db:             db,
-		graphCache:     newResultCache[GraphData](resultCacheLimit),
-		globPath:       globPath,
-		histogramCache: newResultCache[[]HistogramBin](resultCacheLimit),
-		layoutCache:    newResultCache[map[string]LayoutPoint](resultCacheLimit),
-		reloadInterval: reloadInterval,
-		srcParquetPath: absPath,
-		tableCache:     newResultCache[TableData](resultCacheLimit),
+		bgCtx:             ctx,
+		db:                db,
+		graphCache:        newResultCache[GraphData](resultCacheLimit),
+		globPath:          globPath,
+		histogramCache:    newResultCache[[]HistogramBin](resultCacheLimit),
+		layoutCache:       newResultCache[map[string]LayoutPoint](resultCacheLimit),
+		reloadInterval:    reloadInterval,
+		srcParquetPath:    absPath,
+		summaryGraphCache: newResultCache[*summaryGraphSnapshotData](resultCacheLimit),
+		tableCache:        newResultCache[TableData](resultCacheLimit),
 	}
 
 	if err := service.refreshMetadata(ctx); err != nil {
@@ -606,6 +608,7 @@ func (s *Service) refreshMetadataWithOptions(ctx context.Context, options refres
 	s.graphCache.Reset()
 	s.histogramCache.Reset()
 	s.layoutCache.Reset()
+	s.summaryGraphCache.Reset()
 	s.tableCache.Reset()
 	s.scheduleSummaryRefresh(inspection.staleJobs)
 

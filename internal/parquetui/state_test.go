@@ -106,3 +106,19 @@ func TestQueryStateValuesSkipPreset(t *testing.T) {
 
 	assert.Equal(t, values.Get("preset"), "")
 }
+
+func TestLayoutCacheStateClearsSelectedEdge(t *testing.T) {
+	state := QueryState{
+		Metric:          MetricConnections,
+		SelectedEdgeDst: "dst.test",
+		SelectedEdgeSrc: "src.test",
+		View:            ViewTable,
+	}
+
+	cacheState := state.layoutCacheState()
+
+	assert.Equal(t, cacheState.SelectedEdgeSrc, "")
+	assert.Equal(t, cacheState.SelectedEdgeDst, "")
+	assert.Equal(t, cacheState.Metric, MetricBytes)
+	assert.Equal(t, cacheState.View, defaultView)
+}

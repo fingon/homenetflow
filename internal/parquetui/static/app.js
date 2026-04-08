@@ -5,6 +5,8 @@
   const idleMessage = "Idle";
   const loadingClassName = "is-loading";
   const loadingMessage = "Loading data...";
+  const maxGraphScale = 6;
+  const minGraphScale = 0.75;
   const nodeLimitAutoValue = "auto";
   const oneDayNs = 24n * 3600n * 1000000000n;
   const oneHourNs = 3600n * 1000000000n;
@@ -15,6 +17,7 @@
   const presetHourValue = "1h";
   const presetMonthValue = "30d";
   const presetWeekValue = "7d";
+  const sceneLabelPaddingPx = 8;
   const searchBehavior = "search";
   const statusErrorMessage = "Request failed.";
   const statusSelector = "#loading-indicator";
@@ -228,9 +231,12 @@
     let scale = 1;
     let translateX = 0;
     let translateY = 0;
+    let labelFramePending = false;
+    let cachedLabels = cacheGraphLabels(scene);
 
     function updateTransform() {
-      scene.setAttribute("transform", `translate(${translateX} ${translateY}) scale(${scale})`);
+      scene.setAttribute("transform", `matrix(${scale} 0 0 ${scale} ${translateX} ${translateY})`);
+      scheduleLabelVisibilityUpdate();
     }
 
     function resetView() {
@@ -242,10 +248,57 @@
       updateTransform();
     }
 
+    function scheduleLabelVisibilityUpdate() {
+      if (labelFramePending) {
+        return;
+      }
+      labelFramePending = true;
+      window.requestAnimationFrame(() => {
+        labelFramePending = false;
+        updateLabelVisibility(svg, graphCanvas, cachedLabels, scale, translateX, translateY);
+      });
+    }
+
+    function clientToSVGPoint(clientX, clientY) {
+      if (typeof svg.createSVGPoint === "function") {
+        const point = svg.createSVGPoint();
+        point.x = clientX;
+        point.y = clientY;
+        const screenMatrix = svg.getScreenCTM();
+        if (screenMatrix) {
+          return point.matrixTransform(screenMatrix.inverse());
+        }
+      }
+
+      const bounds = svg.getBoundingClientRect();
+      const viewBoxWidth = svg.viewBox.baseVal.width || bounds.width;
+      const viewBoxHeight = svg.viewBox.baseVal.height || bounds.height;
+      return {
+        x: ((clientX - bounds.left) / bounds.width) * viewBoxWidth,
+        y: ((clientY - bounds.top) / bounds.height) * viewBoxHeight
+      };
+    }
+
+    function pointerToScenePoint(clientX, clientY) {
+      const point = clientToSVGPoint(clientX, clientY);
+      return {
+        x: (point.x - translateX) / scale,
+        y: (point.y - translateY) / scale
+      };
+    }
+
     svg.addEventListener("wheel", (event) => {
       event.preventDefault();
+      const point = clientToSVGPoint(event.clientX, event.clientY);
+      const scenePoint = pointerToScenePoint(event.clientX, event.clientY);
       const zoomFactor = event.deltaY < 0 ? 1.12 : 0.9;
-      scale = Math.max(0.6, Math.min(4, scale * zoomFactor));
+      const nextScale = Math.max(minGraphScale, Math.min(maxGraphScale, scale * zoomFactor));
+      if (nextScale === scale) {
+        return;
+      }
+      scale = nextScale;
+      translateX = point.x - scenePoint.x * scale;
+      translateY = point.y - scenePoint.y * scale;
       updateTransform();
     }, { passive: false });
 
@@ -264,8 +317,10 @@
       if (!isDragging) {
         return;
       }
-      translateX += event.clientX - lastClientX;
-      translateY += event.clientY - lastClientY;
+      const previousPoint = clientToSVGPoint(lastClientX, lastClientY);
+      const currentPoint = clientToSVGPoint(event.clientX, event.clientY);
+      translateX += currentPoint.x - previousPoint.x;
+      translateY += currentPoint.y - previousPoint.y;
       lastClientX = event.clientX;
       lastClientY = event.clientY;
       updateTransform();
@@ -290,7 +345,113 @@
       resetView();
     });
 
+    svg.addEventListener("mouseenter", () => {
+      cachedLabels = cacheGraphLabels(scene);
+      scheduleLabelVisibilityUpdate();
+    });
+
     updateTransform();
+  }
+
+  function cacheGraphLabels(scene) {
+    const nodeGroups = Array.from(scene.querySelectorAll(".graph-node"));
+    const cachedLabels = [];
+    for (const nodeGroup of nodeGroups) {
+      const label = nodeGroup.querySelector(".graph-label");
+      if (!(label instanceof SVGGraphicsElement)) {
+        continue;
+      }
+
+      const labelBounds = label.getBBox();
+      const translate = parseTranslate(nodeGroup.getAttribute("transform"));
+      cachedLabels.push({
+        box: {
+          bottom: translate.y + labelBounds.y + labelBounds.height,
+          left: translate.x + labelBounds.x,
+          right: translate.x + labelBounds.x + labelBounds.width,
+          top: translate.y + labelBounds.y
+        },
+        nodeGroup,
+        persistent: nodeGroup.dataset.labelPersistent === "true",
+        priority: Number(nodeGroup.dataset.nodePriority || "0")
+      });
+    }
+
+    cachedLabels.sort((leftLabel, rightLabel) => {
+      if (leftLabel.persistent !== rightLabel.persistent) {
+        return leftLabel.persistent ? -1 : 1;
+      }
+      return rightLabel.priority - leftLabel.priority;
+    });
+    return cachedLabels;
+  }
+
+  function updateLabelVisibility(svg, graphCanvas, cachedLabels, scale, translateX, translateY) {
+    if (cachedLabels.length === 0) {
+      return;
+    }
+
+    const viewBox = svg.viewBox.baseVal;
+    const canvasBounds = {
+      bottom: viewBox.height,
+      left: 0,
+      right: viewBox.width,
+      top: 0
+    };
+    const placedBoxes = [];
+
+    for (const { box, nodeGroup, persistent } of cachedLabels) {
+      const labelBox = transformSceneBox(box, scale, translateX, translateY);
+      if (persistent) {
+        nodeGroup.dataset.labelVisible = "true";
+        placedBoxes.push(expandRect(labelBox, sceneLabelPaddingPx));
+        continue;
+      }
+
+      nodeGroup.dataset.labelVisible = "true";
+      const paddedBox = expandRect(labelBox, sceneLabelPaddingPx);
+      if (!rectOverlaps(paddedBox, canvasBounds) || placedBoxes.some((placedBox) => rectOverlaps(paddedBox, placedBox))) {
+        nodeGroup.dataset.labelVisible = "false";
+        continue;
+      }
+      placedBoxes.push(paddedBox);
+    }
+  }
+
+  function transformSceneBox(box, scale, translateX, translateY) {
+    return {
+      bottom: box.bottom * scale + translateY,
+      left: box.left * scale + translateX,
+      right: box.right * scale + translateX,
+      top: box.top * scale + translateY
+    };
+  }
+
+  function expandRect(rect, paddingPx) {
+    return {
+      bottom: rect.bottom + paddingPx,
+      left: rect.left - paddingPx,
+      right: rect.right + paddingPx,
+      top: rect.top - paddingPx
+    };
+  }
+
+  function parseTranslate(transformValue) {
+    const match = /^translate\(([-0-9.]+),\s*([-0-9.]+)\)$/.exec(transformValue || "");
+    if (!match) {
+      return { x: 0, y: 0 };
+    }
+    return {
+      x: Number(match[1]),
+      y: Number(match[2])
+    };
+  }
+
+  function rectOverlaps(leftRect, rightRect) {
+    return leftRect.left < rightRect.right &&
+      leftRect.right > rightRect.left &&
+      leftRect.top < rightRect.bottom &&
+      leftRect.bottom > rightRect.top;
   }
 
   function defaultSortForMetric(metricValue) {

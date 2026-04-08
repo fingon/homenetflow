@@ -108,6 +108,27 @@ func TestGraphSVGMarkupUsesDenseHooksForCrowdedGraphs(t *testing.T) {
 
 	assert.Assert(t, strings.Contains(markup, `class="graph-svg is-dense"`))
 	assert.Assert(t, strings.Contains(markup, `class="graph-scene"`))
+	assert.Assert(t, strings.Contains(markup, `data-node-id="node-0"`))
+	assert.Assert(t, strings.Contains(markup, `data-node-priority="36"`))
+	assert.Assert(t, strings.Contains(markup, `data-label-persistent="false"`))
+}
+
+func TestGraphSVGMarkupMarksPersistentLabels(t *testing.T) {
+	t.Parallel()
+
+	markup := graphSVGMarkup(QueryState{Metric: MetricBytes}, GraphData{
+		Nodes: []Node{
+			{ID: "selected", Label: "selected", Total: 10, Selected: true},
+			{ID: "synthetic", Label: "synthetic", Total: 5, Synthetic: true},
+		},
+		NodePositions: map[string]LayoutPoint{
+			"selected":  {X: 100, Y: 100},
+			"synthetic": {X: 200, Y: 200},
+		},
+	})
+
+	assert.Assert(t, strings.Contains(markup, `data-node-id="selected"`))
+	assert.Assert(t, strings.Contains(markup, `data-label-persistent="true"`))
 }
 
 func TestPanelsDoNotRenderNestedPanelWrappers(t *testing.T) {
@@ -204,12 +225,24 @@ func TestBuildLayoutRings(t *testing.T) {
 		})
 	}
 
-	rings := buildLayoutRings(nodes)
+	nodeRadiiByID := make(map[string]float64, len(nodes))
+	for _, node := range nodes {
+		nodeRadiiByID[node.ID] = nodeRadius(node.Score, 100)
+	}
 
-	assert.Equal(t, len(rings), 3)
-	assert.Equal(t, len(rings[0]), layoutInnerRingCount)
-	assert.Equal(t, len(rings[1]), layoutMiddleRingCount)
-	assert.Equal(t, len(rings[2]), 28)
+	rings := buildLayoutRings(nodes, nodeRadiiByID, graphWidthPx/2-float64(layoutNodePaddingPx), graphHeightPx/2-float64(layoutNodePaddingPx))
+
+	totalNodes := 0
+	for _, ring := range rings {
+		totalNodes += len(ring)
+	}
+
+	assert.Assert(t, len(rings) >= 3)
+	assert.Assert(t, len(rings[0]) > 0)
+	assert.Assert(t, len(rings[0]) <= layoutInnerRingCount)
+	assert.Assert(t, len(rings[1]) <= layoutMiddleRingCount)
+	assert.Assert(t, len(rings[2]) > 0)
+	assert.Equal(t, totalNodes, len(nodes))
 }
 
 func TestOrderLayoutRingUsesPlacedNeighborAngles(t *testing.T) {
@@ -236,4 +269,31 @@ func TestOrderLayoutRingUsesPlacedNeighborAngles(t *testing.T) {
 
 	assert.Equal(t, ordered[0].ID, "right-child")
 	assert.Equal(t, ordered[1].ID, "left-child")
+}
+
+func TestComputeStableNodePositionsAvoidsCircleOverlap(t *testing.T) {
+	t.Parallel()
+
+	nodes := make([]layoutNode, 0, 14)
+	for index := range 14 {
+		nodes = append(nodes, layoutNode{
+			ID:    fmt.Sprintf("node-%d", index),
+			Score: int64(200 - index*10),
+		})
+	}
+
+	positions := computeStableNodePositions(nodes, nil, graphWidthPx, graphHeightPx)
+	maxScore := nodes[0].Score
+	for leftIndex := range nodes {
+		leftNode := nodes[leftIndex]
+		leftPosition := positions[leftNode.ID]
+		leftRadius := nodeRadius(leftNode.Score, maxScore)
+		for rightIndex := leftIndex + 1; rightIndex < len(nodes); rightIndex++ {
+			rightNode := nodes[rightIndex]
+			rightPosition := positions[rightNode.ID]
+			requiredDistance := leftRadius + nodeRadius(rightNode.Score, maxScore) + layoutNodeGapPx - 0.1
+			distance := math.Hypot(rightPosition.X-leftPosition.X, rightPosition.Y-leftPosition.Y)
+			assert.Assert(t, distance >= requiredDistance, "%s and %s overlap", leftNode.ID, rightNode.ID)
+		}
+	}
 }

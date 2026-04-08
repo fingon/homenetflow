@@ -6,11 +6,14 @@ import (
 )
 
 const (
-	layoutInnerRingCount   = 8
-	layoutMiddleRingCount  = 24
-	layoutNodePaddingPx    = 44
-	layoutOuterRingCount   = 48
-	layoutRestYOffsetRatio = 0.18
+	layoutInnerRingCount        = 8
+	layoutMiddleRingCount       = 24
+	layoutNodeGapPx             = 18
+	layoutNodePaddingPx         = 44
+	layoutOuterRingCount        = 48
+	layoutRelaxIterations       = 20
+	layoutRestYOffsetRatio      = 0.18
+	layoutRingCapacityFillRatio = 0.9
 )
 
 type LayoutPoint struct {
@@ -63,7 +66,16 @@ func computeStableNodePositions(nodes []layoutNode, edges []layoutEdge, widthPx,
 	maxRadiusX := math.Max(80, centerX-float64(layoutNodePaddingPx))
 	maxRadiusY := math.Max(80, centerY-float64(layoutNodePaddingPx))
 	restOffsetY := maxRadiusY * layoutRestYOffsetRatio
+	maxScore := sortedNodes[0].Score
+	if maxScore <= 0 {
+		maxScore = 1
+	}
+	nodeRadiiByID := make(map[string]float64, len(sortedNodes))
+	for _, node := range sortedNodes {
+		nodeRadiiByID[node.ID] = nodeRadius(node.Score, maxScore)
+	}
 
+	anchoredNodeLookup := make(map[string]struct{}, 3)
 	placedAngles := make(map[string]float64, len(nodes))
 	neighborsByNode := buildLayoutNeighbors(edges)
 	regularNodes := make([]layoutNode, 0, len(nodes))
@@ -76,12 +88,14 @@ func computeStableNodePositions(nodes []layoutNode, edges []layoutEdge, widthPx,
 				Y: centerY - restOffsetY,
 			}
 			placedAngles[node.ID] = math.Pi
+			anchoredNodeLookup[node.ID] = struct{}{}
 		case graphRestDestination:
 			positions[node.ID] = LayoutPoint{
 				X: float64(widthPx - layoutNodePaddingPx),
 				Y: centerY + restOffsetY,
 			}
 			placedAngles[node.ID] = 0
+			anchoredNodeLookup[node.ID] = struct{}{}
 		default:
 			regularNodes = append(regularNodes, node)
 		}
@@ -93,12 +107,13 @@ func computeStableNodePositions(nodes []layoutNode, edges []layoutEdge, widthPx,
 
 	positions[regularNodes[0].ID] = LayoutPoint{X: centerX, Y: centerY}
 	placedAngles[regularNodes[0].ID] = 0
+	anchoredNodeLookup[regularNodes[0].ID] = struct{}{}
 
 	if len(regularNodes) == 1 {
 		return positions
 	}
 
-	rings := buildLayoutRings(regularNodes[1:])
+	rings := buildLayoutRings(regularNodes[1:], nodeRadiiByID, maxRadiusX, maxRadiusY)
 	for ringIndex, ring := range rings {
 		orderedNodes := orderLayoutRing(ring, neighborsByNode, placedAngles)
 		radiusX, radiusY := layoutRingRadii(ringIndex, len(rings), maxRadiusX, maxRadiusY)
@@ -111,6 +126,8 @@ func computeStableNodePositions(nodes []layoutNode, edges []layoutEdge, widthPx,
 			placedAngles[node.ID] = angle
 		}
 	}
+
+	relaxLayoutCollisions(positions, nodeRadiiByID, anchoredNodeLookup, widthPx, heightPx)
 
 	return positions
 }
@@ -131,28 +148,108 @@ func buildLayoutNeighbors(edges []layoutEdge) map[string][]layoutNeighbor {
 	return neighborsByNode
 }
 
-func buildLayoutRings(nodes []layoutNode) [][]layoutNode {
+func buildLayoutRings(nodes []layoutNode, nodeRadiiByID map[string]float64, maxRadiusX, maxRadiusY float64) [][]layoutNode {
 	if len(nodes) == 0 {
 		return nil
 	}
 
 	rings := make([][]layoutNode, 0, 4)
 	remaining := append([]layoutNode(nil), nodes...)
-	appendRing := func(limit int) {
-		if len(remaining) == 0 {
-			return
+	for ringIndex := 0; len(remaining) > 0; ringIndex++ {
+		radiusX, radiusY := layoutEstimatedRingRadii(ringIndex, maxRadiusX, maxRadiusY)
+		ringCapacityPx := layoutEllipseCircumference(radiusX, radiusY) * layoutRingCapacityFillRatio
+		usedCapacityPx := 0.0
+		ring := make([]layoutNode, 0, min(len(remaining), layoutOuterRingCount))
+		for len(ring) < len(remaining) {
+			nextNode := remaining[len(ring)]
+			requiredCapacityPx := math.Max(2*nodeRadiiByID[nextNode.ID]+layoutNodeGapPx, 24)
+			nextCount := len(ring) + 1
+			hardLimit := layoutOuterRingCount
+			switch ringIndex {
+			case 0:
+				hardLimit = layoutInnerRingCount
+			case 1:
+				hardLimit = layoutMiddleRingCount
+			}
+			if len(ring) > 0 && (usedCapacityPx+requiredCapacityPx > ringCapacityPx || nextCount > hardLimit) {
+				break
+			}
+			ring = append(ring, nextNode)
+			usedCapacityPx += requiredCapacityPx
 		}
-		size := min(limit, len(remaining))
-		rings = append(rings, append([]layoutNode(nil), remaining[:size]...))
-		remaining = remaining[size:]
-	}
-
-	appendRing(layoutInnerRingCount)
-	appendRing(layoutMiddleRingCount)
-	for len(remaining) > 0 {
-		appendRing(layoutOuterRingCount)
+		if len(ring) == 0 {
+			ring = append(ring, remaining[0])
+		}
+		rings = append(rings, ring)
+		remaining = remaining[len(ring):]
 	}
 	return rings
+}
+
+func relaxLayoutCollisions(positions map[string]LayoutPoint, nodeRadiiByID map[string]float64, anchoredNodeLookup map[string]struct{}, widthPx, heightPx int) {
+	nodeIDs := make([]string, 0, len(positions))
+	for nodeID := range positions {
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	slices.Sort(nodeIDs)
+
+	centerX := float64(widthPx) / 2
+	centerY := float64(heightPx) / 2
+
+	for range layoutRelaxIterations {
+		for leftIndex := range nodeIDs {
+			leftID := nodeIDs[leftIndex]
+			leftPosition := positions[leftID]
+			leftRadius := nodeRadiiByID[leftID]
+
+			for rightIndex := leftIndex + 1; rightIndex < len(nodeIDs); rightIndex++ {
+				rightID := nodeIDs[rightIndex]
+				rightPosition := positions[rightID]
+				requiredDistance := leftRadius + nodeRadiiByID[rightID] + layoutNodeGapPx
+
+				deltaX := rightPosition.X - leftPosition.X
+				deltaY := rightPosition.Y - leftPosition.Y
+				distance := math.Hypot(deltaX, deltaY)
+				if distance >= requiredDistance {
+					continue
+				}
+
+				if distance < 0.001 {
+					angle := evenlySpacedAngle(leftIndex+rightIndex, len(nodeIDs))
+					deltaX = math.Cos(angle)
+					deltaY = math.Sin(angle)
+					distance = 1
+				}
+
+				overlapPx := requiredDistance - distance
+				normalX := deltaX / distance
+				normalY := deltaY / distance
+
+				_, leftAnchored := anchoredNodeLookup[leftID]
+				_, rightAnchored := anchoredNodeLookup[rightID]
+				switch {
+				case leftAnchored && rightAnchored:
+					continue
+				case leftAnchored:
+					rightPosition.X += normalX * overlapPx
+					rightPosition.Y += normalY * overlapPx
+					positions[rightID] = clampLayoutPoint(rightPosition, nodeRadiiByID[rightID], widthPx, heightPx, centerX, centerY)
+				case rightAnchored:
+					leftPosition.X -= normalX * overlapPx
+					leftPosition.Y -= normalY * overlapPx
+					positions[leftID] = clampLayoutPoint(leftPosition, leftRadius, widthPx, heightPx, centerX, centerY)
+				default:
+					adjustmentPx := overlapPx / 2
+					leftPosition.X -= normalX * adjustmentPx
+					leftPosition.Y -= normalY * adjustmentPx
+					rightPosition.X += normalX * adjustmentPx
+					rightPosition.Y += normalY * adjustmentPx
+					positions[leftID] = clampLayoutPoint(leftPosition, leftRadius, widthPx, heightPx, centerX, centerY)
+					positions[rightID] = clampLayoutPoint(rightPosition, nodeRadiiByID[rightID], widthPx, heightPx, centerX, centerY)
+				}
+			}
+		}
+	}
 }
 
 func orderLayoutRing(ring []layoutNode, neighborsByNode map[string][]layoutNeighbor, placedAngles map[string]float64) []layoutNode {
@@ -222,6 +319,52 @@ func layoutRingRadii(ringIndex, ringCount int, maxRadiusX, maxRadiusY float64) (
 		fraction = minFraction + (maxFraction-minFraction)*(float64(ringIndex)/float64(ringCount-1))
 	}
 	return maxRadiusX * fraction, maxRadiusY * fraction
+}
+
+func layoutEstimatedRingRadii(ringIndex int, maxRadiusX, maxRadiusY float64) (float64, float64) {
+	const ringFractionStep = 0.13
+	const minFraction = 0.28
+	const maxFraction = 0.96
+
+	fraction := minFraction + ringFractionStep*float64(ringIndex)
+	if fraction > maxFraction {
+		fraction = maxFraction
+	}
+	return maxRadiusX * fraction, maxRadiusY * fraction
+}
+
+func layoutEllipseCircumference(radiusX, radiusY float64) float64 {
+	if radiusX <= 0 || radiusY <= 0 {
+		return 0
+	}
+	return math.Pi * (3*(radiusX+radiusY) - math.Sqrt((3*radiusX+radiusY)*(radiusX+3*radiusY)))
+}
+
+func clampLayoutPoint(point LayoutPoint, nodeRadiusPx float64, widthPx, heightPx int, centerX, centerY float64) LayoutPoint {
+	minX := float64(layoutNodePaddingPx) + nodeRadiusPx
+	maxX := float64(widthPx-layoutNodePaddingPx) - nodeRadiusPx
+	minY := float64(layoutNodePaddingPx) + nodeRadiusPx
+	maxY := float64(heightPx-layoutNodePaddingPx) - nodeRadiusPx
+
+	point.X = math.Max(minX, math.Min(maxX, point.X))
+	point.Y = math.Max(minY, math.Min(maxY, point.Y))
+
+	maxOffsetX := maxX - centerX
+	maxOffsetY := maxY - centerY
+	if maxOffsetX <= 0 || maxOffsetY <= 0 {
+		return point
+	}
+
+	normalizedX := (point.X - centerX) / maxOffsetX
+	normalizedY := (point.Y - centerY) / maxOffsetY
+	distance := math.Hypot(normalizedX, normalizedY)
+	if distance <= 1 {
+		return point
+	}
+
+	point.X = centerX + (normalizedX/distance)*maxOffsetX
+	point.Y = centerY + (normalizedY/distance)*maxOffsetY
+	return point
 }
 
 func evenlySpacedAngle(index, count int) float64 {

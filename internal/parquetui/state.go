@@ -321,6 +321,8 @@ func (s QueryState) layoutCacheState() QueryState {
 	state.Page = defaultPage
 	state.PageSize = defaultPageSize
 	state.Preset = ""
+	state.SelectedEdgeSrc = ""
+	state.SelectedEdgeDst = ""
 	return state
 }
 

@@ -90,6 +90,7 @@ func AppShell(dashboard DashboardData) g.Node {
 						Span(Class("legend-item"), g.Text("Node size = selected metric")),
 						Span(Class("legend-item"), g.Text("Edge width = selected metric")),
 						Span(Class("legend-item"), g.Text("Scroll to zoom, drag to pan")),
+						Span(Class("legend-item"), g.Text("Labels expand with zoom and hover")),
 					),
 				),
 				Div(
@@ -432,8 +433,16 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 	for _, node := range graph.Nodes {
 		position := positions[node.ID]
 		radius := nodeRadius(node.Total, maxTotal)
+		labelPersistent := node.Selected || node.Synthetic
 		builder.WriteString(`<a ` + navAttrString(selectEntityStateURL(state, node.ID)) + `>`)
-		fmt.Fprintf(&builder, `<g class="%s" transform="translate(%0.2f, %0.2f)">`, graphNodeClass(node), position.X, position.Y)
+		fmt.Fprintf(&builder, `<g class="%s" transform="translate(%0.2f, %0.2f)" data-node-id="%s" data-node-priority="%d" data-node-radius="%0.2f" data-label-persistent="%t">`,
+			graphNodeClass(node),
+			position.X,
+			position.Y,
+			html.EscapeString(node.ID),
+			node.Total,
+			radius,
+			labelPersistent)
 		fmt.Fprintf(&builder, `<circle r="%0.2f" fill="%s" stroke="%s" stroke-width="%s">`,
 			radius,
 			nodeFill(node),

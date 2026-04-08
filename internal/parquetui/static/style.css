@@ -292,10 +292,12 @@ svg.histogram-svg {
   fill: var(--text);
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
   font-size: 12px;
+  opacity: 0;
   paint-order: stroke;
   stroke: rgba(246, 241, 232, 0.92);
   stroke-width: 3px;
   stroke-linejoin: round;
+  transition: opacity 120ms ease;
 }
 
 .graph-node {
@@ -306,15 +308,11 @@ svg.histogram-svg {
   font-weight: 700;
 }
 
-.graph-svg.is-dense .graph-label {
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.graph-svg.is-dense .graph-node.is-selected .graph-label,
-.graph-svg.is-dense .graph-node.is-synthetic .graph-label,
-.graph-svg.is-dense .graph-node:hover .graph-label,
-.graph-svg.is-dense .graph-node:focus-within .graph-label {
+.graph-node[data-label-visible="true"] .graph-label,
+.graph-node.is-selected .graph-label,
+.graph-node.is-synthetic .graph-label,
+.graph-node:hover .graph-label,
+.graph-node:focus-within .graph-label {
   opacity: 1;
 }
 

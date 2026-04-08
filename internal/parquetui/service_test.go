@@ -232,6 +232,33 @@ func TestServiceRefreshMetadataInvalidatesCaches(t *testing.T) {
 	assert.Assert(t, !ok)
 }
 
+func TestServiceGraphBuildsSummarySnapshotCache(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+		sampleRecord("192.168.1.11", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 200, 30, 40),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	state := QueryState{
+		Granularity: Granularity2LD,
+		Metric:      MetricBytes,
+	}
+	span, err := service.Span(context.Background())
+	assert.NilError(t, err)
+	state = state.Normalized(span)
+
+	_, err = service.Graph(context.Background(), state)
+	assert.NilError(t, err)
+
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, service.currentRevision())
+	_, ok := service.summaryGraphCache.Get(cacheKey)
+	assert.Assert(t, ok)
+}
+
 func TestNewServiceBuildsUISummaries(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{

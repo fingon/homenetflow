@@ -9,6 +9,26 @@ import (
 	"time"
 )
 
+type summaryGraphSnapshotData struct {
+	edges       []summaryEdgeAggregate
+	granularity Granularity
+	totals      Totals
+}
+
+type summaryEdgeAggregate struct {
+	Bytes       int64
+	Connections int64
+	Destination string
+	FirstSeenNs int64
+	LastSeenNs  int64
+	Source      string
+}
+
+type summaryMetricView struct {
+	edges      []Edge
+	nodeTotals []Node
+}
+
 func (s *Service) canUseSummaryGraph(state QueryState, span TimeSpan) bool {
 	if state.Granularity != GranularityTLD && state.Granularity != Granularity2LD {
 		return false
@@ -43,46 +63,22 @@ func (s *Service) summaryGraph(ctx context.Context, state QueryState, span TimeS
 	}
 
 	queryStart := time.Now()
-	nodeTotals, err := s.querySummaryNodeTotals(ctx, state)
+	snapshot, err := s.summaryGraphSnapshot(ctx, state.Granularity)
 	if err != nil {
 		return GraphData{}, err
 	}
+	snapshotLoadedAt := time.Now()
 
-	keepEntities := chooseKeepEntities(nodeTotals, state)
+	view := buildSummaryMetricView(snapshot, state.Metric)
+	viewBuiltAt := time.Now()
+	keepEntities := chooseKeepEntities(view.nodeTotals, state)
 	keepLookup := make(map[string]struct{}, len(keepEntities))
 	for _, entity := range keepEntities {
 		keepLookup[entity] = struct{}{}
 	}
 
-	edges, err := s.querySummaryEdges(ctx, state, keepEntities)
-	if err != nil {
-		return GraphData{}, err
-	}
-
-	visibleEdges, hiddenEdgeCount := limitEdges(edges, state.EdgeLimit, "")
-	visibleNodeMap := make(map[string]Node, len(keepEntities)+2)
-	for _, row := range nodeTotals {
-		if _, ok := keepLookup[row.ID]; !ok {
-			continue
-		}
-		visibleNodeMap[row.ID] = row
-	}
-
-	restSourceNode, err := s.querySummaryRestNode(ctx, state, keepEntities, true)
-	if err != nil {
-		return GraphData{}, err
-	}
-	restDestinationNode, err := s.querySummaryRestNode(ctx, state, keepEntities, false)
-	if err != nil {
-		return GraphData{}, err
-	}
-	if restSourceNode != nil {
-		visibleNodeMap[restSourceNode.ID] = *restSourceNode
-	}
-	if restDestinationNode != nil {
-		visibleNodeMap[restDestinationNode.ID] = *restDestinationNode
-	}
-
+	visibleEdgesAll, visibleNodeMap := buildSummaryVisibleGraph(view, keepEntities, state)
+	visibleEdges, hiddenEdgeCount := limitEdges(visibleEdgesAll, state.EdgeLimit, "")
 	nodes := make([]Node, 0, len(visibleNodeMap))
 	for _, node := range visibleNodeMap {
 		nodes = append(nodes, node)
@@ -97,14 +93,11 @@ func (s *Service) summaryGraph(ctx context.Context, state QueryState, span TimeS
 		return 1
 	})
 
-	totals, err := s.querySummaryTotals(ctx, state, len(nodeTotals), len(visibleEdges))
-	if err != nil {
-		return GraphData{}, err
-	}
 	nodePositions, err := s.summaryLayoutPositions(ctx, state)
 	if err != nil {
 		return GraphData{}, err
 	}
+	layoutBuiltAt := time.Now()
 
 	graph := GraphData{
 		ActiveGranularity: state.Granularity,
@@ -112,16 +105,23 @@ func (s *Service) summaryGraph(ctx context.Context, state QueryState, span TimeS
 		Breadcrumbs:       buildBreadcrumbs(state),
 		Edges:             visibleEdges,
 		HiddenEdgeCount:   hiddenEdgeCount,
-		HiddenNodeCount:   max(0, len(nodeTotals)-countNonSynthetic(nodeTotals, keepLookup)),
+		HiddenNodeCount:   max(0, len(view.nodeTotals)-countNonSynthetic(view.nodeTotals, keepLookup)),
 		Nodes:             nodes,
 		NodePositions:     nodePositions,
 		Span:              span,
-		Totals:            totals,
+		Totals:            viewTotalsForMetric(snapshot.totals, len(view.nodeTotals), len(visibleEdges)),
 		TopEdges:          limitTopEdges(visibleEdges, summaryTopItemLimit),
 		TopEntities:       limitNodes(nodes, summaryTopItemLimit),
 	}
 	s.graphCache.Set(cacheKey, graph)
-	slog.Debug("UI summary graph query complete", "granularity", state.Granularity, "duration_ms", time.Since(queryStart).Milliseconds())
+	slog.Debug(
+		"UI summary graph query complete",
+		"granularity", state.Granularity,
+		"snapshot_ms", snapshotLoadedAt.Sub(queryStart).Milliseconds(),
+		"derive_ms", viewBuiltAt.Sub(snapshotLoadedAt).Milliseconds(),
+		"layout_ms", layoutBuiltAt.Sub(viewBuiltAt).Milliseconds(),
+		"duration_ms", time.Since(queryStart).Milliseconds(),
+	)
 	return graph, nil
 }
 
@@ -194,41 +194,22 @@ func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) 
 		return positions, nil
 	}
 
-	bytesState := cacheState.Clone()
-	bytesState.Metric = MetricBytes
-	connectionState := cacheState.Clone()
-	connectionState.Metric = MetricConnections
-
-	bytesNodeTotals, err := s.querySummaryNodeTotals(ctx, bytesState)
+	snapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity)
 	if err != nil {
 		return nil, err
 	}
-	connectionNodeTotals, err := s.querySummaryNodeTotals(ctx, connectionState)
-	if err != nil {
-		return nil, err
-	}
-
-	bytesKeepEntities := chooseKeepEntities(bytesNodeTotals, cacheState)
-	connectionKeepEntities := chooseKeepEntities(connectionNodeTotals, cacheState)
+	bytesView := buildSummaryMetricView(snapshot, MetricBytes)
+	connectionView := buildSummaryMetricView(snapshot, MetricConnections)
+	bytesNodeTotals := bytesView.nodeTotals
+	connectionNodeTotals := connectionView.nodeTotals
 	keepEntities := unionKeepEntities(bytesNodeTotals, connectionNodeTotals, cacheState)
-	bytesNodeTotals, err = s.appendSummaryRestNodes(ctx, bytesState, bytesKeepEntities, bytesNodeTotals)
-	if err != nil {
-		return nil, err
-	}
-	connectionNodeTotals, err = s.appendSummaryRestNodes(ctx, connectionState, connectionKeepEntities, connectionNodeTotals)
-	if err != nil {
-		return nil, err
-	}
-	bytesEdges, err := s.querySummaryEdges(ctx, bytesState, keepEntities)
-	if err != nil {
-		return nil, err
-	}
-	connectionEdges, err := s.querySummaryEdges(ctx, connectionState, keepEntities)
-	if err != nil {
-		return nil, err
-	}
-	bytesVisibleEdges, _ := limitEdges(bytesEdges, cacheState.EdgeLimit, cacheState.SelectedEntity)
-	connectionVisibleEdges, _ := limitEdges(connectionEdges, cacheState.EdgeLimit, cacheState.SelectedEntity)
+
+	bytesEdges, bytesNodeMap := buildSummaryVisibleGraph(bytesView, keepEntities, cacheState)
+	connectionEdges, connectionNodeMap := buildSummaryVisibleGraph(connectionView, keepEntities, cacheState)
+	bytesNodeTotals = nodesFromMapSorted(bytesNodeMap)
+	connectionNodeTotals = nodesFromMapSorted(connectionNodeMap)
+	bytesVisibleEdges, _ := limitEdges(bytesEdges, cacheState.EdgeLimit, "")
+	connectionVisibleEdges, _ := limitEdges(connectionEdges, cacheState.EdgeLimit, "")
 
 	positions := buildStableLayoutPositions(
 		bytesNodeTotals,
@@ -240,136 +221,221 @@ func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) 
 	return positions, nil
 }
 
-func (s *Service) appendSummaryRestNodes(ctx context.Context, state QueryState, keepEntities []string, nodes []Node) ([]Node, error) {
-	restSourceNode, err := s.querySummaryRestNode(ctx, state, keepEntities, true)
-	if err != nil {
-		return nil, err
+func (s *Service) summaryGraphSnapshot(ctx context.Context, granularity Granularity) (*summaryGraphSnapshotData, error) {
+	cacheKey := summaryGraphSnapshotCacheKey(granularity, s.currentRevision())
+	if snapshot, ok := s.summaryGraphCache.Get(cacheKey); ok {
+		return snapshot, nil
 	}
-	restDestinationNode, err := s.querySummaryRestNode(ctx, state, keepEntities, false)
-	if err != nil {
-		return nil, err
-	}
-	if restSourceNode != nil {
-		nodes = append(nodes, *restSourceNode)
-	}
-	if restDestinationNode != nil {
-		nodes = append(nodes, *restDestinationNode)
-	}
-	return nodes, nil
-}
 
-func (s *Service) querySummaryNodeTotals(ctx context.Context, state QueryState) ([]Node, error) {
+	queryStart := time.Now()
 	query := fmt.Sprintf(`
-SELECT entity, SUM(total_metric) AS total_metric, SUM(inbound_metric) AS inbound_metric, SUM(outbound_metric) AS outbound_metric
-FROM (
-  SELECT src_entity AS entity, %s AS total_metric, 0 AS inbound_metric, %s AS outbound_metric FROM read_parquet(%s)
-  UNION ALL
-  SELECT dst_entity AS entity, %s AS total_metric, %s AS inbound_metric, 0 AS outbound_metric FROM read_parquet(%s)
-) aggregate_nodes
-GROUP BY entity
-ORDER BY total_metric DESC, entity
-`, summaryMetricColumn(state.Metric), summaryMetricColumn(state.Metric), quoteLiteral(s.summaryEdgeGlob(state.Granularity)), summaryMetricColumn(state.Metric), summaryMetricColumn(state.Metric), quoteLiteral(s.summaryEdgeGlob(state.Granularity)))
-
-	rows, err := s.db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("query summary node totals: %w", err)
-	}
-	defer rows.Close()
-
-	nodes := make([]Node, 0, 128)
-	for rows.Next() {
-		var node Node
-		if err := rows.Scan(&node.ID, &node.Total, &node.Inbound, &node.Outbound); err != nil {
-			return nil, fmt.Errorf("scan summary node total row: %w", err)
-		}
-		node.Label = node.ID
-		nodes = append(nodes, node)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate summary node totals: %w", err)
-	}
-	return nodes, nil
-}
-
-func (s *Service) querySummaryEdges(ctx context.Context, state QueryState, keepEntities []string) ([]Edge, error) {
-	srcBucket := "src_entity"
-	dstBucket := "dst_entity"
-	queryArgs := make([]any, 0, len(keepEntities)*2)
-	if state.NodeLimit > 0 && len(keepEntities) > 0 {
-		inPlaceholders := placeholders(len(keepEntities))
-		srcBucket = fmt.Sprintf("CASE WHEN src_entity IN (%s) THEN src_entity ELSE %s END", inPlaceholders, quoteLiteral(graphRestSourceID))
-		dstBucket = fmt.Sprintf("CASE WHEN dst_entity IN (%s) THEN dst_entity ELSE %s END", inPlaceholders, quoteLiteral(graphRestDestination))
-		queryArgs = append(queryArgs, stringsToAny(keepEntities)...)
-		queryArgs = append(queryArgs, stringsToAny(keepEntities)...)
-	}
-
-	query := fmt.Sprintf(`
-SELECT %s AS source_bucket, %s AS destination_bucket,
+SELECT src_entity, dst_entity,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   COALESCE(SUM(connections), 0) AS connection_total,
   COALESCE(MIN(first_seen_ns), 0) AS first_seen_ns,
   COALESCE(MAX(last_seen_ns), 0) AS last_seen_ns
 FROM read_parquet(%s)
-GROUP BY source_bucket, destination_bucket
-ORDER BY %s DESC, source_bucket, destination_bucket
-`, srcBucket, dstBucket, quoteLiteral(s.summaryEdgeGlob(state.Granularity)), summaryOrderExpression(state.Metric))
+GROUP BY src_entity, dst_entity
+`, quoteLiteral(s.summaryEdgeGlob(granularity)))
 
-	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("query summary edges: %w", err)
+		return nil, fmt.Errorf("query summary graph snapshot: %w", err)
 	}
 	defer rows.Close()
 
-	edges := make([]Edge, 0, 128)
+	snapshot := &summaryGraphSnapshotData{
+		edges:       make([]summaryEdgeAggregate, 0, 128),
+		granularity: granularity,
+	}
 	for rows.Next() {
-		var edge Edge
+		var edge summaryEdgeAggregate
 		if err := rows.Scan(&edge.Source, &edge.Destination, &edge.Bytes, &edge.Connections, &edge.FirstSeenNs, &edge.LastSeenNs); err != nil {
-			return nil, fmt.Errorf("scan summary edge row: %w", err)
+			return nil, fmt.Errorf("scan summary graph snapshot row: %w", err)
 		}
-		edge.MetricValue = edgeMetricValue(edge, state.Metric)
-		edge.Synthetic = edge.Source == graphRestSourceID || edge.Destination == graphRestDestination
-		edges = append(edges, edge)
+		snapshot.edges = append(snapshot.edges, edge)
+		snapshot.totals.Bytes += edge.Bytes
+		snapshot.totals.Connections += edge.Connections
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate summary edge rows: %w", err)
+		return nil, fmt.Errorf("iterate summary graph snapshot rows: %w", err)
 	}
-	return edges, nil
+
+	s.summaryGraphCache.Set(cacheKey, snapshot)
+	slog.Debug("UI summary graph snapshot built", "granularity", granularity, "edge_count", len(snapshot.edges), "duration_ms", time.Since(queryStart).Milliseconds())
+	return snapshot, nil
 }
 
-func (s *Service) querySummaryRestNode(ctx context.Context, state QueryState, keepEntities []string, sourceRole bool) (*Node, error) {
-	if state.NodeLimit == 0 || len(keepEntities) == 0 {
-		return nil, nil
+func buildSummaryMetricView(snapshot *summaryGraphSnapshotData, metric Metric) summaryMetricView {
+	nodeTotalsByID := make(map[string]Node, len(snapshot.edges)*2)
+	edges := make([]Edge, 0, len(snapshot.edges))
+	for _, aggregate := range snapshot.edges {
+		edge := Edge{
+			Bytes:       aggregate.Bytes,
+			Connections: aggregate.Connections,
+			Destination: aggregate.Destination,
+			FirstSeenNs: aggregate.FirstSeenNs,
+			LastSeenNs:  aggregate.LastSeenNs,
+			MetricValue: edgeMetricValue(Edge{Bytes: aggregate.Bytes, Connections: aggregate.Connections}, metric),
+			Source:      aggregate.Source,
+		}
+		edges = append(edges, edge)
+
+		sourceNode := nodeTotalsByID[aggregate.Source]
+		sourceNode.ID = aggregate.Source
+		sourceNode.Label = aggregate.Source
+		sourceNode.Outbound += edge.MetricValue
+		sourceNode.Total += edge.MetricValue
+		nodeTotalsByID[aggregate.Source] = sourceNode
+
+		destinationNode := nodeTotalsByID[aggregate.Destination]
+		destinationNode.ID = aggregate.Destination
+		destinationNode.Label = aggregate.Destination
+		destinationNode.Inbound += edge.MetricValue
+		destinationNode.Total += edge.MetricValue
+		nodeTotalsByID[aggregate.Destination] = destinationNode
 	}
 
-	entityColumn := srcEntityColumn
+	nodeTotals := make([]Node, 0, len(nodeTotalsByID))
+	for _, node := range nodeTotalsByID {
+		nodeTotals = append(nodeTotals, node)
+	}
+	slices.SortFunc(nodeTotals, func(a, b Node) int {
+		if a.Total == b.Total {
+			return strings.Compare(a.ID, b.ID)
+		}
+		if a.Total > b.Total {
+			return -1
+		}
+		return 1
+	})
+
+	slices.SortFunc(edges, func(a, b Edge) int {
+		if a.MetricValue == b.MetricValue {
+			if a.Source == b.Source {
+				return strings.Compare(a.Destination, b.Destination)
+			}
+			return strings.Compare(a.Source, b.Source)
+		}
+		if a.MetricValue > b.MetricValue {
+			return -1
+		}
+		return 1
+	})
+
+	return summaryMetricView{
+		edges:      edges,
+		nodeTotals: nodeTotals,
+	}
+}
+
+func buildSummaryVisibleGraph(view summaryMetricView, keepEntities []string, state QueryState) ([]Edge, map[string]Node) {
+	keepLookup := make(map[string]struct{}, len(keepEntities))
+	for _, entity := range keepEntities {
+		keepLookup[entity] = struct{}{}
+	}
+
+	visibleNodeMap := make(map[string]Node, len(keepEntities)+2)
+	for _, row := range view.nodeTotals {
+		if _, ok := keepLookup[row.ID]; !ok {
+			continue
+		}
+		visibleNodeMap[row.ID] = row
+	}
+
+	restSourceNode := summaryRestNode(view.nodeTotals, keepLookup, true)
+	restDestinationNode := summaryRestNode(view.nodeTotals, keepLookup, false)
+	if restSourceNode != nil {
+		visibleNodeMap[restSourceNode.ID] = *restSourceNode
+	}
+	if restDestinationNode != nil {
+		visibleNodeMap[restDestinationNode.ID] = *restDestinationNode
+	}
+
+	edgesByKey := make(map[string]Edge, len(view.edges))
+	for _, edge := range view.edges {
+		sourceBucket := edge.Source
+		destinationBucket := edge.Destination
+		if state.NodeLimit > 0 && len(keepEntities) > 0 {
+			if _, ok := keepLookup[sourceBucket]; !ok {
+				sourceBucket = graphRestSourceID
+			}
+			if _, ok := keepLookup[destinationBucket]; !ok {
+				destinationBucket = graphRestDestination
+			}
+		}
+
+		key := sourceBucket + "\x00" + destinationBucket
+		aggregatedEdge, ok := edgesByKey[key]
+		if !ok {
+			aggregatedEdge = Edge{
+				Destination: destinationBucket,
+				FirstSeenNs: edge.FirstSeenNs,
+				LastSeenNs:  edge.LastSeenNs,
+				Source:      sourceBucket,
+				Synthetic:   sourceBucket == graphRestSourceID || destinationBucket == graphRestDestination,
+			}
+		}
+		aggregatedEdge.Bytes += edge.Bytes
+		aggregatedEdge.Connections += edge.Connections
+		if aggregatedEdge.FirstSeenNs == 0 || (edge.FirstSeenNs != 0 && edge.FirstSeenNs < aggregatedEdge.FirstSeenNs) {
+			aggregatedEdge.FirstSeenNs = edge.FirstSeenNs
+		}
+		if edge.LastSeenNs > aggregatedEdge.LastSeenNs {
+			aggregatedEdge.LastSeenNs = edge.LastSeenNs
+		}
+		aggregatedEdge.MetricValue = edgeMetricValue(aggregatedEdge, state.Metric)
+		edgesByKey[key] = aggregatedEdge
+	}
+
+	edges := make([]Edge, 0, len(edgesByKey))
+	for _, edge := range edgesByKey {
+		edges = append(edges, edge)
+	}
+	slices.SortFunc(edges, func(a, b Edge) int {
+		if a.MetricValue == b.MetricValue {
+			if a.Source == b.Source {
+				return strings.Compare(a.Destination, b.Destination)
+			}
+			return strings.Compare(a.Source, b.Source)
+		}
+		if a.MetricValue > b.MetricValue {
+			return -1
+		}
+		return 1
+	})
+
+	return edges, visibleNodeMap
+}
+
+func summaryRestNode(nodeTotals []Node, keepLookup map[string]struct{}, sourceRole bool) *Node {
 	nodeID := graphRestSourceID
 	if !sourceRole {
-		entityColumn = dstEntityColumn
 		nodeID = graphRestDestination
 	}
 
-	query := fmt.Sprintf(`
-SELECT COUNT(*), COALESCE(SUM(total_metric), 0)
-FROM (
-  SELECT %s AS entity, SUM(%s) AS total_metric
-  FROM read_parquet(%s)
-  WHERE %s NOT IN (%s)
-  GROUP BY %s
-) collapsed_entities
-`, entityColumn, summaryMetricColumn(state.Metric), quoteLiteral(s.summaryEdgeGlob(state.Granularity)), entityColumn, placeholders(len(keepEntities)), entityColumn)
-
-	row := s.db.QueryRowContext(ctx, query, stringsToAny(keepEntities)...)
-	var entityCount int
+	var collapsedEntityCount int
 	var total int64
-	if err := row.Scan(&entityCount, &total); err != nil {
-		return nil, fmt.Errorf("scan summary rest node %q: %w", nodeID, err)
+	for _, node := range nodeTotals {
+		if _, ok := keepLookup[node.ID]; ok {
+			continue
+		}
+		metricValue := node.Outbound
+		if !sourceRole {
+			metricValue = node.Inbound
+		}
+		if metricValue == 0 {
+			continue
+		}
+		collapsedEntityCount++
+		total += metricValue
 	}
 	if total == 0 {
-		return nil, nil
+		return nil
 	}
 
 	node := &Node{
-		CollapsedEntityCount: entityCount,
+		CollapsedEntityCount: collapsedEntityCount,
 		ID:                   nodeID,
 		Label:                nodeID,
 		Synthetic:            true,
@@ -380,23 +446,35 @@ FROM (
 	} else {
 		node.Inbound = total
 	}
-	return node, nil
+	return node
 }
 
-func (s *Service) querySummaryTotals(ctx context.Context, state QueryState, totalEntities, visibleEdges int) (Totals, error) {
-	query := fmt.Sprintf(`
-SELECT COALESCE(SUM(bytes), 0), COALESCE(SUM(connections), 0)
-FROM read_parquet(%s)
-`, quoteLiteral(s.summaryEdgeGlob(state.Granularity)))
-
-	row := s.db.QueryRowContext(ctx, query)
-	var totals Totals
-	if err := row.Scan(&totals.Bytes, &totals.Connections); err != nil {
-		return Totals{}, fmt.Errorf("scan summary totals: %w", err)
+func nodesFromMapSorted(nodeMap map[string]Node) []Node {
+	nodes := make([]Node, 0, len(nodeMap))
+	for _, node := range nodeMap {
+		nodes = append(nodes, node)
 	}
-	totals.Entities = totalEntities
-	totals.Edges = visibleEdges
-	return totals, nil
+	slices.SortFunc(nodes, func(a, b Node) int {
+		if a.Total == b.Total {
+			return strings.Compare(a.ID, b.ID)
+		}
+		if a.Total > b.Total {
+			return -1
+		}
+		return 1
+	})
+	return nodes
+}
+
+func viewTotalsForMetric(totals Totals, totalEntities, visibleEdges int) Totals {
+	viewTotals := totals
+	viewTotals.Entities = totalEntities
+	viewTotals.Edges = visibleEdges
+	return viewTotals
+}
+
+func summaryGraphSnapshotCacheKey(granularity Granularity, revision uint64) string {
+	return fmt.Sprintf("summary-graph:%d:%s", revision, granularity)
 }
 
 func (s *Service) summaryEdgeGlob(granularity Granularity) string {
@@ -416,11 +494,4 @@ func summaryMetricColumn(metric Metric) string {
 		return "connections"
 	}
 	return "bytes"
-}
-
-func summaryOrderExpression(metric Metric) string {
-	if metric == MetricConnections {
-		return "COALESCE(SUM(connections), 0)"
-	}
-	return "COALESCE(SUM(bytes), 0)"
 }
