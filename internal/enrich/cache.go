@@ -80,7 +80,7 @@ func loadReverseDNSCache(filePath string) (*reverseDNSCache, error) {
 	return cache, nil
 }
 
-func (c *reverseDNSCache) Lookup(ipAddress string) (cacheLookupResult, error) {
+func (c *reverseDNSCache) Lookup(ipAddress string, skipDNSLookups bool) (cacheLookupResult, error) {
 	c.mu.Lock()
 	if host, ok := c.hostByIP[ipAddress]; ok {
 		c.mu.Unlock()
@@ -89,6 +89,11 @@ func (c *reverseDNSCache) Lookup(ipAddress string) (cacheLookupResult, error) {
 	}
 
 	if _, ok := c.missByIP[ipAddress]; ok {
+		c.mu.Unlock()
+		return cacheLookupResult{}, nil
+	}
+
+	if skipDNSLookups {
 		c.mu.Unlock()
 		return cacheLookupResult{}, nil
 	}

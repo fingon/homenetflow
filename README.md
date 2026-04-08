@@ -95,6 +95,7 @@ The dnsmasq logs may contain either:
 ```bash
 go run ./cmd/parquethosts --src-parquet /flows/parquet --src-log /flows/logs --dst /flows/parquet-hosts
 go run ./cmd/parquethosts --src-parquet /flows/parquet --src-log /flows/logs --dst /flows/parquet-hosts -v
+go run ./cmd/parquethosts --src-parquet /flows/parquet --src-log /flows/logs --dst /flows/parquet-hosts --skip-dns-lookups
 ```
 
 Flags:
@@ -102,6 +103,7 @@ Flags:
 - `--src-parquet`: flat input parquet directory
 - `--src-log`: dnsmasq log directory
 - `--dst`: flat output directory for enriched parquet files
+- `--skip-dns-lookups`: skip live PTR lookups and use only dnsmasq logs plus existing reverse DNS cache entries
 - `-v`: enable debug logging
 
 ### Host Resolution Order
@@ -114,6 +116,7 @@ For each `src_ip` and `dst_ip`, `parquethosts` resolves names in this order:
 4. if no cache hit is found, a live PTR lookup
 
 Successful PTR results are appended to `<dst>/reverse_dns_cache.jsonl` and reused forever. PTR misses are cached only in memory for the current run. Malformed PTR responses are logged as warnings, treated as misses, and do not stop enrichment.
+When `--skip-dns-lookups` is enabled, step 4 is skipped. Existing `reverse_dns_cache.jsonl` entries and dnsmasq log observations are still used.
 
 ### Refresh Behavior
 

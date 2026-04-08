@@ -10,6 +10,7 @@ import (
 
 type cli struct {
 	DstPath        string `help:"Flat output directory for enriched parquet files." name:"dst" required:""`
+	SkipDNSLookups bool   `help:"Skip live PTR lookups and use only dnsmasq logs plus existing reverse DNS cache entries." name:"skip-dns-lookups"`
 	SrcLogPath     string `help:"Directory containing dnsmasq YYYY-MM-DD.jsonl files." name:"src-log" required:""`
 	SrcParquetPath string `help:"Flat input directory containing nfcap_*.parquet files." name:"src-parquet" required:""`
 	Verbose        bool   `help:"Enable verbose logging." name:"v" short:"v"`
@@ -36,6 +37,7 @@ func main() {
 	if err := enrich.Run(enrich.Config{
 		DstPath:        commandLine.DstPath,
 		Progress:       progress.callback,
+		SkipDNSLookups: commandLine.SkipDNSLookups,
 		SrcLogPath:     commandLine.SrcLogPath,
 		SrcParquetPath: commandLine.SrcParquetPath,
 	}); err != nil {

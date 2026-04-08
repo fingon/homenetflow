@@ -153,6 +153,38 @@ func TestRunIgnoresMalformedPTRResponses(t *testing.T) {
 	assert.Equal(t, *rows[0].DstTLD, "net")
 }
 
+func TestRunSkipsLiveDNSLookupsButUsesExistingCache(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
+
+	cachePath := filepath.Join(dstDir, reverseDNSCacheFilename)
+	cacheContents := []byte("{\"ip\":\"192.0.2.10\",\"host\":\"cached.example.net\"}\n")
+	assert.NilError(t, os.WriteFile(cachePath, cacheContents, 0o600))
+
+	var lookupCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SkipDNSLookups: true,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, len(rows), 1)
+	assert.Equal(t, *rows[0].SrcHost, "cached.example.net")
+	assert.Assert(t, rows[0].DstHost == nil)
+	assert.Equal(t, lookupCount.Load(), int32(0))
+}
+
 func TestRunReportsRowProgressAcrossStaleJobs(t *testing.T) {
 	srcParquetDir := t.TempDir()
 	srcLogDir := t.TempDir()

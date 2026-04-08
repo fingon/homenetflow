@@ -25,12 +25,12 @@ func TestReverseDNSCacheTreatsMalformedPTRAsMiss(t *testing.T) {
 		}
 	})
 
-	firstResult, err := cache.Lookup("192.0.2.10")
+	firstResult, err := cache.Lookup("192.0.2.10", false)
 	assert.NilError(t, err)
 	assert.Assert(t, firstResult.names == nil)
 	assert.ErrorContains(t, firstResult.warning, invalidPTRNameErrorFragment)
 
-	secondResult, err := cache.Lookup("192.0.2.10")
+	secondResult, err := cache.Lookup("192.0.2.10", false)
 	assert.NilError(t, err)
 	assert.Assert(t, secondResult.names == nil)
 	assert.Assert(t, secondResult.warning == nil)
@@ -55,9 +55,34 @@ func TestReverseDNSCacheReturnsErrorForResolverFailure(t *testing.T) {
 		return nil, errors.New("resolver unavailable")
 	})
 
-	result, err := cache.Lookup("192.0.2.10")
+	result, err := cache.Lookup("192.0.2.10", false)
 	assert.Assert(t, result.names == nil)
 	assert.Assert(t, result.warning == nil)
 	assert.ErrorContains(t, err, "lookup PTR for")
 	assert.ErrorContains(t, err, "resolver unavailable")
+}
+
+func TestReverseDNSCacheSkipsLiveLookupButReturnsCachedEntries(t *testing.T) {
+	cacheFilePath := filepath.Join(t.TempDir(), reverseDNSCacheFilename)
+	cacheFileBytes := []byte("{\"ip\":\"192.0.2.10\",\"host\":\"cached.example.net\"}\n")
+	assert.NilError(t, os.WriteFile(cacheFilePath, cacheFileBytes, 0o600))
+
+	cache, err := loadReverseDNSCache(cacheFilePath)
+	assert.NilError(t, err)
+
+	var lookupCallCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCallCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	cachedResult, err := cache.Lookup("192.0.2.10", true)
+	assert.NilError(t, err)
+	assert.Equal(t, cachedResult.names.host, "cached.example.net")
+
+	skippedResult, err := cache.Lookup("198.51.100.20", true)
+	assert.NilError(t, err)
+	assert.Assert(t, skippedResult.names == nil)
+	assert.Assert(t, skippedResult.warning == nil)
+	assert.Equal(t, lookupCallCount.Load(), int32(0))
 }
