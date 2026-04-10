@@ -15,6 +15,7 @@ rtk make lint
 rtk make test
 rtk make build
 rtk make ui
+rtk make ui-watch
 prek run --all-files
 ```
 
@@ -192,14 +193,17 @@ At `tld` and `2ld` granularities, unresolved entities are split into `Unknown pr
 ```bash
 go run ./cmd/parquetflowui /flows/parquet-hosts
 go run ./cmd/parquetflowui /flows/parquet-hosts --port 8081
+go run ./cmd/parquetflowui /flows/parquet-hosts --dev
 go run ./cmd/parquetflowui /flows/parquet-hosts -v
 rtk make ui
+rtk make ui-watch
 ```
 
 Flags:
 
 - `--src-parquet`: flat input directory containing enriched `nfcap_*.parquet` files
 - `--port`: HTTP port, default `8080`
+- `--dev`: enable development-mode hot reload support
 - `--reload-interval`: polling interval for parquet refresh, default `1m`
 - `-v`: enable debug logging
 
@@ -210,6 +214,8 @@ go run ./cmd/parquetflowui --src-parquet data/parquet
 ```
 
 Open `http://localhost:8080` after starting the server.
+
+For development hot reloading, `rtk make ui-watch` runs the UI under `watchman-make`, restarts the process on UI source changes, and reloads already-open browser tabs automatically.
 
 ## End-to-End Example
 

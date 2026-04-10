@@ -8,7 +8,7 @@
 set -euo pipefail
 
 LOKI_ADDR="https://fw.fingon.iki.fi:3100"
-QUERY='{source="dnsmasq"}'
+QUERY='{source=~"dnsmasq|ip_neighbour"}'
 DAYS=80   # bit less than 3 months - I have 90 day retention
 
 

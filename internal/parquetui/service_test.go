@@ -74,8 +74,34 @@ func TestAppIndexRendersMainRegions(t *testing.T) {
 	assert.Assert(t, strings.Contains(recorder.Body.String(), "Flows Table"))
 	assert.Assert(t, strings.Contains(recorder.Body.String(), "/static/htmx.min.js"))
 	assert.Assert(t, strings.Contains(recorder.Body.String(), `id="app-shell"`))
+	assert.Assert(t, !strings.Contains(recorder.Body.String(), `data-dev-mode="true"`))
 	assert.Assert(t, !strings.Contains(recorder.Body.String(), "initial-state-json"))
 	assert.Assert(t, !strings.Contains(recorder.Body.String(), "span-json"))
+}
+
+func TestAppIndexRendersDevMetadataInDevMode(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	app := &App{
+		devMode:         true,
+		devSessionToken: "dev-token",
+		service:         service,
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	app.routes().ServeHTTP(recorder, request)
+
+	assert.Equal(t, recorder.Code, http.StatusOK)
+	assert.Assert(t, strings.Contains(recorder.Body.String(), `data-dev-mode="true"`))
+	assert.Assert(t, strings.Contains(recorder.Body.String(), `data-dev-session-token="dev-token"`))
 }
 
 func TestAppIndexRendersAppShellForHTMXRequests(t *testing.T) {
@@ -98,6 +124,31 @@ func TestAppIndexRendersAppShellForHTMXRequests(t *testing.T) {
 	assert.Equal(t, recorder.Code, http.StatusOK)
 	assert.Assert(t, strings.Contains(recorder.Body.String(), `id="app-shell"`))
 	assert.Assert(t, !strings.Contains(recorder.Body.String(), "<!DOCTYPE html>"))
+}
+
+func TestAppVersionReturnsSessionToken(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	app := &App{
+		devMode:         true,
+		devSessionToken: "dev-token",
+		service:         service,
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/version", nil)
+
+	app.routes().ServeHTTP(recorder, request)
+
+	assert.Equal(t, recorder.Code, http.StatusOK)
+	assert.Equal(t, recorder.Body.String(), "dev-token")
+	assert.Equal(t, recorder.Header().Get("Content-Type"), "text/plain; charset=utf-8")
 }
 
 func TestServiceHistogramAggregatesIntoOrderedBins(t *testing.T) {

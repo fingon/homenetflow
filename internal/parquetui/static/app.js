@@ -16,11 +16,14 @@
   const presetHourValue = "1h";
   const presetMonthValue = "30d";
   const presetWeekValue = "7d";
+  const reloadCheckIntervalMs = 1000;
   const sceneLabelPaddingPx = 8;
   const searchBehavior = "search";
   const statusErrorMessage = "Request failed.";
   const statusSelector = "#loading-indicator";
+  const versionPath = "/version";
 
+  let hotReloadInitialized = false;
   let searchTimeoutId = null;
 
   function initialize(root) {
@@ -526,7 +529,42 @@
     element.classList.remove(loadingClassName, errorClassName);
   }
 
-  document.addEventListener("DOMContentLoaded", () => initialize(document));
+  function initializeHotReload() {
+    if (hotReloadInitialized) {
+      return;
+    }
+
+    const body = document.body;
+    if (!body || body.dataset.devMode !== "true") {
+      return;
+    }
+
+    const startupSessionToken = body.dataset.devSessionToken || "";
+    if (!startupSessionToken) {
+      return;
+    }
+
+    hotReloadInitialized = true;
+
+    window.setInterval(async () => {
+      try {
+        const response = await window.fetch(versionPath, { cache: "no-store" });
+        if (!response.ok) {
+          return;
+        }
+        const currentSessionToken = (await response.text()).trim();
+        if (currentSessionToken && currentSessionToken !== startupSessionToken) {
+          window.location.reload();
+        }
+      } catch (_error) {
+      }
+    }, reloadCheckIntervalMs);
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    initialize(document);
+    initializeHotReload();
+  });
   document.body.addEventListener("htmx:beforeRequest", () => setLoadingStatus(loadingMessage));
   document.body.addEventListener("htmx:afterSwap", (event) => {
     if (event.target instanceof HTMLElement) {

@@ -2,7 +2,9 @@ package parquetui
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -18,7 +20,9 @@ import (
 var staticFiles embed.FS
 
 type App struct {
-	service *Service
+	devMode         bool
+	devSessionToken string
+	service         *Service
 }
 
 func Run(args []string) error {
@@ -38,7 +42,11 @@ func Run(args []string) error {
 	defer service.Close()
 	service.StartMonitor(ctx)
 
-	app := &App{service: service}
+	app := &App{
+		devMode:         cfg.Dev,
+		devSessionToken: newDevSessionToken(),
+		service:         service,
+	}
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
@@ -89,6 +97,7 @@ func (a *App) routes() http.Handler {
 		panic(err)
 	}
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
+	mux.HandleFunc("/version", a.handleVersion)
 	mux.HandleFunc("/", a.handleIndex)
 	return requestLogger(mux)
 }
@@ -116,7 +125,7 @@ func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := Index(dashboard).Render(w); err != nil {
+	if err := Index(dashboard, a.devMode, a.devSessionToken).Render(w); err != nil {
 		slog.Error("render index failed", "err", err)
 		http.Error(w, "failed rendering index", http.StatusInternalServerError)
 	}
@@ -124,4 +133,22 @@ func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 func isHTMXRequest(r *http.Request) bool {
 	return r.Header.Get("HX-Request") == "true"
+}
+
+func (a *App) handleVersion(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if _, err := w.Write([]byte(a.devSessionToken)); err != nil {
+		slog.Warn("write version response failed", "err", err)
+	}
+}
+
+func newDevSessionToken() string {
+	const devSessionTokenBytes = 16
+
+	buffer := make([]byte, devSessionTokenBytes)
+	if _, err := rand.Read(buffer); err != nil {
+		slog.Warn("generate dev session token failed", "err", err)
+		return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buffer)
 }

@@ -53,6 +53,7 @@ var requiredColumns = []string{
 }
 
 type Config struct {
+	Dev            bool          `env:"HOMENETFLOW_UI_DEV" help:"Enable development mode with hot reload support."`
 	Port           int           `default:"8080" env:"HOMENETFLOW_UI_PORT" help:"HTTP port."`
 	ReloadInterval time.Duration `default:"1m" env:"HOMENETFLOW_UI_RELOAD_INTERVAL" help:"Polling interval for parquet refresh." name:"reload-interval"`
 	SrcParquetPath string        `arg:"" help:"Directory containing enriched parquet files." name:"src-parquet" required:""`

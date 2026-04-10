@@ -39,7 +39,17 @@ const (
 	unselectedNodeStroke    = "rgba(31, 39, 51, 0.24)"
 )
 
-func Index(dashboard DashboardData) g.Node {
+func Index(dashboard DashboardData, devMode bool, devSessionToken string) g.Node {
+	bodyNodes := []g.Node{
+		AppShell(dashboard),
+	}
+	if devMode {
+		bodyNodes = append([]g.Node{
+			Data("dev-mode", "true"),
+			Data("dev-session-token", devSessionToken),
+		}, bodyNodes...)
+	}
+
 	return Doctype(
 		HTML(Lang("en"),
 			Head(
@@ -50,9 +60,7 @@ func Index(dashboard DashboardData) g.Node {
 				Script(Src("/static/htmx.min.js"), Defer()),
 				Script(Src("/static/app.js"), Defer()),
 			),
-			Body(
-				AppShell(dashboard),
-			),
+			Body(bodyNodes...),
 		),
 	)
 }
