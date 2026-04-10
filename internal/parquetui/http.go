@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -18,6 +21,8 @@ import (
 
 //go:embed static/*
 var staticFiles embed.FS
+
+const serverShutdownTimeout = 5 * time.Second
 
 type App struct {
 	devMode         bool
@@ -32,7 +37,7 @@ func Run(args []string) error {
 	}
 
 	configureLogging(cfg.Verbose)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	service, err := NewService(ctx, cfg.SrcParquetPath, cfg.ReloadInterval)
@@ -54,9 +59,63 @@ func Run(args []string) error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	guard, err := acquireProcessGuard(cfg.PIDFile)
+	if err != nil {
+		return fmt.Errorf("acquire process guard: %w", err)
+	}
+	if guard != nil {
+		defer func() {
+			if err := guard.Close(); err != nil {
+				slog.Warn("release process guard failed", "pid_file", cfg.PIDFile, "err", err)
+			}
+		}()
+		if cfg.ReplaceRunning {
+			if err := guard.replaceRunningProcess(); err != nil {
+				return fmt.Errorf("replace running process: %w", err)
+			}
+		}
+	}
+
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	defer listener.Close()
+
+	if err := writePIDFile(cfg.PIDFile, os.Getpid()); err != nil {
+		return fmt.Errorf("write pid file: %w", err)
+	}
+	defer func() {
+		if err := removePIDFileIfCurrent(cfg.PIDFile, os.Getpid()); err != nil {
+			slog.Warn("remove pid file failed", "pid_file", cfg.PIDFile, "err", err)
+		}
+	}()
+
+	if guard != nil {
+		if err := guard.Close(); err != nil {
+			return fmt.Errorf("release process guard: %w", err)
+		}
+		guard = nil
+	}
+
+	shutdownCompleteChannel := make(chan struct{})
+	go func() {
+		defer close(shutdownCompleteChannel)
+		<-ctx.Done()
+
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), serverShutdownTimeout)
+		defer shutdownCancel()
+		if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Warn("server shutdown failed", "err", err)
+		}
+	}()
+
 	slog.Info("server starting", "url", fmt.Sprintf("http://localhost:%d", cfg.Port), "address", server.Addr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("listen and serve: %w", err)
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("serve: %w", err)
+	}
+	if ctx.Err() != nil {
+		<-shutdownCompleteChannel
 	}
 	return nil
 }

@@ -195,6 +195,7 @@ go run ./cmd/parquetflowui /flows/parquet-hosts
 go run ./cmd/parquetflowui /flows/parquet-hosts --port 8081
 go run ./cmd/parquetflowui /flows/parquet-hosts --dev
 go run ./cmd/parquetflowui /flows/parquet-hosts -v
+go run ./cmd/parquetflowui /flows/parquet-hosts --pid-file /tmp/parquetflowui.pid --replace-running
 rtk make ui
 rtk make ui-watch
 ```
@@ -204,6 +205,8 @@ Flags:
 - `--src-parquet`: flat input directory containing enriched `nfcap_*.parquet` files
 - `--port`: HTTP port, default `8080`
 - `--dev`: enable development-mode hot reload support
+- `--pid-file`: write the running process ID to this file
+- `--replace-running`: stop the process recorded in `--pid-file` before binding the new server
 - `--reload-interval`: polling interval for parquet refresh, default `1m`
 - `-v`: enable debug logging
 
@@ -215,7 +218,7 @@ go run ./cmd/parquetflowui --src-parquet data/parquet
 
 Open `http://localhost:8080` after starting the server.
 
-For development hot reloading, `rtk make ui-watch` runs the UI under `watchman-make`, restarts the process on UI source changes, and reloads already-open browser tabs automatically.
+For development hot reloading, `rtk make ui-watch` runs the UI under `watchman-make`, starts a new `parquetflowui` on source changes, and lets the new process replace the old one using the pid file before reloading already-open browser tabs.
 
 ## End-to-End Example
 

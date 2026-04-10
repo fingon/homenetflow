@@ -56,7 +56,9 @@ var requiredColumns = []string{
 
 type Config struct {
 	Dev            bool          `env:"HOMENETFLOW_UI_DEV" help:"Enable development mode with hot reload support."`
+	PIDFile        string        `env:"HOMENETFLOW_UI_PID_FILE" help:"Write the running process ID to this file." name:"pid-file"`
 	Port           int           `default:"8080" env:"HOMENETFLOW_UI_PORT" help:"HTTP port."`
+	ReplaceRunning bool          `env:"HOMENETFLOW_UI_REPLACE_RUNNING" help:"Replace the running process recorded in the pid file before starting." name:"replace-running"`
 	ReloadInterval time.Duration `default:"1m" env:"HOMENETFLOW_UI_RELOAD_INTERVAL" help:"Polling interval for parquet refresh." name:"reload-interval"`
 	SrcParquetPath string        `arg:"" help:"Directory containing enriched parquet files." name:"src-parquet" required:""`
 	Verbose        bool          `env:"HOMENETFLOW_UI_VERBOSE" help:"Enable verbose logging." short:"v"`
@@ -71,6 +73,9 @@ func (c Config) Validate() error {
 	}
 	if c.ReloadInterval <= 0 {
 		return fmt.Errorf("reload interval must be positive, got %s", c.ReloadInterval)
+	}
+	if c.ReplaceRunning && c.PIDFile == "" {
+		return errors.New("pid file is required when replace-running is enabled")
 	}
 	return nil
 }
