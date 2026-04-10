@@ -1,12 +1,12 @@
 :root {
-  --bg: #f6f1e8;
+  --bg: #006100;
   --panel: rgba(255, 255, 255, 0.88);
   --panel-strong: #fffaf2;
   --line: rgba(42, 51, 66, 0.14);
   --text: #1f2733;
   --muted: #6e7782;
-  --accent: #b14d24;
-  --accent-soft: #f3d7c7;
+  --accent: #40e040;
+  --accent-soft: #80e040;
   --external: #587ea3;
   --synthetic: #a69b84;
 }
@@ -19,7 +19,7 @@ body {
   margin: 0;
   color: var(--text);
   background:
-    radial-gradient(circle at top left, rgba(255, 214, 171, 0.55), transparent 35%),
+    radial-gradient(circle at top left, rgba(0, 90, 0, 0.55), transparent 35%),
     radial-gradient(circle at bottom right, rgba(138, 189, 197, 0.35), transparent 28%),
     linear-gradient(180deg, #f6f1e8 0%, #ebe6dc 100%);
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;

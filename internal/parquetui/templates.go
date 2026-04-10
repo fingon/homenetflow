@@ -306,7 +306,6 @@ func topBar(dashboard DashboardData) g.Node {
 				hiddenStateFields(state),
 				Div(
 					Class("group"),
-					Label(g.Text("Time")),
 					Div(
 						Class("button-row"),
 						toggleRadio("preset", presetAllValue, "All", selectedPreset(state) == presetAllValue),
@@ -318,13 +317,13 @@ func topBar(dashboard DashboardData) g.Node {
 				),
 				Div(
 					Class("group segmented"),
-					Label(g.Text("Metric")),
+					Label(g.Text("Show")),
 					toggleRadio("metric", string(MetricBytes), "Bytes", state.Metric == MetricBytes),
 					toggleRadio("metric", string(MetricConnections), "Connections", state.Metric == MetricConnections),
 				),
 				Div(
 					Class("group segmented"),
-					Label(g.Text("Granularity")),
+					Label(g.Text("By")),
 					toggleRadio("granularity", string(GranularityTLD), "TLD", state.Granularity == GranularityTLD),
 					toggleRadio("granularity", string(Granularity2LD), "2TLD", state.Granularity == Granularity2LD),
 					toggleRadio("granularity", string(GranularityHostname), "Hostname", state.Granularity == GranularityHostname),
@@ -332,14 +331,13 @@ func topBar(dashboard DashboardData) g.Node {
 				),
 				Div(
 					Class("group segmented"),
-					Label(g.Text("Address Family")),
+					Label(g.Text("Using")),
 					toggleRadio("family", string(AddressFamilyAll), "All", currentAddressFamily == AddressFamilyAll),
 					toggleRadio("family", string(AddressFamilyIPv4), "IPv4", currentAddressFamily == AddressFamilyIPv4),
 					toggleRadio("family", string(AddressFamilyIPv6), "IPv6", currentAddressFamily == AddressFamilyIPv6),
 				),
 				Div(
 					Class("group"),
-					Label(For("search-input"), g.Text("Search")),
 					Input(
 						Type("search"),
 						ID("search-input"),

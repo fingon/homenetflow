@@ -29,7 +29,7 @@ ui:
 	nohup go run $(UI_RUN_ARGS) --dev --pid-file "$(UI_PID_FILE)" --replace-running >$(UI_LOG_FILE) 2>&1 &
 
 .PHONY: ui-watch
-ui-watch: ui-restart
+ui-watch: ui
 	$(WATCHMAN_MAKE) -p $(UI_WATCH_PATTERNS) --make "$(MAKE)" -t ui
 
 .PHONY: check
