@@ -136,12 +136,19 @@ func AppShell(dashboard DashboardData) g.Node {
 }
 
 func SummaryPanel(state QueryState, graph GraphData) g.Node {
+	currentAddressFamily := normalizedAddressFamily(state.AddressFamily)
+	addressFamilyChip := g.Node(nil)
+	if currentAddressFamily != AddressFamilyAll {
+		addressFamilyChip = Span(Class("chip"), g.Text("Address Family: "+addressFamilyLabel(currentAddressFamily)))
+	}
+
 	return Div(
 		Class("summary-panel"),
 		sectionTitle("Active Filters"),
 		Div(
 			Class("filter-list"),
 			Span(Class("chip"), g.Text("Time: "+formatNsRange(state.FromNs, state.ToNs))),
+			addressFamilyChip,
 			renderNodes(state.Include, func(item string) g.Node {
 				return Span(Class("chip"), g.Text("Entity: "+item))
 			}),
@@ -279,6 +286,7 @@ func TablePanel(state QueryState, table TableData) g.Node {
 
 func topBar(dashboard DashboardData) g.Node {
 	state := dashboard.State
+	currentAddressFamily := normalizedAddressFamily(state.AddressFamily)
 
 	return Header(
 		Class("top-bar"),
@@ -321,6 +329,13 @@ func topBar(dashboard DashboardData) g.Node {
 					toggleRadio("granularity", string(Granularity2LD), "2TLD", state.Granularity == Granularity2LD),
 					toggleRadio("granularity", string(GranularityHostname), "Hostname", state.Granularity == GranularityHostname),
 					toggleRadio("granularity", string(GranularityIP), "IP", state.Granularity == GranularityIP),
+				),
+				Div(
+					Class("group segmented"),
+					Label(g.Text("Address Family")),
+					toggleRadio("family", string(AddressFamilyAll), "All", currentAddressFamily == AddressFamilyAll),
+					toggleRadio("family", string(AddressFamilyIPv4), "IPv4", currentAddressFamily == AddressFamilyIPv4),
+					toggleRadio("family", string(AddressFamilyIPv6), "IPv6", currentAddressFamily == AddressFamilyIPv6),
 				),
 				Div(
 					Class("group"),
@@ -759,6 +774,24 @@ func selectedPreset(state QueryState) string {
 	default:
 		return presetAllValue
 	}
+}
+
+func addressFamilyLabel(addressFamily AddressFamily) string {
+	switch addressFamily {
+	case AddressFamilyIPv4:
+		return "IPv4"
+	case AddressFamilyIPv6:
+		return "IPv6"
+	default:
+		return "All"
+	}
+}
+
+func normalizedAddressFamily(addressFamily AddressFamily) AddressFamily {
+	if !addressFamily.valid() {
+		return AddressFamilyAll
+	}
+	return addressFamily
 }
 
 func graphSVGClass(graph GraphData) string {

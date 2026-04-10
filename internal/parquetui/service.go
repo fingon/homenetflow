@@ -15,6 +15,7 @@ import (
 	"time"
 
 	duckdb "github.com/duckdb/duckdb-go/v2"
+	"github.com/fingon/homenetflow/internal/model"
 	"github.com/fingon/homenetflow/internal/parquetout"
 	"github.com/fingon/homenetflow/internal/scan"
 )
@@ -43,6 +44,7 @@ var requiredColumns = []string{
 	"dst_ip",
 	"dst_is_private",
 	"dst_tld",
+	"ip_version",
 	"src_2ld",
 	"src_host",
 	"src_ip",
@@ -686,7 +688,7 @@ func (s *Service) querySpan(ctx context.Context) (TimeSpan, error) {
 func (s *Service) filteredCTE(state QueryState) (string, []any) {
 	srcExpr, dstExpr := entityExpressions(state.Granularity)
 	whereClause, args := filterClause(state, srcExpr, dstExpr)
-	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, bytes, dst_is_private, src_is_private, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
+	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, bytes, dst_is_private, ip_version, src_is_private, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
 		filteredCTEName,
 		srcExpr,
 		dstExpr,
@@ -1085,6 +1087,15 @@ func filterClause(state QueryState, srcExpr, dstExpr string) (string, []any) {
 		searchLike := "%" + strings.ToLower(state.Search) + "%"
 		conditions = append(conditions, fmt.Sprintf("(LOWER(%s) LIKE ? OR LOWER(%s) LIKE ?)", srcExpr, dstExpr))
 		args = append(args, searchLike, searchLike)
+	}
+
+	switch state.AddressFamily {
+	case AddressFamilyIPv4:
+		conditions = append(conditions, "ip_version = ?")
+		args = append(args, model.IPVersion4)
+	case AddressFamilyIPv6:
+		conditions = append(conditions, "ip_version = ?")
+		args = append(args, model.IPVersion6)
 	}
 
 	return strings.Join(conditions, " AND "), args

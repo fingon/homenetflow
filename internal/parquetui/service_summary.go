@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/fingon/homenetflow/internal/model"
 )
 
 type summaryGraphSnapshotData struct {
@@ -24,6 +26,7 @@ type summaryEdgeAggregate struct {
 	DstPublicBytes        int64
 	DstPublicConnections  int64
 	FirstSeenNs           int64
+	IPVersion             int32
 	LastSeenNs            int64
 	Source                string
 	SrcPrivateBytes       int64
@@ -71,7 +74,7 @@ func (s *Service) summaryGraph(ctx context.Context, state QueryState, span TimeS
 	}
 
 	queryStart := time.Now()
-	snapshot, err := s.summaryGraphSnapshot(ctx, state.Granularity)
+	snapshot, err := s.summaryGraphSnapshot(ctx, state.Granularity, state.AddressFamily)
 	if err != nil {
 		return GraphData{}, err
 	}
@@ -145,14 +148,17 @@ func (s *Service) summaryHistogram(ctx context.Context, state QueryState) ([]His
 
 	queryStart := time.Now()
 	widthNs := max(int64(1), (state.ToNs-state.FromNs+1)/histogramBinCount)
+	whereClause, args := summaryAddressFamilyFilter(state.AddressFamily)
 	query := fmt.Sprintf(`
 SELECT CAST(FLOOR((bucket_start_ns - ?) / ?) AS BIGINT) AS bucket, SUM(%s) AS value
 FROM read_parquet(%s)
+%s
 GROUP BY bucket
 ORDER BY bucket
-`, summaryMetricColumn(state.Metric), quoteLiteral(s.summaryHistogramGlob()))
+`, summaryMetricColumn(state.Metric), quoteLiteral(s.summaryHistogramGlob()), whereClause)
 
-	rows, err := s.db.QueryContext(ctx, query, state.FromNs, widthNs)
+	queryArgs := append([]any{state.FromNs, widthNs}, args...)
+	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query summary histogram: %w", err)
 	}
@@ -191,7 +197,7 @@ ORDER BY bucket
 		})
 	}
 	s.histogramCache.Set(cacheKey, bins)
-	slog.Debug("UI summary histogram query complete", "granularity", state.Granularity, "duration_ms", time.Since(queryStart).Milliseconds())
+	slog.Debug("UI summary histogram query complete", "granularity", state.Granularity, "family", state.AddressFamily, "duration_ms", time.Since(queryStart).Milliseconds())
 	return bins, nil
 }
 
@@ -202,12 +208,16 @@ func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) 
 		return positions, nil
 	}
 
-	snapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity)
+	bytesSnapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily)
 	if err != nil {
 		return nil, err
 	}
-	bytesView := buildSummaryMetricView(snapshot, MetricBytes)
-	connectionView := buildSummaryMetricView(snapshot, MetricConnections)
+	connectionSnapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily)
+	if err != nil {
+		return nil, err
+	}
+	bytesView := buildSummaryMetricView(bytesSnapshot, MetricBytes)
+	connectionView := buildSummaryMetricView(connectionSnapshot, MetricConnections)
 	bytesNodeTotals := bytesView.nodeTotals
 	connectionNodeTotals := connectionView.nodeTotals
 	keepEntities := unionKeepEntities(bytesNodeTotals, connectionNodeTotals, cacheState)
@@ -229,13 +239,14 @@ func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) 
 	return positions, nil
 }
 
-func (s *Service) summaryGraphSnapshot(ctx context.Context, granularity Granularity) (*summaryGraphSnapshotData, error) {
-	cacheKey := summaryGraphSnapshotCacheKey(granularity, s.currentRevision())
+func (s *Service) summaryGraphSnapshot(ctx context.Context, granularity Granularity, addressFamily AddressFamily) (*summaryGraphSnapshotData, error) {
+	cacheKey := summaryGraphSnapshotCacheKey(granularity, addressFamily, s.currentRevision())
 	if snapshot, ok := s.summaryGraphCache.Get(cacheKey); ok {
 		return snapshot, nil
 	}
 
 	queryStart := time.Now()
+	whereClause, args := summaryAddressFamilyFilter(addressFamily)
 	query := fmt.Sprintf(`
 SELECT src_entity, dst_entity,
   COALESCE(SUM(bytes), 0) AS bytes_total,
@@ -249,12 +260,14 @@ SELECT src_entity, dst_entity,
   COALESCE(SUM(dst_public_bytes), 0) AS dst_public_bytes,
   COALESCE(SUM(dst_public_connections), 0) AS dst_public_connections,
   COALESCE(MIN(first_seen_ns), 0) AS first_seen_ns,
+  ip_version,
   COALESCE(MAX(last_seen_ns), 0) AS last_seen_ns
 FROM read_parquet(%s)
-GROUP BY src_entity, dst_entity
-`, quoteLiteral(s.summaryEdgeGlob(granularity)))
+%s
+GROUP BY src_entity, dst_entity, ip_version
+`, quoteLiteral(s.summaryEdgeGlob(granularity)), whereClause)
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query summary graph snapshot: %w", err)
 	}
@@ -280,6 +293,7 @@ GROUP BY src_entity, dst_entity
 			&edge.DstPublicBytes,
 			&edge.DstPublicConnections,
 			&edge.FirstSeenNs,
+			&edge.IPVersion,
 			&edge.LastSeenNs,
 		); err != nil {
 			return nil, fmt.Errorf("scan summary graph snapshot row: %w", err)
@@ -293,7 +307,7 @@ GROUP BY src_entity, dst_entity
 	}
 
 	s.summaryGraphCache.Set(cacheKey, snapshot)
-	slog.Debug("UI summary graph snapshot built", "granularity", granularity, "edge_count", len(snapshot.edges), "duration_ms", time.Since(queryStart).Milliseconds())
+	slog.Debug("UI summary graph snapshot built", "granularity", granularity, "family", addressFamily, "edge_count", len(snapshot.edges), "duration_ms", time.Since(queryStart).Milliseconds())
 	return snapshot, nil
 }
 
@@ -518,8 +532,8 @@ func viewTotalsForMetric(totals Totals, totalEntities, visibleEdges int) Totals 
 	return viewTotals
 }
 
-func summaryGraphSnapshotCacheKey(granularity Granularity, revision uint64) string {
-	return fmt.Sprintf("summary-graph:%d:%s", revision, granularity)
+func summaryGraphSnapshotCacheKey(granularity Granularity, addressFamily AddressFamily, revision uint64) string {
+	return fmt.Sprintf("summary-graph:%d:%s:%s", revision, granularity, addressFamily)
 }
 
 func (s *Service) summaryEdgeGlob(granularity Granularity) string {
@@ -539,4 +553,15 @@ func summaryMetricColumn(metric Metric) string {
 		return "connections"
 	}
 	return "bytes"
+}
+
+func summaryAddressFamilyFilter(addressFamily AddressFamily) (string, []any) {
+	switch addressFamily {
+	case AddressFamilyIPv4:
+		return "WHERE ip_version = ?", []any{model.IPVersion4}
+	case AddressFamilyIPv6:
+		return "WHERE ip_version = ?", []any{model.IPVersion6}
+	default:
+		return "", nil
+	}
 }

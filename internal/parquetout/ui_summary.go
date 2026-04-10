@@ -22,6 +22,7 @@ type EdgeSummaryRow struct {
 	DstPublicBytes        int64  `parquet:"dst_public_bytes"`
 	DstPublicConnections  int64  `parquet:"dst_public_connections"`
 	FirstSeenNs           int64  `parquet:"first_seen_ns"`
+	IPVersion             int32  `parquet:"ip_version"`
 	LastSeenNs            int64  `parquet:"last_seen_ns"`
 	Source                string `parquet:"src_entity"`
 	SrcPrivateBytes       int64  `parquet:"src_private_bytes"`
@@ -34,6 +35,7 @@ type HistogramSummaryRow struct {
 	BucketStartNs int64 `parquet:"bucket_start_ns"`
 	Bytes         int64 `parquet:"bytes"`
 	Connections   int64 `parquet:"connections"`
+	IPVersion     int32 `parquet:"ip_version"`
 }
 
 type EdgeSummaryWriter struct {

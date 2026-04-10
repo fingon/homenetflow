@@ -290,10 +290,11 @@ SELECT %s AS src_entity, %s AS dst_entity,
   COALESCE(SUM(CASE WHEN dst_is_private THEN 0 ELSE bytes END), 0) AS dst_public_bytes,
   COALESCE(SUM(CASE WHEN dst_is_private THEN 0 ELSE 1 END), 0) AS dst_public_connections,
   COALESCE(MIN(time_start_ns), 0) AS first_seen_ns,
+  ip_version,
   COALESCE(MAX(time_end_ns), 0) AS last_seen_ns
 FROM read_parquet(%s)
-GROUP BY src_entity, dst_entity
-ORDER BY src_entity, dst_entity
+GROUP BY src_entity, dst_entity, ip_version
+ORDER BY src_entity, dst_entity, ip_version
 `, srcExpr, dstExpr, quoteLiteral(sourceFile.AbsPath))
 
 	writer, finalize, err := parquetout.CreateUISummaryEdges(outputPath, model.NewUISummaryManifest(sourceFile, summaryEdgeKind, string(granularity), spanStartNs, spanEndNs))
@@ -324,6 +325,7 @@ ORDER BY src_entity, dst_entity
 			&row.DstPublicBytes,
 			&row.DstPublicConnections,
 			&row.FirstSeenNs,
+			&row.IPVersion,
 			&row.LastSeenNs,
 		); err != nil {
 			return fmt.Errorf("scan %s summary edge row for %q: %w", granularity, sourceFile.RelPath, err)
@@ -362,10 +364,11 @@ func rebuildHistogramSummary(
 	query := fmt.Sprintf(`
 SELECT CAST(FLOOR(time_start_ns / %d) AS BIGINT) * %d AS bucket_start_ns,
   COALESCE(SUM(bytes), 0) AS bytes_total,
-  COUNT(*) AS connection_total
+  COUNT(*) AS connection_total,
+  ip_version
 FROM read_parquet(%s)
-GROUP BY bucket_start_ns
-ORDER BY bucket_start_ns
+GROUP BY bucket_start_ns, ip_version
+ORDER BY bucket_start_ns, ip_version
 `, summaryBucketWidthNs, summaryBucketWidthNs, quoteLiteral(sourceFile.AbsPath))
 
 	writer, finalize, err := parquetout.CreateUISummaryHistogram(outputPath, model.NewUISummaryManifest(sourceFile, summaryHistogramKind, "", spanStartNs, spanEndNs))
@@ -382,7 +385,7 @@ ORDER BY bucket_start_ns
 	batch := make([]parquetout.HistogramSummaryRow, 0, summaryBuildRowBatchSize)
 	for rows.Next() {
 		var row parquetout.HistogramSummaryRow
-		if err := rows.Scan(&row.BucketStartNs, &row.Bytes, &row.Connections); err != nil {
+		if err := rows.Scan(&row.BucketStartNs, &row.Bytes, &row.Connections, &row.IPVersion); err != nil {
 			return fmt.Errorf("scan histogram summary row for %q: %w", sourceFile.RelPath, err)
 		}
 		batch = append(batch, row)

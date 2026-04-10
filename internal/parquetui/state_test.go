@@ -15,10 +15,27 @@ func TestParseQueryStateDefaults(t *testing.T) {
 
 	assert.Equal(t, state.Metric, MetricBytes)
 	assert.Equal(t, state.Granularity, Granularity2LD)
+	assert.Equal(t, state.AddressFamily, AddressFamilyAll)
 	assert.Equal(t, state.EdgeLimit, defaultEdgeLimit)
 	assert.Equal(t, state.Page, defaultPage)
 	assert.Equal(t, state.PageSize, defaultPageSize)
 	assert.Equal(t, state.View, defaultView)
+}
+
+func TestParseQueryStateAddressFamily(t *testing.T) {
+	request := httptest.NewRequest("GET", "/?family=ipv6", nil)
+
+	state := ParseQueryState(request)
+
+	assert.Equal(t, state.AddressFamily, AddressFamilyIPv6)
+}
+
+func TestParseQueryStateInvalidAddressFamilyDefaultsToAll(t *testing.T) {
+	request := httptest.NewRequest("GET", "/?family=bogus", nil)
+
+	state := ParseQueryState(request)
+
+	assert.Equal(t, state.AddressFamily, AddressFamilyAll)
 }
 
 func TestParseQueryStateDefaultsSortForConnectionsMetric(t *testing.T) {
@@ -93,18 +110,20 @@ func TestQueryStateNormalizedDefaultsSortForMetric(t *testing.T) {
 
 func TestQueryStateValuesSkipPreset(t *testing.T) {
 	state := QueryState{
-		FromNs:      10,
-		ToNs:        20,
-		Metric:      MetricBytes,
-		Granularity: Granularity2LD,
-		View:        ViewSplit,
-		Sort:        SortBytes,
-		Preset:      presetWeekValue,
+		AddressFamily: AddressFamilyIPv4,
+		FromNs:        10,
+		ToNs:          20,
+		Metric:        MetricBytes,
+		Granularity:   Granularity2LD,
+		View:          ViewSplit,
+		Sort:          SortBytes,
+		Preset:        presetWeekValue,
 	}
 
 	values := state.Values()
 
 	assert.Equal(t, values.Get("preset"), "")
+	assert.Equal(t, values.Get("family"), "ipv4")
 }
 
 func TestLayoutCacheStateClearsSelectedEdge(t *testing.T) {

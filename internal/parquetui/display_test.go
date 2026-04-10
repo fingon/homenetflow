@@ -81,6 +81,9 @@ func TestTopBarRendersTimePresetButtons(t *testing.T) {
 	assert.Assert(t, !strings.Contains(markup, `id="preset-select"`))
 	assert.Assert(t, strings.Contains(markup, `name="preset"`))
 	assert.Assert(t, strings.Contains(markup, `value="1d"`))
+	assert.Assert(t, strings.Contains(markup, `name="family"`))
+	assert.Assert(t, strings.Contains(markup, `value="ipv4"`))
+	assert.Assert(t, strings.Contains(markup, `value="ipv6"`))
 }
 
 func TestGraphSVGMarkupUsesDenseHooksForCrowdedGraphs(t *testing.T) {
@@ -207,6 +210,20 @@ func TestSummaryPanelActiveFiltersOnlyRenderTimeAndEntityFilters(t *testing.T) {
 	assert.Assert(t, strings.Contains(summaryMarkup, "Exclude: dns.google"))
 	assert.Assert(t, !strings.Contains(summaryMarkup, "Metric:"))
 	assert.Assert(t, !strings.Contains(summaryMarkup, "Granularity:"))
+}
+
+func TestSummaryPanelRendersAddressFamilyFilterChip(t *testing.T) {
+	t.Parallel()
+
+	summaryMarkup := renderNodeString(t, SummaryPanel(QueryState{
+		AddressFamily: AddressFamilyIPv6,
+		FromNs:        10,
+		ToNs:          20,
+		Metric:        MetricConnections,
+		Granularity:   GranularityHostname,
+	}, GraphData{}))
+
+	assert.Assert(t, strings.Contains(summaryMarkup, "Address Family: IPv6"))
 }
 
 func TestAppShellRendersSeparateRankingsSection(t *testing.T) {

@@ -248,6 +248,88 @@ func TestServiceSearchFiltersCaseInsensitively(t *testing.T) {
 	assert.Assert(t, containsNode(graph.Nodes, "beta.lan"))
 }
 
+func TestServiceGraphFiltersByAddressFamilyIPv4(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+		sampleRecord("fd00::1", "2001:db8::1", "alpha.lan", "lan", "lan", "resolver.example", "example", "example", 200, 30, 40),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	graph, err := service.Graph(context.Background(), QueryState{
+		AddressFamily: AddressFamilyIPv4,
+		Granularity:   GranularityHostname,
+		Metric:        MetricBytes,
+	})
+	assert.NilError(t, err)
+
+	assert.Equal(t, graph.Totals.Connections, int64(1))
+	assert.Equal(t, graph.Totals.Bytes, int64(100))
+	assert.Assert(t, containsNode(graph.Nodes, "alpha.lan"))
+	assert.Assert(t, containsNode(graph.Nodes, "dns.google"))
+	assert.Assert(t, !containsNode(graph.Nodes, "resolver.example"))
+}
+
+func TestServiceGraphFiltersByAddressFamilyIPv6(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+		sampleRecord("fd00::1", "2001:db8::1", "alpha.lan", "lan", "lan", "resolver.example", "example", "example", 200, 30, 40),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	graph, err := service.Graph(context.Background(), QueryState{
+		AddressFamily: AddressFamilyIPv6,
+		Granularity:   GranularityHostname,
+		Metric:        MetricBytes,
+	})
+	assert.NilError(t, err)
+
+	assert.Equal(t, graph.Totals.Connections, int64(1))
+	assert.Equal(t, graph.Totals.Bytes, int64(200))
+	assert.Assert(t, containsNode(graph.Nodes, "alpha.lan"))
+	assert.Assert(t, containsNode(graph.Nodes, "resolver.example"))
+	assert.Assert(t, !containsNode(graph.Nodes, "dns.google"))
+}
+
+func TestServiceGraphAddressFamilyUsesSummaryFastPath(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour)),
+		sampleRecord("fd00::1", "2001:db8::1", "beta.lan", "lan", "lan", "resolver.example", "example", "example", 200, int64(3*time.Hour), int64(4*time.Hour)),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	span, err := service.Span(context.Background())
+	assert.NilError(t, err)
+	state := QueryState{
+		AddressFamily: AddressFamilyIPv4,
+		Granularity:   Granularity2LD,
+		Metric:        MetricBytes,
+	}.Normalized(span)
+
+	assert.Assert(t, service.canUseSummaryGraph(state, span))
+
+	graph, err := service.Graph(context.Background(), state)
+	assert.NilError(t, err)
+	assert.Equal(t, graph.Totals.Bytes, int64(100))
+	assert.Assert(t, containsNode(graph.Nodes, "google.com"))
+	assert.Assert(t, !containsNode(graph.Nodes, "example"))
+
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyIPv4, service.currentRevision())
+	_, ok := service.summaryGraphCache.Get(cacheKey)
+	assert.Assert(t, ok)
+}
+
 func TestServiceRefreshMetadataInvalidatesCaches(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
@@ -306,7 +388,7 @@ func TestServiceGraphBuildsSummarySnapshotCache(t *testing.T) {
 	_, err = service.Graph(context.Background(), state)
 	assert.NilError(t, err)
 
-	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, service.currentRevision())
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, service.currentRevision())
 	_, ok := service.summaryGraphCache.Get(cacheKey)
 	assert.Assert(t, ok)
 }
@@ -330,6 +412,37 @@ func TestNewServiceBuildsUISummaries(t *testing.T) {
 	assert.NilError(t, err)
 	_, err = os.Stat(filepath.Join(tempDir, "ui_summary_histogram_202604.parquet"))
 	assert.NilError(t, err)
+}
+
+func TestNewServiceBuildsUISummariesWithIPVersion(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour)),
+		sampleRecord("fd00::1", "2001:db8::1", "alpha.lan", "lan", "lan", "resolver.example", "example", "example", 200, int64(3*time.Hour), int64(4*time.Hour)),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	var edgeRows []parquetout.EdgeSummaryRow
+	err = parquetout.ReadEdgeSummaryRows(filepath.Join(tempDir, "ui_summary_edges_2ld_202604.parquet"), func(rows []parquetout.EdgeSummaryRow) error {
+		edgeRows = append(edgeRows, rows...)
+		return nil
+	})
+	assert.NilError(t, err)
+
+	var histogramRows []parquetout.HistogramSummaryRow
+	err = parquetout.ReadHistogramSummaryRows(filepath.Join(tempDir, "ui_summary_histogram_202604.parquet"), func(rows []parquetout.HistogramSummaryRow) error {
+		histogramRows = append(histogramRows, rows...)
+		return nil
+	})
+	assert.NilError(t, err)
+
+	assert.Assert(t, containsEdgeSummaryIPVersion(edgeRows, model.IPVersion4))
+	assert.Assert(t, containsEdgeSummaryIPVersion(edgeRows, model.IPVersion6))
+	assert.Assert(t, containsHistogramSummaryIPVersion(histogramRows, model.IPVersion4))
+	assert.Assert(t, containsHistogramSummaryIPVersion(histogramRows, model.IPVersion6))
 }
 
 func TestServiceRefreshMetadataRemovesStaleUISummaries(t *testing.T) {
@@ -489,6 +602,24 @@ func nodeAddressClassForID(nodes []Node, nodeID string) nodeAddressClass {
 	return ""
 }
 
+func containsEdgeSummaryIPVersion(rows []parquetout.EdgeSummaryRow, ipVersion int32) bool {
+	for _, row := range rows {
+		if row.IPVersion == ipVersion {
+			return true
+		}
+	}
+	return false
+}
+
+func containsHistogramSummaryIPVersion(rows []parquetout.HistogramSummaryRow, ipVersion int32) bool {
+	for _, row := range rows {
+		if row.IPVersion == ipVersion {
+			return true
+		}
+	}
+	return false
+}
+
 func writeBaseParquet(t *testing.T, path string) {
 	t.Helper()
 
@@ -524,6 +655,7 @@ func sampleRecord(srcIP, dstIP, srcHost, src2LD, srcTLD, dstHost, dst2LD, dstTLD
 		DstIP:        dstIP,
 		DstIsPrivate: testIsPrivate(dstIP),
 		DstTLD:       strPtr(dstTLD),
+		IPVersion:    testIPVersion(srcIP),
 		Src2LD:       strPtr(src2LD),
 		SrcHost:      strPtr(srcHost),
 		SrcIP:        srcIP,
@@ -555,6 +687,20 @@ func testIsPrivate(ipAddress string) bool {
 	}
 
 	return false
+}
+
+func testIPVersion(ipAddress string) int32 {
+	address, err := netip.ParseAddr(ipAddress)
+	if err != nil {
+		return model.IPVersionUnknown
+	}
+	if address.Is4() {
+		return model.IPVersion4
+	}
+	if address.Is6() {
+		return model.IPVersion6
+	}
+	return model.IPVersionUnknown
 }
 
 func strPtr(value string) *string {

@@ -59,7 +59,16 @@ const (
 	SortDestination TableSort = "destination"
 )
 
+type AddressFamily string
+
+const (
+	AddressFamilyAll  AddressFamily = "all"
+	AddressFamilyIPv4 AddressFamily = "ipv4"
+	AddressFamilyIPv6 AddressFamily = "ipv6"
+)
+
 type QueryState struct {
+	AddressFamily   AddressFamily
 	EdgeLimit       int
 	Exclude         []string
 	FromNs          int64
@@ -81,6 +90,7 @@ type QueryState struct {
 
 //nolint:tagliatelle
 type ClientState struct {
+	AddressFamily   string   `json:"family"`
 	EdgeLimit       int      `json:"edge_limit"`
 	Exclude         []string `json:"exclude"`
 	From            int64    `json:"from"`
@@ -107,6 +117,7 @@ type ClientSpan struct {
 func ParseQueryState(r *http.Request) QueryState {
 	query := r.URL.Query()
 	state := QueryState{
+		AddressFamily:   AddressFamilyAll,
 		EdgeLimit:       defaultEdgeLimit,
 		Exclude:         compactValues(query["exclude"]),
 		Granularity:     Granularity2LD,
@@ -121,6 +132,10 @@ func ParseQueryState(r *http.Request) QueryState {
 		View:            defaultView,
 		Metric:          MetricBytes,
 		Preset:          strings.TrimSpace(query.Get("preset")),
+	}
+
+	if addressFamily := AddressFamily(query.Get("family")); addressFamily.valid() {
+		state.AddressFamily = addressFamily
 	}
 
 	if metric := Metric(query.Get("metric")); metric.valid() {
@@ -166,6 +181,9 @@ func (s QueryState) Normalized(span TimeSpan) QueryState {
 	state := s
 	if !state.Granularity.valid() {
 		state.Granularity = Granularity2LD
+	}
+	if !state.AddressFamily.valid() {
+		state.AddressFamily = AddressFamilyAll
 	}
 	if !state.Metric.valid() {
 		state.Metric = MetricBytes
@@ -215,6 +233,9 @@ func (s QueryState) Values() url.Values {
 	if s.ToNs > 0 {
 		values.Set("to", strconv.FormatInt(s.ToNs, 10))
 	}
+	if s.AddressFamily != "" && s.AddressFamily != AddressFamilyAll {
+		values.Set("family", string(s.AddressFamily))
+	}
 	values.Set("metric", string(s.Metric))
 	values.Set("granularity", string(s.Granularity))
 	values.Set("view", string(s.View))
@@ -261,6 +282,7 @@ func (s QueryState) Clone() QueryState {
 
 func (s QueryState) ClientState() ClientState {
 	return ClientState{
+		AddressFamily:   string(s.AddressFamily),
 		EdgeLimit:       s.EdgeLimit,
 		Exclude:         append([]string(nil), s.Exclude...),
 		From:            s.FromNs,
@@ -431,6 +453,10 @@ func (g Granularity) valid() bool {
 
 func (v View) valid() bool {
 	return v == ViewGraph || v == ViewTable || v == ViewSplit
+}
+
+func (a AddressFamily) valid() bool {
+	return a == AddressFamilyAll || a == AddressFamilyIPv4 || a == AddressFamilyIPv6
 }
 
 func (s TableSort) valid() bool {
