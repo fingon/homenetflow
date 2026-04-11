@@ -176,7 +176,7 @@ func SummaryPanel(state QueryState, graph GraphData) g.Node {
 			statBlock("Entities", strconv.Itoa(graph.Totals.Entities)),
 			statBlock("Edges", strconv.Itoa(graph.Totals.Edges)),
 			statBlock("Bytes", formatMetricValue(MetricBytes, graph.Totals.Bytes)),
-			statBlock("Connections", formatMetricValue(MetricConnections, graph.Totals.Connections)),
+			statBlock(connectionsTotalLabel(state.Metric), formatMetricValue(connectionsDisplayMetric(state.Metric), graph.Totals.Connections)),
 		),
 		selectedPanel(state, graph),
 	)
@@ -196,7 +196,7 @@ func RankingsPanel(state QueryState, graph GraphData) g.Node {
 		),
 		Section(
 			Class("rankings-panel"),
-			sectionTitle("Top Flows"),
+			sectionTitle(topEdgesTitle(state.Metric)),
 			Ul(
 				Class("rank-list"),
 				renderNodes(graph.TopEdges, func(edge Edge) g.Node {
@@ -207,13 +207,41 @@ func RankingsPanel(state QueryState, graph GraphData) g.Node {
 	})
 }
 
+func topEdgesTitle(metric Metric) string {
+	if metric == MetricDNSLookups {
+		return "Top Lookups"
+	}
+	return "Top Flows"
+}
+
+func connectionsTotalLabel(metric Metric) string {
+	if metric == MetricDNSLookups {
+		return "DNS Lookups"
+	}
+	return "Connections"
+}
+
+func connectionsDisplayMetric(metric Metric) Metric {
+	if metric == MetricDNSLookups {
+		return MetricDNSLookups
+	}
+	return MetricConnections
+}
+
+func connectionsSortKey(metric Metric) TableSort {
+	if metric == MetricDNSLookups {
+		return SortDNSLookups
+	}
+	return SortConnections
+}
+
 func selectedPanel(state QueryState, graph GraphData) g.Node {
 	if graph.SelectedEdge != nil {
 		return Div(
 			sectionTitle("Selected Edge"),
 			P(g.Text(fmt.Sprintf("%s -> %s", graph.SelectedEdge.Source, graph.SelectedEdge.Destination))),
 			P(g.Text("Bytes: "+formatMetricValue(MetricBytes, graph.SelectedEdge.Bytes))),
-			P(g.Text("Connections: "+formatMetricValue(MetricConnections, graph.SelectedEdge.Connections))),
+			P(g.Text(connectionsTotalLabel(graph.ActiveMetric)+": "+formatMetricValue(connectionsDisplayMetric(graph.ActiveMetric), graph.SelectedEdge.Connections))),
 			P(g.Text("First seen: "+formatTimestamp(graph.SelectedEdge.FirstSeenNs))),
 			P(g.Text("Last seen: "+formatTimestamp(graph.SelectedEdge.LastSeenNs))),
 		)
@@ -262,7 +290,7 @@ func TablePanel(state QueryState, table TableData) g.Node {
 					Th(sortLink(state, "Source", SortSource)),
 					Th(sortLink(state, "Destination", SortDestination)),
 					Th(sortLink(state, "Bytes", SortBytes)),
-					Th(sortLink(state, "Connections", SortConnections)),
+					Th(sortLink(state, connectionsTotalLabel(state.Metric), connectionsSortKey(state.Metric))),
 					Th(sortLink(state, "First Seen", SortFirstSeen)),
 					Th(sortLink(state, "Last Seen", SortLastSeen)),
 				),
@@ -278,7 +306,7 @@ func TablePanel(state QueryState, table TableData) g.Node {
 						Td(g.Text(row.Source)),
 						Td(g.Text(row.Destination)),
 						Td(g.Text(formatMetricValue(MetricBytes, row.Bytes))),
-						Td(g.Text(formatMetricValue(MetricConnections, row.Connections))),
+						Td(g.Text(formatMetricValue(connectionsDisplayMetric(state.Metric), row.Connections))),
 						Td(g.Text(formatTimestamp(row.FirstSeenNs))),
 						Td(g.Text(formatTimestamp(row.LastSeenNs))),
 					)
@@ -330,6 +358,7 @@ func topBar(dashboard DashboardData) g.Node {
 					Label(g.Text("Show")),
 					toggleRadio("metric", string(MetricBytes), "Bytes", state.Metric == MetricBytes),
 					toggleRadio("metric", string(MetricConnections), "Connections", state.Metric == MetricConnections),
+					toggleRadio("metric", string(MetricDNSLookups), "DNS Lookups", state.Metric == MetricDNSLookups),
 				),
 				Div(
 					Class("group segmented"),
@@ -473,11 +502,12 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 			edgeStroke(edge.Selected),
 			math.Max(1.5, 1+math.Log10(math.Max(float64(edge.MetricValue), 1))),
 			dashArrayAttr(edge.Synthetic))
-		builder.WriteString(titleMarkup(fmt.Sprintf("%s -> %s\nBytes: %s\nConnections: %s",
+		builder.WriteString(titleMarkup(fmt.Sprintf("%s -> %s\nBytes: %s\n%s: %s",
 			edge.Source,
 			edge.Destination,
 			formatMetricValue(MetricBytes, edge.Bytes),
-			formatMetricValue(MetricConnections, edge.Connections))))
+			connectionsTotalLabel(graph.ActiveMetric),
+			formatMetricValue(connectionsDisplayMetric(graph.ActiveMetric), edge.Connections))))
 		builder.WriteString(`</path>`)
 		fmt.Fprintf(&builder, `<path class="graph-edge-hitbox" d="%s" stroke="transparent" stroke-width="16" fill="none"></path>`,
 			edgePathMarkup(source, destination))

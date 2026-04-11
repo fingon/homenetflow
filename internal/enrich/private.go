@@ -1,6 +1,10 @@
 package enrich
 
-import "net/netip"
+import (
+	"net/netip"
+
+	"github.com/fingon/homenetflow/internal/model"
+)
 
 var (
 	ipv4PrivatePrefixes = []netip.Prefix{
@@ -39,4 +43,18 @@ func isPrivateIPAddress(ipAddress string) bool {
 	}
 
 	return false
+}
+
+func ipVersionForAddress(ipAddress string) int32 {
+	address, err := netip.ParseAddr(ipAddress)
+	if err != nil {
+		return model.IPVersionUnknown
+	}
+	if address.Is4() {
+		return model.IPVersion4
+	}
+	if address.Is6() {
+		return model.IPVersion6
+	}
+	return model.IPVersionUnknown
 }

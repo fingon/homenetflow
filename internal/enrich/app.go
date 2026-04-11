@@ -33,6 +33,7 @@ type Config struct {
 
 type periodJob struct {
 	dstPath    string
+	dnsPath    string
 	logFiles   []model.SourceFile
 	sourceFile model.SourceFile
 }
@@ -138,6 +139,13 @@ func staleJobs(
 		if err != nil {
 			return nil, fmt.Errorf("check rebuild for %q: %w", dstPath, err)
 		}
+		dnsPath := period.DNSLookupOutputPath(dstRootPath)
+		if !rebuild {
+			rebuild, err = refresh.NeedsEnrichmentRebuild(dnsPath, sourceFile, relevantLogFiles, parquetout.ReadDNSLookupManifest)
+			if err != nil {
+				return nil, fmt.Errorf("check DNS lookup rebuild for %q: %w", dnsPath, err)
+			}
+		}
 
 		if !rebuild {
 			slog.Debug("enriched parquet already up to date", "path", dstPath)
@@ -146,6 +154,7 @@ func staleJobs(
 
 		jobs = append(jobs, periodJob{
 			dstPath:    dstPath,
+			dnsPath:    dnsPath,
 			logFiles:   relevantLogFiles,
 			sourceFile: sourceFile,
 		})
@@ -269,11 +278,95 @@ func rebuildJob(
 		return err
 	}
 
+	if err := writeDNSLookupParquet(ctx, job, logIndex, neighbourIndex, cache, skipDNSLookups); err != nil {
+		return err
+	}
+
 	if err := finalize(); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func writeDNSLookupParquet(
+	ctx context.Context,
+	job periodJob,
+	logIndex *dnsIndex,
+	neighbourIndex *neighbourIndex,
+	cache *reverseDNSCache,
+	skipDNSLookups bool,
+) error {
+	writer, finalize, err := parquetout.CreateDNSLookups(job.dnsPath, model.NewEnrichmentManifest(job.sourceFile, job.logFiles))
+	if err != nil {
+		return err
+	}
+
+	periodStart := job.sourceFile.Period.Start
+	periodEnd := job.sourceFile.Period.End()
+	batch := make([]model.DNSLookupRecord, 0, 1024)
+	for _, event := range logIndex.lookupEvents {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if event.time.Before(periodStart) || !event.time.Before(periodEnd) {
+			continue
+		}
+
+		record, err := dnsLookupRecordForEvent(event, logIndex, neighbourIndex, cache, skipDNSLookups)
+		if err != nil {
+			return err
+		}
+		batch = append(batch, record)
+		if len(batch) < 1024 {
+			continue
+		}
+		if err := writer.WriteBatch(batch); err != nil {
+			return err
+		}
+		batch = batch[:0]
+	}
+	if len(batch) > 0 {
+		if err := writer.WriteBatch(batch); err != nil {
+			return err
+		}
+	}
+	if err := finalize(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func dnsLookupRecordForEvent(
+	event dnsLookupEvent,
+	logIndex *dnsIndex,
+	neighbourIndex *neighbourIndex,
+	cache *reverseDNSCache,
+	skipDNSLookups bool,
+) (model.DNSLookupRecord, error) {
+	clientNames, err := resolveNames(event.clientIP, event.time, logIndex, neighbourIndex, cache, skipDNSLookups)
+	if err != nil {
+		return model.DNSLookupRecord{}, err
+	}
+
+	queryNames := deriveNames(event.queryName)
+	record := model.DNSLookupRecord{
+		ClientIP:        event.clientIP,
+		ClientIPVersion: ipVersionForAddress(event.clientIP),
+		ClientIsPrivate: isPrivateIPAddress(event.clientIP),
+		Lookups:         1,
+		Query2LD:        queryNames.two,
+		QueryName:       event.queryName,
+		QueryTLD:        queryNames.tld,
+		QueryType:       event.queryType,
+		TimeStartNs:     event.time.UnixNano(),
+	}
+	if clientNames != nil {
+		record.ClientHost = &clientNames.host
+		record.Client2LD = clientNames.two
+		record.ClientTLD = clientNames.tld
+	}
+	return record, nil
 }
 
 func enrichRecord(
@@ -406,6 +499,26 @@ func cleanupDeletedOutputs(dstRootPath string, sourceFilesByPeriod map[model.Per
 
 		if err := os.Remove(dstPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove stale enriched parquet %q: %w", dstPath, err)
+		}
+	}
+
+	for _, sourceFile := range sourceFilesByPeriod {
+		sourceNames[sourceFile.Period.DNSLookupFilename()] = struct{}{}
+	}
+	entries, err := os.ReadDir(dstRootPath)
+	if err != nil {
+		return fmt.Errorf("read dir %q: %w", dstRootPath, err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "dns_lookups_") || !strings.HasSuffix(entry.Name(), ".parquet") {
+			continue
+		}
+		if _, ok := sourceNames[entry.Name()]; ok {
+			continue
+		}
+		path := filepath.Join(dstRootPath, entry.Name())
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale DNS lookup parquet %q: %w", path, err)
 		}
 	}
 

@@ -33,3 +33,24 @@ func TestDNSLogLoaderParsesStructuredAndLegacyRecords(t *testing.T) {
 	legacyNames := index.Lookup("192.0.2.11", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC))
 	assert.Equal(t, legacyNames.host, "cer.lan")
 }
+
+func TestDNSLogLoaderParsesStructuredLookupEvents(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "2026-04-01.jsonl")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"NXDOMAIN\\\"],\\\"client_ip\\\":\\\"2001:db8::10\\\",\\\"query_name\\\":\\\"Example.COM.\\\",\\\"query_type\\\":\\\"AAAA\\\",\\\"timestamp_end\\\":\\\"2026-04-01T12:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T12:00:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	loader := newDNSLogLoader()
+	index, err := loader.Load([]model.SourceFile{{
+		AbsPath: logPath,
+		Period:  model.Period{Kind: model.PeriodDay, Start: time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)},
+	}})
+	assert.NilError(t, err)
+
+	assert.Equal(t, len(index.lookupEvents), 1)
+	assert.Equal(t, index.lookupEvents[0].clientIP, "2001:db8::10")
+	assert.Equal(t, index.lookupEvents[0].queryName, "example.com")
+	assert.Equal(t, index.lookupEvents[0].queryType, "AAAA")
+}

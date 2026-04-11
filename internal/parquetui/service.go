@@ -21,20 +21,21 @@ import (
 )
 
 const (
-	filteredCTEName      = "filtered_flows"
-	graphRestSourceID    = "Rest Sources"
-	graphRestDestination = "Rest Destinations"
-	histogramCacheKind   = "histogram"
-	histogramBinCount    = 48
-	layoutCacheKind      = "layout"
-	nodeDetailPeerLimit  = 12
-	graphCacheKind       = "graph"
-	resultCacheLimit     = 96
-	restTopEntityLimit   = 10
-	srcEntityColumn      = "src_entity"
-	summaryTopItemLimit  = 10
-	tableCacheKind       = "table"
-	dstEntityColumn      = "dst_entity"
+	filteredCTEName         = "filtered_flows"
+	graphRestSourceID       = "Rest Sources"
+	graphRestDestination    = "Rest Destinations"
+	histogramCacheKind      = "histogram"
+	histogramBinCount       = 48
+	layoutCacheKind         = "layout"
+	nodeDetailPeerLimit     = 12
+	graphCacheKind          = "graph"
+	dnsLookupFilenamePrefix = "dns_lookups_"
+	resultCacheLimit        = 96
+	restTopEntityLimit      = 10
+	srcEntityColumn         = "src_entity"
+	summaryTopItemLimit     = 10
+	tableCacheKind          = "table"
+	dstEntityColumn         = "dst_entity"
 )
 
 var requiredColumns = []string{
@@ -180,6 +181,7 @@ type Service struct {
 	bgCtx                 context.Context
 	db                    *sql.DB
 	graphCache            *resultCache[GraphData]
+	dnsLookupGlobPath     string
 	globPath              string
 	histogramCache        *resultCache[[]HistogramBin]
 	layoutCache           *resultCache[map[string]LayoutPoint]
@@ -193,6 +195,7 @@ type Service struct {
 	summaries             summarySnapshot
 	span                  TimeSpan
 	spanValid             bool
+	dnsLookupValid        bool
 	fileModTimes          map[string]time.Time
 	revision              uint64
 }
@@ -206,6 +209,7 @@ func NewService(ctx context.Context, srcParquetPath string, reloadInterval time.
 		return nil, fmt.Errorf("resolve source parquet path: %w", err)
 	}
 	globPath := filepath.ToSlash(filepath.Join(absPath, "nfcap_*.parquet"))
+	dnsLookupGlobPath := filepath.ToSlash(filepath.Join(absPath, dnsLookupFilenamePrefix+"*.parquet"))
 
 	connector, err := duckdb.NewConnector("", nil)
 	if err != nil {
@@ -216,6 +220,7 @@ func NewService(ctx context.Context, srcParquetPath string, reloadInterval time.
 	service := &Service{
 		bgCtx:             ctx,
 		db:                db,
+		dnsLookupGlobPath: dnsLookupGlobPath,
 		graphCache:        newResultCache[GraphData](resultCacheLimit),
 		globPath:          globPath,
 		histogramCache:    newResultCache[[]HistogramBin](resultCacheLimit),
@@ -276,6 +281,15 @@ func (s *Service) Graph(ctx context.Context, state QueryState) (GraphData, error
 		return GraphData{}, err
 	}
 	state = state.Normalized(span)
+	if state.Metric == MetricDNSLookups && !s.hasDNSLookupData() {
+		return GraphData{
+			ActiveGranularity: state.Granularity,
+			ActiveMetric:      state.Metric,
+			Breadcrumbs:       buildBreadcrumbs(state),
+			NodePositions:     map[string]LayoutPoint{},
+			Span:              span,
+		}, nil
+	}
 	if s.canUseSummaryGraph(state, span) {
 		return s.summaryGraph(ctx, state, span)
 	}
@@ -421,6 +435,9 @@ func (s *Service) Histogram(ctx context.Context, state QueryState) ([]HistogramB
 		return nil, err
 	}
 	state = state.Normalized(span)
+	if state.Metric == MetricDNSLookups && !s.hasDNSLookupData() {
+		return nil, nil
+	}
 	if s.canUseSummaryHistogram(state, span) {
 		return s.summaryHistogram(ctx, state)
 	}
@@ -564,6 +581,14 @@ func (s *Service) refreshMetadataWithOptions(ctx context.Context, options refres
 	if err != nil {
 		return err
 	}
+	nfcapPaths := sortedMapKeys(modTimes)
+	dnsModTimes, err := collectDNSLookupModTimes(s.srcParquetPath)
+	if err != nil {
+		return err
+	}
+	for path, modTime := range dnsModTimes {
+		modTimes[path] = modTime
+	}
 
 	s.mu.RLock()
 	unchanged := mapsEqual(s.fileModTimes, modTimes) && s.spanValid && !s.summaryRefreshPending && !options.forceSummary
@@ -573,7 +598,7 @@ func (s *Service) refreshMetadataWithOptions(ctx context.Context, options refres
 		return nil
 	}
 
-	if err := validateEnrichmentManifests(sortedMapKeys(modTimes)); err != nil {
+	if err := validateEnrichmentManifests(nfcapPaths); err != nil {
 		return err
 	}
 
@@ -615,6 +640,7 @@ func (s *Service) refreshMetadataWithOptions(ctx context.Context, options refres
 	s.summaries = summaries
 	s.span = span
 	s.spanValid = true
+	s.dnsLookupValid = len(dnsModTimes) > 0
 	s.summaryRefreshPending = len(inspection.staleJobs) > 0
 	s.revision++
 	s.mu.Unlock()
@@ -691,6 +717,10 @@ func (s *Service) querySpan(ctx context.Context) (TimeSpan, error) {
 }
 
 func (s *Service) filteredCTE(state QueryState) (string, []any) {
+	if state.Metric == MetricDNSLookups {
+		return s.filteredDNSLookupCTE(state)
+	}
+
 	srcExpr, dstExpr := entityExpressions(state.Granularity)
 	whereClause, args := filterClause(state, srcExpr, dstExpr)
 	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, bytes, dst_is_private, ip_version, src_is_private, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
@@ -698,6 +728,18 @@ func (s *Service) filteredCTE(state QueryState) (string, []any) {
 		srcExpr,
 		dstExpr,
 		quoteLiteral(s.globPath),
+		whereClause,
+	), args
+}
+
+func (s *Service) filteredDNSLookupCTE(state QueryState) (string, []any) {
+	srcExpr, dstExpr := dnsLookupEntityExpressions(state.Granularity)
+	whereClause, args := filterClause(state, srcExpr, dstExpr)
+	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, 0 AS bytes, lookups, false AS dst_is_private, client_ip_version AS ip_version, client_is_private AS src_is_private, time_start_ns, time_start_ns AS time_end_ns FROM read_parquet(%s) WHERE %s)",
+		filteredCTEName,
+		srcExpr,
+		dstExpr,
+		quoteLiteral(s.dnsLookupGlobPath),
 		whereClause,
 	), args
 }
@@ -836,13 +878,13 @@ func (s *Service) queryEdges(ctx context.Context, state QueryState, keepEntities
 	query := fmt.Sprintf(`%s
 SELECT %s AS source_bucket, %s AS destination_bucket,
   COALESCE(SUM(bytes), 0) AS bytes_total,
-  COUNT(*) AS connection_total,
+  %s AS connection_total,
   COALESCE(MIN(time_start_ns), 0) AS first_seen_ns,
   COALESCE(MAX(time_end_ns), 0) AS last_seen_ns
 FROM %s
 GROUP BY source_bucket, destination_bucket
 ORDER BY %s DESC, source_bucket, destination_bucket
-`, cte, srcBucket, dstBucket, filteredCTEName, metricOrderExpression(state.Metric))
+`, cte, srcBucket, dstBucket, connectionTotalExpression(state.Metric), filteredCTEName, metricOrderExpression(state.Metric))
 
 	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
@@ -870,9 +912,9 @@ ORDER BY %s DESC, source_bucket, destination_bucket
 func (s *Service) queryTotals(ctx context.Context, state QueryState, totalEntities, visibleEdges int) (Totals, error) {
 	cte, args := s.filteredCTE(state)
 	query := fmt.Sprintf(`%s
-SELECT COALESCE(SUM(bytes), 0), COUNT(*)
+SELECT COALESCE(SUM(bytes), 0), %s
 FROM %s
-`, cte, filteredCTEName)
+`, cte, connectionTotalExpression(state.Metric), filteredCTEName)
 	row := s.db.QueryRowContext(ctx, query, args...)
 
 	var totals Totals
@@ -1042,6 +1084,21 @@ func entityExpressions(granularity Granularity) (string, string) {
 	}
 }
 
+func dnsLookupEntityExpressions(granularity Granularity) (string, string) {
+	switch granularity {
+	case GranularityTLD:
+		return coalescedEntityExpressionWithPrivateUnknown("client_is_private", "client_tld"), coalescedEntityExpression("query_tld", "query_name")
+	case Granularity2LD:
+		return coalescedEntityExpressionWithPrivateUnknown("client_is_private", "client_2ld", "client_tld"), coalescedEntityExpression("query_2ld", "query_tld", "query_name")
+	case GranularityHostname:
+		return coalescedEntityExpression("client_host", "client_2ld", "client_tld", "client_ip"), "query_name"
+	case GranularityIP:
+		return "client_ip", "query_name"
+	default:
+		return coalescedEntityExpressionWithPrivateUnknown("client_is_private", "client_2ld", "client_tld"), coalescedEntityExpression("query_2ld", "query_tld", "query_name")
+	}
+}
+
 func coalescedEntityExpression(fields ...string) string {
 	return coalescedEntityExpressionWithDefault("", fields...)
 }
@@ -1107,6 +1164,9 @@ func filterClause(state QueryState, srcExpr, dstExpr string) (string, []any) {
 }
 
 func metricValueExpression(metric Metric) string {
+	if metric == MetricDNSLookups {
+		return "lookups"
+	}
 	if metric == MetricConnections {
 		return "1"
 	}
@@ -1114,6 +1174,9 @@ func metricValueExpression(metric Metric) string {
 }
 
 func privateMetricExpression(privateColumn string, metric Metric) string {
+	if metric == MetricDNSLookups {
+		return fmt.Sprintf("CASE WHEN %s THEN lookups ELSE 0 END", privateColumn)
+	}
 	if metric == MetricConnections {
 		return fmt.Sprintf("CASE WHEN %s THEN 1 ELSE 0 END", privateColumn)
 	}
@@ -1122,6 +1185,9 @@ func privateMetricExpression(privateColumn string, metric Metric) string {
 }
 
 func publicMetricExpression(privateColumn string, metric Metric) string {
+	if metric == MetricDNSLookups {
+		return fmt.Sprintf("CASE WHEN %s THEN 0 ELSE lookups END", privateColumn)
+	}
 	if metric == MetricConnections {
 		return fmt.Sprintf("CASE WHEN %s THEN 0 ELSE 1 END", privateColumn)
 	}
@@ -1130,10 +1196,20 @@ func publicMetricExpression(privateColumn string, metric Metric) string {
 }
 
 func metricOrderExpression(metric Metric) string {
+	if metric == MetricDNSLookups {
+		return "COALESCE(SUM(lookups), 0)"
+	}
 	if metric == MetricConnections {
 		return "COUNT(*)"
 	}
 	return "COALESCE(SUM(bytes), 0)"
+}
+
+func connectionTotalExpression(metric Metric) string {
+	if metric == MetricDNSLookups {
+		return "COALESCE(SUM(lookups), 0)"
+	}
+	return "COUNT(*)"
 }
 
 func chooseKeepEntities(nodeTotals []Node, state QueryState) []string {
@@ -1227,7 +1303,7 @@ func limitTopEdges(edges []Edge, limit int) []Edge {
 }
 
 func edgeMetricValue(edge Edge, metric Metric) int64 {
-	if metric == MetricConnections {
+	if metric == MetricConnections || metric == MetricDNSLookups {
 		return edge.Connections
 	}
 	return edge.Bytes
@@ -1245,7 +1321,10 @@ func countNonSynthetic(nodeTotals []Node, keepLookup map[string]struct{}) int {
 
 func buildBreadcrumbs(state QueryState) []string {
 	metricLabel := "Bytes"
-	if state.Metric == MetricConnections {
+	switch state.Metric {
+	case MetricDNSLookups:
+		metricLabel = "DNS Lookups"
+	case MetricConnections:
 		metricLabel = "Connections"
 	}
 	breadcrumbs := []string{
@@ -1291,10 +1370,36 @@ func (s *Service) currentRevision() uint64 {
 	return s.revision
 }
 
+func (s *Service) hasDNSLookupData() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.dnsLookupValid
+}
+
 func (s *Service) layoutPositions(ctx context.Context, state QueryState) (map[string]LayoutPoint, error) {
 	cacheState := state.layoutCacheState()
 	cacheKey := cacheState.cacheKey(layoutCacheKind, s.currentRevision())
 	if positions, ok := s.layoutCache.Get(cacheKey); ok {
+		return positions, nil
+	}
+
+	if cacheState.Metric == MetricDNSLookups {
+		nodeTotals, err := s.queryNodeTotals(ctx, cacheState)
+		if err != nil {
+			return nil, err
+		}
+		keepEntities := chooseKeepEntities(nodeTotals, cacheState)
+		nodeTotals, err = s.appendRestNodes(ctx, cacheState, keepEntities, nodeTotals)
+		if err != nil {
+			return nil, err
+		}
+		edges, err := s.queryEdges(ctx, cacheState, keepEntities)
+		if err != nil {
+			return nil, err
+		}
+		visibleEdges, _ := limitEdges(edges, cacheState.EdgeLimit, cacheState.SelectedEntity)
+		positions := buildSingleMetricLayoutPositions(nodeTotals, visibleEdges)
+		s.layoutCache.Set(cacheKey, positions)
 		return positions, nil
 	}
 
@@ -1342,6 +1447,34 @@ func (s *Service) layoutPositions(ctx context.Context, state QueryState) (map[st
 	)
 	s.layoutCache.Set(cacheKey, positions)
 	return positions, nil
+}
+
+func buildSingleMetricLayoutPositions(nodes []Node, edges []Edge) map[string]LayoutPoint {
+	nodeRanks := nodeRankLookup(nodes)
+	layoutNodesByID := make(map[string]layoutNode, len(nodes)+len(edges)*2)
+	for _, node := range nodes {
+		layoutNodesByID[node.ID] = layoutNode{
+			ID:        node.ID,
+			Score:     int64(max(1, nodeRanks[node.ID])),
+			Synthetic: node.Synthetic,
+		}
+	}
+
+	layoutEdges := make([]layoutEdge, 0, len(edges))
+	for _, edge := range edges {
+		layoutEdges = append(layoutEdges, layoutEdge{
+			Bytes:       edge.Bytes,
+			Connections: edge.Connections,
+			Destination: edge.Destination,
+			Source:      edge.Source,
+		})
+	}
+
+	layoutNodes := make([]layoutNode, 0, len(layoutNodesByID))
+	for _, node := range layoutNodesByID {
+		layoutNodes = append(layoutNodes, node)
+	}
+	return computeStableNodePositions(layoutNodes, layoutEdges, graphWidthPx, graphHeightPx)
 }
 
 func (s *Service) appendRestNodes(ctx context.Context, state QueryState, keepEntities []string, nodes []Node) ([]Node, error) {
@@ -1566,6 +1699,27 @@ func collectModTimes(srcRootPath string) (map[string]time.Time, error) {
 	return modTimes, nil
 }
 
+func collectDNSLookupModTimes(srcRootPath string) (map[string]time.Time, error) {
+	entries, err := os.ReadDir(srcRootPath)
+	if err != nil {
+		return nil, fmt.Errorf("read dir %q: %w", srcRootPath, err)
+	}
+
+	modTimes := make(map[string]time.Time)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), dnsLookupFilenamePrefix) || !strings.HasSuffix(entry.Name(), ".parquet") {
+			continue
+		}
+		path := filepath.Join(srcRootPath, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			return nil, fmt.Errorf("stat DNS lookup parquet %q: %w", path, err)
+		}
+		modTimes[path] = info.ModTime()
+	}
+	return modTimes, nil
+}
+
 func mapsEqual(left, right map[string]time.Time) bool {
 	if len(left) != len(right) {
 		return false
@@ -1613,7 +1767,7 @@ func sortedMapKeys(values map[string]time.Time) []string {
 func sortTableRows(rows []TableRow, sortKey TableSort) {
 	slices.SortFunc(rows, func(a, b TableRow) int {
 		switch sortKey {
-		case SortConnections:
+		case SortConnections, SortDNSLookups:
 			if a.Connections != b.Connections {
 				return compareInt64Desc(a.Connections, b.Connections)
 			}

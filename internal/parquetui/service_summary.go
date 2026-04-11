@@ -56,6 +56,10 @@ func (s *Service) canUseSummaryGraph(state QueryState, span TimeSpan) bool {
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if state.Metric == MetricDNSLookups {
+		paths := s.summaries.dnsEdgePathsByGranulariy[state.Granularity]
+		return len(paths) > 0 && s.summaries.spanValid
+	}
 	paths := s.summaries.edgePathsByGranulariy[state.Granularity]
 	return len(paths) > 0 && s.summaries.spanValid
 }
@@ -74,7 +78,7 @@ func (s *Service) summaryGraph(ctx context.Context, state QueryState, span TimeS
 	}
 
 	queryStart := time.Now()
-	snapshot, err := s.summaryGraphSnapshot(ctx, state.Granularity, state.AddressFamily)
+	snapshot, err := s.summaryGraphSnapshot(ctx, state.Granularity, state.AddressFamily, state.Metric)
 	if err != nil {
 		return GraphData{}, err
 	}
@@ -155,7 +159,7 @@ FROM read_parquet(%s)
 %s
 GROUP BY bucket
 ORDER BY bucket
-`, summaryMetricColumn(state.Metric), quoteLiteral(s.summaryHistogramGlob()), whereClause)
+`, summaryMetricColumn(state.Metric), quoteLiteral(s.summaryHistogramGlob(state.Metric)), whereClause)
 
 	queryArgs := append([]any{state.FromNs, widthNs}, args...)
 	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
@@ -208,11 +212,26 @@ func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) 
 		return positions, nil
 	}
 
-	bytesSnapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily)
+	if cacheState.Metric == MetricDNSLookups {
+		snapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily, MetricDNSLookups)
+		if err != nil {
+			return nil, err
+		}
+		view := buildSummaryMetricView(snapshot, MetricDNSLookups)
+		keepEntities := chooseKeepEntities(view.nodeTotals, cacheState)
+		edges, nodeMap := buildSummaryVisibleGraph(view, keepEntities, cacheState)
+		nodes := nodesFromMapSorted(nodeMap)
+		visibleEdges, _ := limitEdges(edges, cacheState.EdgeLimit, "")
+		positions := buildSingleMetricLayoutPositions(nodes, visibleEdges)
+		s.layoutCache.Set(cacheKey, positions)
+		return positions, nil
+	}
+
+	bytesSnapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily, MetricBytes)
 	if err != nil {
 		return nil, err
 	}
-	connectionSnapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily)
+	connectionSnapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily, MetricConnections)
 	if err != nil {
 		return nil, err
 	}
@@ -239,8 +258,8 @@ func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) 
 	return positions, nil
 }
 
-func (s *Service) summaryGraphSnapshot(ctx context.Context, granularity Granularity, addressFamily AddressFamily) (*summaryGraphSnapshotData, error) {
-	cacheKey := summaryGraphSnapshotCacheKey(granularity, addressFamily, s.currentRevision())
+func (s *Service) summaryGraphSnapshot(ctx context.Context, granularity Granularity, addressFamily AddressFamily, metric Metric) (*summaryGraphSnapshotData, error) {
+	cacheKey := summaryGraphSnapshotCacheKey(granularity, addressFamily, metric, s.currentRevision())
 	if snapshot, ok := s.summaryGraphCache.Get(cacheKey); ok {
 		return snapshot, nil
 	}
@@ -265,7 +284,7 @@ SELECT src_entity, dst_entity,
 FROM read_parquet(%s)
 %s
 GROUP BY src_entity, dst_entity, ip_version
-`, quoteLiteral(s.summaryEdgeGlob(granularity)), whereClause)
+`, quoteLiteral(s.summaryEdgeGlob(granularity, metric)), whereClause)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -381,7 +400,7 @@ func buildSummaryMetricView(snapshot *summaryGraphSnapshotData, metric Metric) s
 }
 
 func summaryMetricValue(metric Metric, bytesValue, connectionValue int64) int64 {
-	if metric == MetricConnections {
+	if metric == MetricConnections || metric == MetricDNSLookups {
 		return connectionValue
 	}
 
@@ -532,24 +551,30 @@ func viewTotalsForMetric(totals Totals, totalEntities, visibleEdges int) Totals 
 	return viewTotals
 }
 
-func summaryGraphSnapshotCacheKey(granularity Granularity, addressFamily AddressFamily, revision uint64) string {
-	return fmt.Sprintf("summary-graph:%d:%s:%s", revision, granularity, addressFamily)
+func summaryGraphSnapshotCacheKey(granularity Granularity, addressFamily AddressFamily, metric Metric, revision uint64) string {
+	return fmt.Sprintf("summary-graph:%d:%s:%s:%s", revision, granularity, addressFamily, metric)
 }
 
-func (s *Service) summaryEdgeGlob(granularity Granularity) string {
+func (s *Service) summaryEdgeGlob(granularity Granularity, metric Metric) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if metric == MetricDNSLookups {
+		return s.summaries.dnsEdgeGlobByGranularity[granularity]
+	}
 	return s.summaries.edgeGlobByGranularity[granularity]
 }
 
-func (s *Service) summaryHistogramGlob() string {
+func (s *Service) summaryHistogramGlob(metric Metric) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if metric == MetricDNSLookups {
+		return s.summaries.dnsHistogramGlob
+	}
 	return s.summaries.histogramGlob
 }
 
 func summaryMetricColumn(metric Metric) string {
-	if metric == MetricConnections {
+	if metric == MetricConnections || metric == MetricDNSLookups {
 		return "connections"
 	}
 	return "bytes"

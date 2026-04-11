@@ -28,6 +28,7 @@ type Metric string
 const (
 	MetricBytes       Metric = "bytes"
 	MetricConnections Metric = "connections"
+	MetricDNSLookups  Metric = "dns_lookups"
 )
 
 type Granularity string
@@ -44,6 +45,7 @@ type TableSort string
 const (
 	SortBytes       TableSort = "bytes"
 	SortConnections TableSort = "connections"
+	SortDNSLookups  TableSort = "dns_lookups"
 	SortFirstSeen   TableSort = "first_seen"
 	SortLastSeen    TableSort = "last_seen"
 	SortSource      TableSort = "source"
@@ -316,7 +318,9 @@ func (s QueryState) ResetSelection() QueryState {
 
 func (s QueryState) layoutCacheState() QueryState {
 	state := s.Clone()
-	state.Metric = MetricBytes
+	if state.Metric != MetricDNSLookups {
+		state.Metric = MetricBytes
+	}
 	state.Sort = defaultSortForMetric(state.Metric)
 	state.Page = defaultPage
 	state.PageSize = defaultPageSize
@@ -342,6 +346,9 @@ func defaultNodeLimit(granularity Granularity) int {
 }
 
 func defaultSortForMetric(metric Metric) TableSort {
+	if metric == MetricDNSLookups {
+		return SortDNSLookups
+	}
 	if metric == MetricConnections {
 		return SortConnections
 	}
@@ -422,7 +429,7 @@ func parseNonNegativeInt(value string) int {
 }
 
 func (m Metric) valid() bool {
-	return m == MetricBytes || m == MetricConnections
+	return m == MetricBytes || m == MetricConnections || m == MetricDNSLookups
 }
 
 func (g Granularity) valid() bool {
@@ -434,7 +441,7 @@ func (a AddressFamily) valid() bool {
 }
 
 func (s TableSort) valid() bool {
-	return s == SortBytes || s == SortConnections || s == SortFirstSeen || s == SortLastSeen || s == SortSource || s == SortDestination
+	return s == SortBytes || s == SortConnections || s == SortDNSLookups || s == SortFirstSeen || s == SortLastSeen || s == SortSource || s == SortDestination
 }
 
 func (s QueryState) EntityBreadcrumb() string {

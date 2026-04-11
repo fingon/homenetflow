@@ -29,12 +29,16 @@ const (
 )
 
 type summarySnapshot struct {
-	edgeGlobByGranularity map[Granularity]string
-	edgePathsByGranulariy map[Granularity][]string
-	histogramGlob         string
-	histogramPaths        []string
-	span                  TimeSpan
-	spanValid             bool
+	dnsEdgeGlobByGranularity map[Granularity]string
+	dnsEdgePathsByGranulariy map[Granularity][]string
+	dnsHistogramGlob         string
+	dnsHistogramPaths        []string
+	edgeGlobByGranularity    map[Granularity]string
+	edgePathsByGranulariy    map[Granularity][]string
+	histogramGlob            string
+	histogramPaths           []string
+	span                     TimeSpan
+	spanValid                bool
 }
 
 type summaryInspection struct {
@@ -57,15 +61,23 @@ const (
 )
 
 type summarySourceStatus struct {
-	histogramManifest model.UISummaryManifest
-	state             summarySourceState
-	tldManifest       model.UISummaryManifest
+	dnsHistogramManifest model.UISummaryManifest
+	dnsSourceFound       bool
+	dnsTLdManifest       model.UISummaryManifest
+	dnsTwoLDManifest     model.UISummaryManifest
+	histogramManifest    model.UISummaryManifest
+	state                summarySourceState
+	tldManifest          model.UISummaryManifest
 }
 
 type sourceSummaryPaths struct {
-	histogram  string
-	tldEdges   string
-	twoLDEdges string
+	dnsHistogram  string
+	dnsSource     string
+	dnsTldEdges   string
+	dnsTwoLDEdges string
+	histogram     string
+	tldEdges      string
+	twoLDEdges    string
 }
 
 func inspectSummaryState(srcRootPath string) (summaryInspection, error) {
@@ -81,6 +93,16 @@ func inspectSummaryState(srcRootPath string) (summaryInspection, error) {
 	expectedPaths := make(map[string]struct{}, len(sourceFiles)*3)
 	inspection := summaryInspection{
 		snapshot: summarySnapshot{
+			dnsEdgeGlobByGranularity: map[Granularity]string{
+				GranularityTLD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_edges_tld_*.parquet")),
+				Granularity2LD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_edges_2ld_*.parquet")),
+			},
+			dnsEdgePathsByGranulariy: map[Granularity][]string{
+				GranularityTLD: make([]string, 0, len(sourceFiles)),
+				Granularity2LD: make([]string, 0, len(sourceFiles)),
+			},
+			dnsHistogramGlob:  filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_histogram_*.parquet")),
+			dnsHistogramPaths: make([]string, 0, len(sourceFiles)),
 			edgeGlobByGranularity: map[Granularity]string{
 				GranularityTLD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"edges_tld_*.parquet")),
 				Granularity2LD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"edges_2ld_*.parquet")),
@@ -101,6 +123,15 @@ func inspectSummaryState(srcRootPath string) (summaryInspection, error) {
 		}
 		for _, path := range []string{job.paths.tldEdges, job.paths.twoLDEdges, job.paths.histogram} {
 			expectedPaths[path] = struct{}{}
+		}
+		dnsSourceFound, err := fileExists(job.paths.dnsSource)
+		if err != nil {
+			return summaryInspection{}, err
+		}
+		if dnsSourceFound {
+			for _, path := range []string{job.paths.dnsTldEdges, job.paths.dnsTwoLDEdges, job.paths.dnsHistogram} {
+				expectedPaths[path] = struct{}{}
+			}
 		}
 
 		status, err := inspectSourceSummary(job)
@@ -142,6 +173,34 @@ func inspectSourceSummary(job summaryJob) (summarySourceStatus, error) {
 		return summarySourceStatus{state: summarySourceStateMissing}, nil
 	}
 
+	dnsSourceFound, err := fileExists(job.paths.dnsSource)
+	if err != nil {
+		return summarySourceStatus{}, err
+	}
+	var dnsTLDManifest model.UISummaryManifest
+	var dnsTwoLDManifest model.UISummaryManifest
+	var dnsHistogramManifest model.UISummaryManifest
+	if dnsSourceFound {
+		var dnsTLDFound bool
+		var dnsTwoLDFound bool
+		var dnsHistogramFound bool
+		dnsTLDManifest, dnsTLDFound, err = readUISummaryManifestIfPresent(job.paths.dnsTldEdges)
+		if err != nil {
+			return summarySourceStatus{}, err
+		}
+		dnsTwoLDManifest, dnsTwoLDFound, err = readUISummaryManifestIfPresent(job.paths.dnsTwoLDEdges)
+		if err != nil {
+			return summarySourceStatus{}, err
+		}
+		dnsHistogramManifest, dnsHistogramFound, err = readUISummaryManifestIfPresent(job.paths.dnsHistogram)
+		if err != nil {
+			return summarySourceStatus{}, err
+		}
+		if !dnsTLDFound || !dnsTwoLDFound || !dnsHistogramFound {
+			return summarySourceStatus{dnsSourceFound: true, state: summarySourceStateMissing}, nil
+		}
+	}
+
 	expectedSource := summarySourceManifest(job.sourceFile)
 	manifests := []model.UISummaryManifest{tldManifest, twoLDManifest, histogramManifest}
 	expectedKinds := []string{summaryEdgeKind, summaryEdgeKind, summaryHistogramKind}
@@ -153,17 +212,52 @@ func inspectSourceSummary(job summaryJob) (summarySourceStatus, error) {
 			manifest.Granularity != expectedGranularities[index] ||
 			manifest.Source != expectedSource {
 			return summarySourceStatus{
-				histogramManifest: histogramManifest,
-				state:             summarySourceStateStale,
-				tldManifest:       tldManifest,
+				dnsHistogramManifest: dnsHistogramManifest,
+				dnsSourceFound:       dnsSourceFound,
+				dnsTLdManifest:       dnsTLDManifest,
+				dnsTwoLDManifest:     dnsTwoLDManifest,
+				histogramManifest:    histogramManifest,
+				state:                summarySourceStateStale,
+				tldManifest:          tldManifest,
 			}, nil
 		}
 	}
 
+	if dnsSourceFound {
+		expectedDNSSource, err := dnsSummarySourceManifest(job.paths.dnsSource)
+		if err != nil {
+			return summarySourceStatus{}, err
+		}
+		dnsManifests := []model.UISummaryManifest{dnsTLDManifest, dnsTwoLDManifest, dnsHistogramManifest}
+		dnsExpectedKinds := []string{summaryEdgeKind, summaryEdgeKind, summaryHistogramKind}
+		dnsExpectedGranularities := []string{string(GranularityTLD), string(Granularity2LD), ""}
+		for index, manifest := range dnsManifests {
+			if manifest.Version != model.UISummaryManifestVersion ||
+				manifest.LogicVersion != model.UISummaryLogicVersion ||
+				manifest.Kind != dnsExpectedKinds[index] ||
+				manifest.Granularity != dnsExpectedGranularities[index] ||
+				manifest.Source != expectedDNSSource {
+				return summarySourceStatus{
+					dnsHistogramManifest: dnsHistogramManifest,
+					dnsSourceFound:       true,
+					dnsTLdManifest:       dnsTLDManifest,
+					dnsTwoLDManifest:     dnsTwoLDManifest,
+					histogramManifest:    histogramManifest,
+					state:                summarySourceStateStale,
+					tldManifest:          tldManifest,
+				}, nil
+			}
+		}
+	}
+
 	return summarySourceStatus{
-		histogramManifest: histogramManifest,
-		state:             summarySourceStateFresh,
-		tldManifest:       tldManifest,
+		dnsHistogramManifest: dnsHistogramManifest,
+		dnsSourceFound:       dnsSourceFound,
+		dnsTLdManifest:       dnsTLDManifest,
+		dnsTwoLDManifest:     dnsTwoLDManifest,
+		histogramManifest:    histogramManifest,
+		state:                summarySourceStateFresh,
+		tldManifest:          tldManifest,
 	}, nil
 }
 
@@ -171,6 +265,11 @@ func addSummaryPaths(snapshot *summarySnapshot, job summaryJob, status summarySo
 	snapshot.edgePathsByGranulariy[GranularityTLD] = append(snapshot.edgePathsByGranulariy[GranularityTLD], job.paths.tldEdges)
 	snapshot.edgePathsByGranulariy[Granularity2LD] = append(snapshot.edgePathsByGranulariy[Granularity2LD], job.paths.twoLDEdges)
 	snapshot.histogramPaths = append(snapshot.histogramPaths, job.paths.histogram)
+	if status.dnsSourceFound {
+		snapshot.dnsEdgePathsByGranulariy[GranularityTLD] = append(snapshot.dnsEdgePathsByGranulariy[GranularityTLD], job.paths.dnsTldEdges)
+		snapshot.dnsEdgePathsByGranulariy[Granularity2LD] = append(snapshot.dnsEdgePathsByGranulariy[Granularity2LD], job.paths.dnsTwoLDEdges)
+		snapshot.dnsHistogramPaths = append(snapshot.dnsHistogramPaths, job.paths.dnsHistogram)
+	}
 
 	if status.histogramManifest.SpanStartNs > 0 && status.histogramManifest.SpanEndNs > 0 {
 		if !snapshot.spanValid || status.histogramManifest.SpanStartNs < snapshot.span.StartNs {
@@ -190,9 +289,13 @@ func addSummaryPaths(snapshot *summarySnapshot, job summaryJob, status summarySo
 func summaryPathsForSource(srcRootPath string, sourceFile model.SourceFile) sourceSummaryPaths {
 	label := sourceFile.Period.Label()
 	return sourceSummaryPaths{
-		histogram:  filepath.Join(srcRootPath, summaryFilenamePrefix+"histogram_"+label+".parquet"),
-		tldEdges:   filepath.Join(srcRootPath, summaryFilenamePrefix+"edges_tld_"+label+".parquet"),
-		twoLDEdges: filepath.Join(srcRootPath, summaryFilenamePrefix+"edges_2ld_"+label+".parquet"),
+		dnsHistogram:  filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_histogram_"+label+".parquet"),
+		dnsSource:     sourceFile.Period.DNSLookupOutputPath(srcRootPath),
+		dnsTldEdges:   filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_edges_tld_"+label+".parquet"),
+		dnsTwoLDEdges: filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_edges_2ld_"+label+".parquet"),
+		histogram:     filepath.Join(srcRootPath, summaryFilenamePrefix+"histogram_"+label+".parquet"),
+		tldEdges:      filepath.Join(srcRootPath, summaryFilenamePrefix+"edges_tld_"+label+".parquet"),
+		twoLDEdges:    filepath.Join(srcRootPath, summaryFilenamePrefix+"edges_2ld_"+label+".parquet"),
 	}
 }
 
@@ -239,6 +342,26 @@ func rebuildSummaryJob(ctx context.Context, job summaryJob) error {
 		return err
 	}
 
+	dnsSourceFound, err := fileExists(job.paths.dnsSource)
+	if err != nil {
+		return err
+	}
+	if dnsSourceFound {
+		dnsSpanStartNs, dnsSpanEndNs, err := queryDNSLookupSummarySpan(ctx, db, job.paths.dnsSource)
+		if err != nil {
+			return err
+		}
+		if err := rebuildDNSEdgeSummary(ctx, db, job.paths, job.paths.dnsTldEdges, GranularityTLD, dnsSpanStartNs, dnsSpanEndNs); err != nil {
+			return err
+		}
+		if err := rebuildDNSEdgeSummary(ctx, db, job.paths, job.paths.dnsTwoLDEdges, Granularity2LD, dnsSpanStartNs, dnsSpanEndNs); err != nil {
+			return err
+		}
+		if err := rebuildDNSHistogramSummary(ctx, db, job.paths, job.paths.dnsHistogram, dnsSpanStartNs, dnsSpanEndNs); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -263,6 +386,17 @@ func querySummarySpan(ctx context.Context, db *sql.DB, sourcePath string) (int64
 	var endNs int64
 	if err := row.Scan(&startNs, &endNs); err != nil {
 		return 0, 0, fmt.Errorf("query summary span for %q: %w", sourcePath, err)
+	}
+	return startNs, endNs, nil
+}
+
+func queryDNSLookupSummarySpan(ctx context.Context, db *sql.DB, sourcePath string) (int64, int64, error) {
+	query := fmt.Sprintf("SELECT COALESCE(MIN(time_start_ns), 0), COALESCE(MAX(time_start_ns), 0) FROM read_parquet(%s)", quoteLiteral(sourcePath))
+	row := db.QueryRowContext(ctx, query)
+	var startNs int64
+	var endNs int64
+	if err := row.Scan(&startNs, &endNs); err != nil {
+		return 0, 0, fmt.Errorf("query DNS lookup summary span for %q: %w", sourcePath, err)
 	}
 	return startNs, endNs, nil
 }
@@ -411,6 +545,167 @@ ORDER BY bucket_start_ns, ip_version
 	return nil
 }
 
+func rebuildDNSEdgeSummary(
+	ctx context.Context,
+	db *sql.DB,
+	paths sourceSummaryPaths,
+	outputPath string,
+	granularity Granularity,
+	spanStartNs int64,
+	spanEndNs int64,
+) error {
+	srcExpr, dstExpr := dnsLookupEntityExpressions(granularity)
+	query := fmt.Sprintf(`
+SELECT %s AS src_entity, %s AS dst_entity,
+  0 AS bytes_total,
+  COALESCE(SUM(lookups), 0) AS lookup_total,
+  COALESCE(SUM(CASE WHEN client_is_private THEN lookups ELSE 0 END), 0) AS src_private_connections,
+  COALESCE(SUM(CASE WHEN client_is_private THEN 0 ELSE lookups END), 0) AS src_public_connections,
+  0 AS dst_private_connections,
+  COALESCE(SUM(lookups), 0) AS dst_public_connections,
+  COALESCE(MIN(time_start_ns), 0) AS first_seen_ns,
+  client_ip_version,
+  COALESCE(MAX(time_start_ns), 0) AS last_seen_ns
+FROM read_parquet(%s)
+GROUP BY src_entity, dst_entity, client_ip_version
+ORDER BY src_entity, dst_entity, client_ip_version
+`, srcExpr, dstExpr, quoteLiteral(paths.dnsSource))
+
+	sourceManifest, err := dnsSummarySourceManifest(paths.dnsSource)
+	if err != nil {
+		return err
+	}
+	manifest := model.UISummaryManifest{
+		Granularity:  string(granularity),
+		Kind:         summaryEdgeKind,
+		LogicVersion: model.UISummaryLogicVersion,
+		Source:       sourceManifest,
+		SpanEndNs:    spanEndNs,
+		SpanStartNs:  spanStartNs,
+		Version:      model.UISummaryManifestVersion,
+	}
+	writer, finalize, err := parquetout.CreateUISummaryEdges(outputPath, manifest)
+	if err != nil {
+		return err
+	}
+
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("query %s DNS summary edges for %q: %w", granularity, paths.dnsSource, err)
+	}
+	defer rows.Close()
+
+	batch := make([]parquetout.EdgeSummaryRow, 0, summaryBuildRowBatchSize)
+	for rows.Next() {
+		var row parquetout.EdgeSummaryRow
+		if err := rows.Scan(
+			&row.Source,
+			&row.Destination,
+			&row.Bytes,
+			&row.Connections,
+			&row.SrcPrivateConnections,
+			&row.SrcPublicConnections,
+			&row.DstPrivateConnections,
+			&row.DstPublicConnections,
+			&row.FirstSeenNs,
+			&row.IPVersion,
+			&row.LastSeenNs,
+		); err != nil {
+			return fmt.Errorf("scan %s DNS summary edge row for %q: %w", granularity, paths.dnsSource, err)
+		}
+		batch = append(batch, row)
+		if len(batch) < summaryBuildRowBatchSize {
+			continue
+		}
+		if err := writer.WriteBatch(batch); err != nil {
+			return err
+		}
+		batch = batch[:0]
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate %s DNS summary edge rows for %q: %w", granularity, paths.dnsSource, err)
+	}
+	if len(batch) > 0 {
+		if err := writer.WriteBatch(batch); err != nil {
+			return err
+		}
+	}
+	if err := finalize(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func rebuildDNSHistogramSummary(
+	ctx context.Context,
+	db *sql.DB,
+	paths sourceSummaryPaths,
+	outputPath string,
+	spanStartNs int64,
+	spanEndNs int64,
+) error {
+	query := fmt.Sprintf(`
+SELECT CAST(FLOOR(time_start_ns / %d) AS BIGINT) * %d AS bucket_start_ns,
+  0 AS bytes_total,
+  COALESCE(SUM(lookups), 0) AS lookup_total,
+  client_ip_version
+FROM read_parquet(%s)
+GROUP BY bucket_start_ns, client_ip_version
+ORDER BY bucket_start_ns, client_ip_version
+`, summaryBucketWidthNs, summaryBucketWidthNs, quoteLiteral(paths.dnsSource))
+
+	sourceManifest, err := dnsSummarySourceManifest(paths.dnsSource)
+	if err != nil {
+		return err
+	}
+	manifest := model.UISummaryManifest{
+		Kind:         summaryHistogramKind,
+		LogicVersion: model.UISummaryLogicVersion,
+		Source:       sourceManifest,
+		SpanEndNs:    spanEndNs,
+		SpanStartNs:  spanStartNs,
+		Version:      model.UISummaryManifestVersion,
+	}
+	writer, finalize, err := parquetout.CreateUISummaryHistogram(outputPath, manifest)
+	if err != nil {
+		return err
+	}
+
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("query DNS histogram summary for %q: %w", paths.dnsSource, err)
+	}
+	defer rows.Close()
+
+	batch := make([]parquetout.HistogramSummaryRow, 0, summaryBuildRowBatchSize)
+	for rows.Next() {
+		var row parquetout.HistogramSummaryRow
+		if err := rows.Scan(&row.BucketStartNs, &row.Bytes, &row.Connections, &row.IPVersion); err != nil {
+			return fmt.Errorf("scan DNS histogram summary row for %q: %w", paths.dnsSource, err)
+		}
+		batch = append(batch, row)
+		if len(batch) < summaryBuildRowBatchSize {
+			continue
+		}
+		if err := writer.WriteBatch(batch); err != nil {
+			return err
+		}
+		batch = batch[:0]
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate DNS histogram summary rows for %q: %w", paths.dnsSource, err)
+	}
+	if len(batch) > 0 {
+		if err := writer.WriteBatch(batch); err != nil {
+			return err
+		}
+	}
+	if err := finalize(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func cleanupStaleSummaryFiles(srcRootPath string, expectedPaths map[string]struct{}) error {
 	entries, err := os.ReadDir(srcRootPath)
 	if err != nil {
@@ -477,10 +772,32 @@ func readUISummaryManifestIfPresent(path string) (model.UISummaryManifest, bool,
 	return manifest, true, nil
 }
 
+func fileExists(path string) (bool, error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat %q: %w", path, err)
+	}
+	return true, nil
+}
+
 func summarySourceManifest(sourceFile model.SourceFile) model.SourceManifest {
 	return model.SourceManifest{
 		Path:      sourceFile.RelPath,
 		SizeByte:  sourceFile.SizeByte,
 		ModTimeNs: sourceFile.ModTime.UnixNano(),
 	}
+}
+
+func dnsSummarySourceManifest(path string) (model.SourceManifest, error) {
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		return model.SourceManifest{}, fmt.Errorf("stat %q: %w", path, err)
+	}
+	return model.SourceManifest{
+		Path:      filepath.Base(path),
+		SizeByte:  fileInfo.Size(),
+		ModTimeNs: fileInfo.ModTime().UTC().UnixNano(),
+	}, nil
 }

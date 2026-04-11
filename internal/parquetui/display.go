@@ -8,6 +8,7 @@ import (
 var metricSuffixes = map[Metric][]string{
 	MetricBytes:       {"", "kb", "mb", "gb", "tb", "pb", "eb"},
 	MetricConnections: {"", "k", "m", "g", "t", "p", "e"},
+	MetricDNSLookups:  {"", "k", "m", "g", "t", "p", "e"},
 }
 
 func formatMetricValue(metric Metric, value int64) string {

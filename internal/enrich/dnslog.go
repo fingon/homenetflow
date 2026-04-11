@@ -24,8 +24,16 @@ type dnsObservation struct {
 	time time.Time
 }
 
+type dnsLookupEvent struct {
+	clientIP  string
+	queryName string
+	queryType string
+	time      time.Time
+}
+
 type dnsIndex struct {
 	observationsByIP map[string][]dnsObservation
+	lookupEvents     []dnsLookupEvent
 }
 
 type dnsLogLoader struct {
@@ -41,8 +49,10 @@ type rawLogEntry struct {
 //nolint:tagliatelle
 type nestedLogLine struct {
 	Answers      []string `json:"answers"`
+	ClientIP     string   `json:"client_ip"`
 	Message      string   `json:"message"`
 	QueryName    string   `json:"query_name"`
+	QueryType    string   `json:"query_type"`
 	TimestampEnd string   `json:"timestamp_end"`
 }
 
@@ -61,6 +71,7 @@ func (l *dnsLogLoader) Load(logFiles []model.SourceFile) (*dnsIndex, error) {
 		for ipAddress, observations := range fileIndex.observationsByIP {
 			index.observationsByIP[ipAddress] = append(index.observationsByIP[ipAddress], observations...)
 		}
+		index.lookupEvents = append(index.lookupEvents, fileIndex.lookupEvents...)
 	}
 
 	for ipAddress := range index.observationsByIP {
@@ -83,6 +94,18 @@ func (l *dnsLogLoader) Load(logFiles []model.SourceFile) (*dnsIndex, error) {
 			return 1
 		})
 	}
+	slices.SortFunc(index.lookupEvents, func(a, b dnsLookupEvent) int {
+		if a.time.Equal(b.time) {
+			if a.clientIP == b.clientIP {
+				return strings.Compare(a.queryName, b.queryName)
+			}
+			return strings.Compare(a.clientIP, b.clientIP)
+		}
+		if a.time.Before(b.time) {
+			return -1
+		}
+		return 1
+	})
 
 	return index, nil
 }
@@ -140,11 +163,13 @@ func (i *dnsIndex) parseLine(lineBytes []byte) error {
 		return nil //nolint:nilerr
 	}
 
-	if len(nestedEntry.Answers) > 0 && nestedEntry.QueryName != "" {
+	if nestedEntry.QueryName != "" {
 		entryTime, err := parseLogTime(rawEntry.Timestamp, nestedEntry.TimestampEnd)
 		if err != nil {
 			return err
 		}
+
+		i.addLookupEvent(nestedEntry.ClientIP, nestedEntry.QueryName, nestedEntry.QueryType, entryTime)
 
 		for _, answer := range nestedEntry.Answers {
 			ipAddress := net.ParseIP(answer)
@@ -198,6 +223,25 @@ func (i *dnsIndex) addObservation(ipAddress, host string, entryTime time.Time) {
 	i.observationsByIP[ipAddress] = append(i.observationsByIP[ipAddress], dnsObservation{
 		host: normalizedHost,
 		time: entryTime.UTC(),
+	})
+}
+
+func (i *dnsIndex) addLookupEvent(clientIP, queryName, queryType string, entryTime time.Time) {
+	ipAddress := net.ParseIP(clientIP)
+	if ipAddress == nil {
+		return
+	}
+
+	normalizedQueryName := normalizeHostname(queryName)
+	if normalizedQueryName == "" {
+		return
+	}
+
+	i.lookupEvents = append(i.lookupEvents, dnsLookupEvent{
+		clientIP:  ipAddress.String(),
+		queryName: normalizedQueryName,
+		queryType: strings.ToUpper(strings.TrimSpace(queryType)),
+		time:      entryTime.UTC(),
 	})
 }
 

@@ -58,6 +58,41 @@ func TestRunEnrichesParquetFromLogs(t *testing.T) {
 	assert.Assert(t, !rows[0].DstIsPrivate)
 }
 
+func TestRunWritesDNSLookupParquet(t *testing.T) {
+	t.Parallel()
+
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
+
+	logPath := filepath.Join(srcLogDir, "2026-04-01.jsonl")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"NXDOMAIN\\\"],\\\"client_ip\\\":\\\"192.168.1.10\\\",\\\"query_name\\\":\\\"Missing.Example.\\\",\\\"query_type\\\":\\\"A\\\",\\\"timestamp_end\\\":\\\"2026-04-01T12:30:00Z\\\"}\",\"timestamp\":\"2026-04-01T12:30:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SkipDNSLookups: true,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	var records []model.DNSLookupRecord
+	assert.NilError(t, parquetout.ReadDNSLookupFile(filepath.Join(dstDir, "dns_lookups_2026040112.parquet"), func(record model.DNSLookupRecord) error {
+		records = append(records, record)
+		return nil
+	}))
+
+	assert.Equal(t, len(records), 1)
+	assert.Equal(t, records[0].ClientIP, "192.168.1.10")
+	assert.Equal(t, records[0].QueryName, "missing.example")
+	assert.Equal(t, records[0].QueryType, "A")
+	assert.Equal(t, records[0].Lookups, int64(1))
+	assert.Assert(t, records[0].ClientIsPrivate)
+}
+
 func TestRunDoesNotRebuildWhenRelevantLogIsDeleted(t *testing.T) {
 	srcParquetDir := t.TempDir()
 	srcLogDir := t.TempDir()

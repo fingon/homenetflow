@@ -325,7 +325,82 @@ func TestServiceGraphAddressFamilyUsesSummaryFastPath(t *testing.T) {
 	assert.Assert(t, containsNode(graph.Nodes, "google.com"))
 	assert.Assert(t, !containsNode(graph.Nodes, "example"))
 
-	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyIPv4, service.currentRevision())
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyIPv4, MetricBytes, service.currentRevision())
+	_, ok := service.summaryGraphCache.Get(cacheKey)
+	assert.Assert(t, ok)
+}
+
+func TestServiceGraphShowsDNSLookups(t *testing.T) {
+	const dnsLookupTestLAN = "lan"
+
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour)),
+	})
+	clientHost := "alpha.lan"
+	client2LD := dnsLookupTestLAN
+	clientTLD := dnsLookupTestLAN
+	query2LD := "example.com"
+	queryTLD := "com"
+	writeDNSLookupParquet(t, filepath.Join(tempDir, "dns_lookups_202604.parquet"), []model.DNSLookupRecord{
+		{Client2LD: &client2LD, ClientHost: &clientHost, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 1, Query2LD: &query2LD, QueryName: "www.example.com", QueryTLD: &queryTLD, QueryType: "A", TimeStartNs: int64(time.Hour)},
+		{Client2LD: &client2LD, ClientHost: &clientHost, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 1, Query2LD: &query2LD, QueryName: "www.example.com", QueryTLD: &queryTLD, QueryType: "AAAA", TimeStartNs: int64(time.Hour) + 1},
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	span, err := service.Span(context.Background())
+	assert.NilError(t, err)
+	graph, err := service.Graph(context.Background(), QueryState{
+		Granularity: GranularityHostname,
+		Metric:      MetricDNSLookups,
+	}.Normalized(span))
+	assert.NilError(t, err)
+
+	assert.Equal(t, graph.Totals.Connections, int64(2))
+	assert.Assert(t, containsNode(graph.Nodes, "alpha.lan"))
+	assert.Assert(t, containsNode(graph.Nodes, "www.example.com"))
+	assert.Equal(t, graph.Edges[0].Source, "alpha.lan")
+	assert.Equal(t, graph.Edges[0].Destination, "www.example.com")
+	assert.Equal(t, graph.Edges[0].MetricValue, int64(2))
+}
+
+func TestServiceDNSLookupSummaryFastPath(t *testing.T) {
+	const dnsLookupTestLAN = "lan"
+
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour)),
+	})
+	client2LD := dnsLookupTestLAN
+	clientTLD := dnsLookupTestLAN
+	query2LD := "example.com"
+	queryTLD := "com"
+	writeDNSLookupParquet(t, filepath.Join(tempDir, "dns_lookups_202604.parquet"), []model.DNSLookupRecord{
+		{Client2LD: &client2LD, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 1, Query2LD: &query2LD, QueryName: "www.example.com", QueryTLD: &queryTLD, QueryType: "A", TimeStartNs: int64(time.Hour)},
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	span, err := service.Span(context.Background())
+	assert.NilError(t, err)
+	state := QueryState{
+		Granularity: Granularity2LD,
+		Metric:      MetricDNSLookups,
+	}.Normalized(span)
+
+	assert.Assert(t, service.canUseSummaryGraph(state, span))
+	graph, err := service.Graph(context.Background(), state)
+	assert.NilError(t, err)
+	assert.Equal(t, graph.Totals.Connections, int64(1))
+	assert.Assert(t, containsNode(graph.Nodes, dnsLookupTestLAN))
+	assert.Assert(t, containsNode(graph.Nodes, "example.com"))
+
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, MetricDNSLookups, service.currentRevision())
 	_, ok := service.summaryGraphCache.Get(cacheKey)
 	assert.Assert(t, ok)
 }
@@ -388,7 +463,7 @@ func TestServiceGraphBuildsSummarySnapshotCache(t *testing.T) {
 	_, err = service.Graph(context.Background(), state)
 	assert.NilError(t, err)
 
-	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, service.currentRevision())
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, MetricBytes, service.currentRevision())
 	_, ok := service.summaryGraphCache.Get(cacheKey)
 	assert.Assert(t, ok)
 }
@@ -639,6 +714,18 @@ func writeEnrichedParquet(t *testing.T, path string, records []model.FlowRecord)
 	t.Helper()
 
 	writer, finalize, err := parquetout.CreateEnriched(path, model.EnrichmentManifest{
+		LogicVersion: model.EnrichmentLogicVersion,
+		Version:      model.EnrichmentManifestVersion,
+	})
+	assert.NilError(t, err)
+	assert.NilError(t, writer.WriteBatch(records))
+	assert.NilError(t, finalize())
+}
+
+func writeDNSLookupParquet(t *testing.T, path string, records []model.DNSLookupRecord) {
+	t.Helper()
+
+	writer, finalize, err := parquetout.CreateDNSLookups(path, model.EnrichmentManifest{
 		LogicVersion: model.EnrichmentLogicVersion,
 		Version:      model.EnrichmentManifestVersion,
 	})

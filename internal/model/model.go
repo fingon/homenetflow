@@ -17,7 +17,7 @@ const (
 	PeriodHour                      = "hour"
 	PeriodMonth                     = "month"
 	RefreshManifestVersion          = 2
-	UISummaryLogicVersion           = 4
+	UISummaryLogicVersion           = 5
 	UISummaryManifestVersion        = 1
 )
 
@@ -58,6 +58,14 @@ func (p Period) Label() string {
 
 func (p Period) OutputPath(dstPath string) string {
 	return filepath.Join(dstPath, p.Filename())
+}
+
+func (p Period) DNSLookupFilename() string {
+	return fmt.Sprintf("dns_lookups_%s.parquet", p.Label())
+}
+
+func (p Period) DNSLookupOutputPath(dstPath string) string {
+	return filepath.Join(dstPath, p.DNSLookupFilename())
 }
 
 type SourceFile struct {
@@ -184,6 +192,21 @@ type FlowRecord struct {
 	DstTLD       *string
 	SrcIsPrivate bool
 	DstIsPrivate bool
+}
+
+type DNSLookupRecord struct {
+	TimeStartNs     int64
+	ClientIP        string
+	ClientHost      *string
+	Client2LD       *string
+	ClientTLD       *string
+	QueryName       string
+	Query2LD        *string
+	QueryTLD        *string
+	QueryType       string
+	ClientIPVersion int32
+	Lookups         int64
+	ClientIsPrivate bool
 }
 
 type FlowParser interface {
