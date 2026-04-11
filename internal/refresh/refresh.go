@@ -40,6 +40,7 @@ func NeedsEnrichmentRebuild(
 	dstPath string,
 	sourceFile model.SourceFile,
 	logFiles []model.SourceFile,
+	skipDNSLookups bool,
 	readManifest func(string) (model.EnrichmentManifest, error),
 ) (bool, error) {
 	if _, err := os.Stat(dstPath); err != nil {
@@ -62,10 +63,13 @@ func NeedsEnrichmentRebuild(
 		return true, nil
 	}
 
-	expectedManifest := model.NewEnrichmentManifest(sourceFile, logFiles)
+	expectedManifest := model.NewEnrichmentManifest(sourceFile, logFiles, skipDNSLookups)
 	if manifest.Version != expectedManifest.Version ||
 		manifest.LogicVersion != expectedManifest.LogicVersion ||
 		manifest.Source != expectedManifest.Source {
+		return true, nil
+	}
+	if manifest.SkipDNSLookups && !skipDNSLookups {
 		return true, nil
 	}
 

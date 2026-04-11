@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	EnrichmentLogicVersion          = 3
+	EnrichmentLogicVersion          = 4
 	EnrichmentManifestVersion       = 1
 	IPVersionUnknown          int32 = 0
 	IPVersion4                int32 = 4
@@ -88,10 +88,11 @@ type RefreshManifest struct {
 }
 
 type EnrichmentManifest struct {
-	LogicVersion int              `json:"logicVersion"`
-	Logs         []SourceManifest `json:"logs"`
-	Source       SourceManifest   `json:"source"`
-	Version      int              `json:"version"`
+	LogicVersion   int              `json:"logicVersion"`
+	Logs           []SourceManifest `json:"logs"`
+	SkipDNSLookups bool             `json:"skipDnsLookups"`
+	Source         SourceManifest   `json:"source"`
+	Version        int              `json:"version"`
 }
 
 type UISummaryManifest struct {
@@ -125,12 +126,13 @@ func NewRefreshManifest(sourceFiles []SourceFile) RefreshManifest {
 	return manifest
 }
 
-func NewEnrichmentManifest(sourceFile SourceFile, logFiles []SourceFile) EnrichmentManifest {
+func NewEnrichmentManifest(sourceFile SourceFile, logFiles []SourceFile, skipDNSLookups bool) EnrichmentManifest {
 	manifest := EnrichmentManifest{
-		LogicVersion: EnrichmentLogicVersion,
-		Logs:         make([]SourceManifest, 0, len(logFiles)),
-		Source:       sourceManifestForFile(sourceFile),
-		Version:      EnrichmentManifestVersion,
+		LogicVersion:   EnrichmentLogicVersion,
+		Logs:           make([]SourceManifest, 0, len(logFiles)),
+		SkipDNSLookups: skipDNSLookups,
+		Source:         sourceManifestForFile(sourceFile),
+		Version:        EnrichmentManifestVersion,
 	}
 
 	for _, logFile := range logFiles {

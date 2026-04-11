@@ -71,7 +71,7 @@ func Run(config Config) error {
 	}
 
 	logLoader := newDNSLogLoader()
-	jobs, err := staleJobs(config.DstPath, sourceFilesByPeriod, logFiles)
+	jobs, err := staleJobs(config.DstPath, sourceFilesByPeriod, logFiles, config.SkipDNSLookups)
 	if err != nil {
 		return err
 	}
@@ -104,6 +104,7 @@ func staleJobs(
 	dstRootPath string,
 	sourceFilesByPeriod map[model.Period]model.SourceFile,
 	logFiles []model.SourceFile,
+	skipDNSLookups bool,
 ) ([]periodJob, error) {
 	periods := make([]model.Period, 0, len(sourceFilesByPeriod))
 	for period := range sourceFilesByPeriod {
@@ -135,13 +136,13 @@ func staleJobs(
 		relevantLogFiles := relevantLogFiles(period, logFiles)
 		dstPath := period.OutputPath(dstRootPath)
 
-		rebuild, err := refresh.NeedsEnrichmentRebuild(dstPath, sourceFile, relevantLogFiles, parquetout.ReadEnrichmentManifest)
+		rebuild, err := refresh.NeedsEnrichmentRebuild(dstPath, sourceFile, relevantLogFiles, skipDNSLookups, parquetout.ReadEnrichmentManifest)
 		if err != nil {
 			return nil, fmt.Errorf("check rebuild for %q: %w", dstPath, err)
 		}
 		dnsPath := period.DNSLookupOutputPath(dstRootPath)
 		if !rebuild {
-			rebuild, err = refresh.NeedsEnrichmentRebuild(dnsPath, sourceFile, relevantLogFiles, parquetout.ReadDNSLookupManifest)
+			rebuild, err = refresh.NeedsEnrichmentRebuild(dnsPath, sourceFile, relevantLogFiles, skipDNSLookups, parquetout.ReadDNSLookupManifest)
 			if err != nil {
 				return nil, fmt.Errorf("check DNS lookup rebuild for %q: %w", dnsPath, err)
 			}
@@ -245,7 +246,7 @@ func rebuildJob(
 		return err
 	}
 
-	writer, finalize, err := parquetout.CreateEnriched(job.dstPath, model.NewEnrichmentManifest(job.sourceFile, job.logFiles))
+	writer, finalize, err := parquetout.CreateEnriched(job.dstPath, model.NewEnrichmentManifest(job.sourceFile, job.logFiles, skipDNSLookups))
 	if err != nil {
 		return err
 	}
@@ -297,7 +298,7 @@ func writeDNSLookupParquet(
 	cache *reverseDNSCache,
 	skipDNSLookups bool,
 ) error {
-	writer, finalize, err := parquetout.CreateDNSLookups(job.dnsPath, model.NewEnrichmentManifest(job.sourceFile, job.logFiles))
+	writer, finalize, err := parquetout.CreateDNSLookups(job.dnsPath, model.NewEnrichmentManifest(job.sourceFile, job.logFiles, skipDNSLookups))
 	if err != nil {
 		return err
 	}

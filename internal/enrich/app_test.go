@@ -220,6 +220,53 @@ func TestRunSkipsLiveDNSLookupsButUsesExistingCache(t *testing.T) {
 	assert.Equal(t, lookupCount.Load(), int32(0))
 }
 
+func TestRunRebuildsSkippedDNSLookupOutputWhenLiveDNSIsEnabled(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
+
+	var lookupCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SkipDNSLookups: true,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	outputPath := filepath.Join(dstDir, "nfcap_2026040112.parquet")
+	manifest, err := parquetout.ReadEnrichmentManifest(outputPath)
+	assert.NilError(t, err)
+	assert.Assert(t, manifest.SkipDNSLookups)
+	rows := readRows(t, outputPath)
+	assert.Equal(t, len(rows), 1)
+	assert.Assert(t, rows[0].SrcHost == nil)
+	assert.Assert(t, rows[0].DstHost == nil)
+	assert.Equal(t, lookupCount.Load(), int32(0))
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	manifest, err = parquetout.ReadEnrichmentManifest(outputPath)
+	assert.NilError(t, err)
+	assert.Assert(t, !manifest.SkipDNSLookups)
+	rows = readRows(t, outputPath)
+	assert.Equal(t, len(rows), 1)
+	assert.Equal(t, *rows[0].SrcHost, "live.example.net")
+	assert.Equal(t, *rows[0].DstHost, "live.example.net")
+	assert.Equal(t, lookupCount.Load(), int32(2))
+}
+
 func TestRunResolvesOlderIPv6FlowThroughNeighbourMappedIPv4LogName(t *testing.T) {
 	srcParquetDir := t.TempDir()
 	srcLogDir := t.TempDir()

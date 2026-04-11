@@ -51,11 +51,13 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 	srcTLD := "fi"
 	dstHost := "example.net"
 
-	writer, finalize, err := CreateEnriched(path, model.EnrichmentManifest{
-		LogicVersion: model.EnrichmentLogicVersion,
-		Source:       model.SourceManifest{Path: "nfcap_202603.parquet", SizeByte: 123, ModTimeNs: 456},
-		Version:      model.EnrichmentManifestVersion,
-	})
+	manifest := model.EnrichmentManifest{
+		LogicVersion:   model.EnrichmentLogicVersion,
+		SkipDNSLookups: true,
+		Source:         model.SourceManifest{Path: "nfcap_202603.parquet", SizeByte: 123, ModTimeNs: 456},
+		Version:        model.EnrichmentManifestVersion,
+	}
+	writer, finalize, err := CreateEnriched(path, manifest)
 	assert.NilError(t, err)
 	assert.NilError(t, writer.Write(model.FlowRecord{
 		Bytes:        1,
@@ -92,6 +94,39 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 	assert.Equal(t, records[0].IPVersion, model.IPVersion6)
 	assert.Assert(t, records[0].DstIsPrivate)
 	assert.Assert(t, !records[0].SrcIsPrivate)
+
+	readManifest, err := ReadEnrichmentManifest(path)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, readManifest, manifest)
+}
+
+func TestDNSLookupManifestRoundTripIncludesSkipDNSLookups(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	path := tempDir + "/dns_lookups_202603.parquet"
+	manifest := model.EnrichmentManifest{
+		LogicVersion:   model.EnrichmentLogicVersion,
+		SkipDNSLookups: true,
+		Source:         model.SourceManifest{Path: "nfcap_202603.parquet", SizeByte: 123, ModTimeNs: 456},
+		Version:        model.EnrichmentManifestVersion,
+	}
+
+	writer, finalize, err := CreateDNSLookups(path, manifest)
+	assert.NilError(t, err)
+	assert.NilError(t, writer.Write(model.DNSLookupRecord{
+		ClientIP:        "192.0.2.1",
+		ClientIPVersion: model.IPVersion4,
+		Lookups:         1,
+		QueryName:       "example.net",
+		QueryType:       "A",
+		TimeStartNs:     10,
+	}))
+	assert.NilError(t, finalize())
+
+	readManifest, err := ReadDNSLookupManifest(path)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, readManifest, manifest)
 }
 
 func TestReadFileRoundTripPreservesDirection(t *testing.T) {
