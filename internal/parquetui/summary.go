@@ -415,6 +415,7 @@ func rebuildEdgeSummary(
 SELECT %s AS src_entity, %s AS dst_entity,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   COUNT(*) AS connection_total,
+  direction,
   COALESCE(SUM(CASE WHEN src_is_private THEN bytes ELSE 0 END), 0) AS src_private_bytes,
   COALESCE(SUM(CASE WHEN src_is_private THEN 1 ELSE 0 END), 0) AS src_private_connections,
   COALESCE(SUM(CASE WHEN src_is_private THEN 0 ELSE bytes END), 0) AS src_public_bytes,
@@ -427,8 +428,8 @@ SELECT %s AS src_entity, %s AS dst_entity,
   ip_version,
   COALESCE(MAX(time_end_ns), 0) AS last_seen_ns
 FROM read_parquet(%s)
-GROUP BY src_entity, dst_entity, ip_version
-ORDER BY src_entity, dst_entity, ip_version
+GROUP BY src_entity, dst_entity, direction, ip_version
+ORDER BY src_entity, dst_entity, direction, ip_version
 `, srcExpr, dstExpr, quoteLiteral(sourceFile.AbsPath))
 
 	writer, finalize, err := parquetout.CreateUISummaryEdges(outputPath, model.NewUISummaryManifest(sourceFile, summaryEdgeKind, string(granularity), spanStartNs, spanEndNs))
@@ -445,11 +446,13 @@ ORDER BY src_entity, dst_entity, ip_version
 	batch := make([]parquetout.EdgeSummaryRow, 0, summaryBuildRowBatchSize)
 	for rows.Next() {
 		var row parquetout.EdgeSummaryRow
+		var direction sql.NullInt32
 		if err := rows.Scan(
 			&row.Source,
 			&row.Destination,
 			&row.Bytes,
 			&row.Connections,
+			&direction,
 			&row.SrcPrivateBytes,
 			&row.SrcPrivateConnections,
 			&row.SrcPublicBytes,
@@ -464,6 +467,7 @@ ORDER BY src_entity, dst_entity, ip_version
 		); err != nil {
 			return fmt.Errorf("scan %s summary edge row for %q: %w", granularity, sourceFile.RelPath, err)
 		}
+		row.Direction = directionValue(direction)
 		batch = append(batch, row)
 		if len(batch) < summaryBuildRowBatchSize {
 			continue
@@ -499,10 +503,11 @@ func rebuildHistogramSummary(
 SELECT CAST(FLOOR(time_start_ns / %d) AS BIGINT) * %d AS bucket_start_ns,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   COUNT(*) AS connection_total,
+  direction,
   ip_version
 FROM read_parquet(%s)
-GROUP BY bucket_start_ns, ip_version
-ORDER BY bucket_start_ns, ip_version
+GROUP BY bucket_start_ns, direction, ip_version
+ORDER BY bucket_start_ns, direction, ip_version
 `, summaryBucketWidthNs, summaryBucketWidthNs, quoteLiteral(sourceFile.AbsPath))
 
 	writer, finalize, err := parquetout.CreateUISummaryHistogram(outputPath, model.NewUISummaryManifest(sourceFile, summaryHistogramKind, "", spanStartNs, spanEndNs))
@@ -519,9 +524,11 @@ ORDER BY bucket_start_ns, ip_version
 	batch := make([]parquetout.HistogramSummaryRow, 0, summaryBuildRowBatchSize)
 	for rows.Next() {
 		var row parquetout.HistogramSummaryRow
-		if err := rows.Scan(&row.BucketStartNs, &row.Bytes, &row.Connections, &row.IPVersion); err != nil {
+		var direction sql.NullInt32
+		if err := rows.Scan(&row.BucketStartNs, &row.Bytes, &row.Connections, &direction, &row.IPVersion); err != nil {
 			return fmt.Errorf("scan histogram summary row for %q: %w", sourceFile.RelPath, err)
 		}
+		row.Direction = directionValue(direction)
 		batch = append(batch, row)
 		if len(batch) < summaryBuildRowBatchSize {
 			continue
@@ -770,6 +777,14 @@ func readUISummaryManifestIfPresent(path string) (model.UISummaryManifest, bool,
 		return model.UISummaryManifest{}, false, nil
 	}
 	return manifest, true, nil
+}
+
+func directionValue(value sql.NullInt32) *int32 {
+	if !value.Valid {
+		return nil
+	}
+	direction := value.Int32
+	return &direction
 }
 
 func fileExists(path string) (bool, error) {

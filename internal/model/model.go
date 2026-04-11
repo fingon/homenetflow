@@ -17,7 +17,7 @@ const (
 	PeriodHour                      = "hour"
 	PeriodMonth                     = "month"
 	RefreshManifestVersion          = 2
-	UISummaryLogicVersion           = 5
+	UISummaryLogicVersion           = 6
 	UISummaryManifestVersion        = 1
 )
 

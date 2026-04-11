@@ -2,6 +2,7 @@ package parquetui
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -21,6 +22,7 @@ type summaryEdgeAggregate struct {
 	Bytes                 int64
 	Connections           int64
 	Destination           string
+	Direction             *int32
 	DstPrivateBytes       int64
 	DstPrivateConnections int64
 	DstPublicBytes        int64
@@ -78,7 +80,7 @@ func (s *Service) summaryGraph(ctx context.Context, state QueryState, span TimeS
 	}
 
 	queryStart := time.Now()
-	snapshot, err := s.summaryGraphSnapshot(ctx, state.Granularity, state.AddressFamily, state.Metric)
+	snapshot, err := s.summaryGraphSnapshot(ctx, state.Granularity, state.AddressFamily, state.Direction, state.Metric)
 	if err != nil {
 		return GraphData{}, err
 	}
@@ -152,7 +154,7 @@ func (s *Service) summaryHistogram(ctx context.Context, state QueryState) ([]His
 
 	queryStart := time.Now()
 	widthNs := max(int64(1), (state.ToNs-state.FromNs+1)/histogramBinCount)
-	whereClause, args := summaryAddressFamilyFilter(state.AddressFamily)
+	whereClause, args := summaryFilterClause(state.AddressFamily, state.Direction)
 	query := fmt.Sprintf(`
 SELECT CAST(FLOOR((bucket_start_ns - ?) / ?) AS BIGINT) AS bucket, SUM(%s) AS value
 FROM read_parquet(%s)
@@ -213,7 +215,7 @@ func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) 
 	}
 
 	if cacheState.Metric == MetricDNSLookups {
-		snapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily, MetricDNSLookups)
+		snapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily, cacheState.Direction, MetricDNSLookups)
 		if err != nil {
 			return nil, err
 		}
@@ -227,11 +229,11 @@ func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) 
 		return positions, nil
 	}
 
-	bytesSnapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily, MetricBytes)
+	bytesSnapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily, cacheState.Direction, MetricBytes)
 	if err != nil {
 		return nil, err
 	}
-	connectionSnapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily, MetricConnections)
+	connectionSnapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily, cacheState.Direction, MetricConnections)
 	if err != nil {
 		return nil, err
 	}
@@ -258,18 +260,19 @@ func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) 
 	return positions, nil
 }
 
-func (s *Service) summaryGraphSnapshot(ctx context.Context, granularity Granularity, addressFamily AddressFamily, metric Metric) (*summaryGraphSnapshotData, error) {
-	cacheKey := summaryGraphSnapshotCacheKey(granularity, addressFamily, metric, s.currentRevision())
+func (s *Service) summaryGraphSnapshot(ctx context.Context, granularity Granularity, addressFamily AddressFamily, direction DirectionFilter, metric Metric) (*summaryGraphSnapshotData, error) {
+	cacheKey := summaryGraphSnapshotCacheKey(granularity, addressFamily, direction, metric, s.currentRevision())
 	if snapshot, ok := s.summaryGraphCache.Get(cacheKey); ok {
 		return snapshot, nil
 	}
 
 	queryStart := time.Now()
-	whereClause, args := summaryAddressFamilyFilter(addressFamily)
+	whereClause, args := summaryFilterClause(addressFamily, direction)
 	query := fmt.Sprintf(`
 SELECT src_entity, dst_entity,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   COALESCE(SUM(connections), 0) AS connection_total,
+  direction,
   COALESCE(SUM(src_private_bytes), 0) AS src_private_bytes,
   COALESCE(SUM(src_private_connections), 0) AS src_private_connections,
   COALESCE(SUM(src_public_bytes), 0) AS src_public_bytes,
@@ -283,7 +286,7 @@ SELECT src_entity, dst_entity,
   COALESCE(MAX(last_seen_ns), 0) AS last_seen_ns
 FROM read_parquet(%s)
 %s
-GROUP BY src_entity, dst_entity, ip_version
+GROUP BY src_entity, dst_entity, direction, ip_version
 `, quoteLiteral(s.summaryEdgeGlob(granularity, metric)), whereClause)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -298,11 +301,13 @@ GROUP BY src_entity, dst_entity, ip_version
 	}
 	for rows.Next() {
 		var edge summaryEdgeAggregate
+		var direction sql.NullInt32
 		if err := rows.Scan(
 			&edge.Source,
 			&edge.Destination,
 			&edge.Bytes,
 			&edge.Connections,
+			&direction,
 			&edge.SrcPrivateBytes,
 			&edge.SrcPrivateConnections,
 			&edge.SrcPublicBytes,
@@ -317,6 +322,7 @@ GROUP BY src_entity, dst_entity, ip_version
 		); err != nil {
 			return nil, fmt.Errorf("scan summary graph snapshot row: %w", err)
 		}
+		edge.Direction = directionValue(direction)
 		snapshot.edges = append(snapshot.edges, edge)
 		snapshot.totals.Bytes += edge.Bytes
 		snapshot.totals.Connections += edge.Connections
@@ -326,7 +332,7 @@ GROUP BY src_entity, dst_entity, ip_version
 	}
 
 	s.summaryGraphCache.Set(cacheKey, snapshot)
-	slog.Debug("UI summary graph snapshot built", "granularity", granularity, "family", addressFamily, "edge_count", len(snapshot.edges), "duration_ms", time.Since(queryStart).Milliseconds())
+	slog.Debug("UI summary graph snapshot built", "granularity", granularity, "family", addressFamily, "direction", direction, "edge_count", len(snapshot.edges), "duration_ms", time.Since(queryStart).Milliseconds())
 	return snapshot, nil
 }
 
@@ -551,8 +557,8 @@ func viewTotalsForMetric(totals Totals, totalEntities, visibleEdges int) Totals 
 	return viewTotals
 }
 
-func summaryGraphSnapshotCacheKey(granularity Granularity, addressFamily AddressFamily, metric Metric, revision uint64) string {
-	return fmt.Sprintf("summary-graph:%d:%s:%s:%s", revision, granularity, addressFamily, metric)
+func summaryGraphSnapshotCacheKey(granularity Granularity, addressFamily AddressFamily, direction DirectionFilter, metric Metric, revision uint64) string {
+	return fmt.Sprintf("summary-graph:%d:%s:%s:%s:%s", revision, granularity, addressFamily, direction, metric)
 }
 
 func (s *Service) summaryEdgeGlob(granularity Granularity, metric Metric) string {
@@ -580,13 +586,27 @@ func summaryMetricColumn(metric Metric) string {
 	return "bytes"
 }
 
-func summaryAddressFamilyFilter(addressFamily AddressFamily) (string, []any) {
+func summaryFilterClause(addressFamily AddressFamily, direction DirectionFilter) (string, []any) {
+	conditions := []string(nil)
+	args := []any(nil)
 	switch addressFamily {
 	case AddressFamilyIPv4:
-		return "WHERE ip_version = ?", []any{model.IPVersion4}
+		conditions = append(conditions, "ip_version = ?")
+		args = append(args, model.IPVersion4)
 	case AddressFamilyIPv6:
-		return "WHERE ip_version = ?", []any{model.IPVersion6}
-	default:
+		conditions = append(conditions, "ip_version = ?")
+		args = append(args, model.IPVersion6)
+	}
+	switch direction {
+	case DirectionOutbound:
+		conditions = append(conditions, "direction = ?")
+		args = append(args, directionOutboundParquetValue)
+	case DirectionInbound:
+		conditions = append(conditions, "direction = ?")
+		args = append(args, directionInboundParquetValue)
+	}
+	if len(conditions) == 0 {
 		return "", nil
 	}
+	return "WHERE " + strings.Join(conditions, " AND "), args
 }

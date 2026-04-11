@@ -2,6 +2,8 @@
   const errorClassName = "is-error";
   const collapsedClassName = "is-collapsed";
   const collapsibleToggleSelector = "[data-collapsible-toggle]";
+  const directionBothValue = "both";
+  const directionName = "direction";
   const graphSceneSelector = ".graph-scene";
   const granularityName = "granularity";
   const histogramTooltipClassName = "histogram-tooltip";
@@ -25,6 +27,7 @@
   const searchBehavior = "search";
   const statusErrorMessage = "Request failed.";
   const statusSelector = "#loading-indicator";
+  const metricDNSLookupsValue = "dns_lookups";
   const versionPath = "/version";
 
   let hotReloadInitialized = false;
@@ -69,8 +72,13 @@
         return;
       }
 
-      if (target.getAttribute("name") === "metric" && sortInput) {
-        sortInput.value = defaultSortForMetric(target.value);
+      if (target.getAttribute("name") === "metric") {
+        if (sortInput) {
+          sortInput.value = defaultSortForMetric(target.value);
+        }
+        if (target.value === metricDNSLookupsValue) {
+          resetDirection(form);
+        }
       }
 
       if (target.getAttribute("name") === granularityName && nodeLimitSelect) {
@@ -293,6 +301,13 @@
 
   function submitForm(form) {
     form.requestSubmit();
+  }
+
+  function resetDirection(form) {
+    const bothInput = form.querySelector(`input[name="${directionName}"][value="${directionBothValue}"]`);
+    if (bothInput instanceof HTMLInputElement) {
+      bothInput.checked = true;
+    }
   }
 
   function bindGraph(graphCanvas) {
@@ -579,7 +594,10 @@
   }
 
   function defaultSortForMetric(metricValue) {
-    return metricValue === "connections" ? "connections" : "bytes";
+    if (metricValue === "connections" || metricValue === metricDNSLookupsValue) {
+      return metricValue;
+    }
+    return "bytes";
   }
 
   function maxBigInt(leftValue, rightValue) {

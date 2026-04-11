@@ -60,8 +60,17 @@ const (
 	AddressFamilyIPv6 AddressFamily = "ipv6"
 )
 
+type DirectionFilter string
+
+const (
+	DirectionBoth     DirectionFilter = "both"
+	DirectionOutbound DirectionFilter = "outbound"
+	DirectionInbound  DirectionFilter = "inbound"
+)
+
 type QueryState struct {
 	AddressFamily   AddressFamily
+	Direction       DirectionFilter
 	EdgeLimit       int
 	Exclude         []string
 	FromNs          int64
@@ -83,6 +92,7 @@ type QueryState struct {
 //nolint:tagliatelle
 type ClientState struct {
 	AddressFamily   string   `json:"family"`
+	Direction       string   `json:"direction"`
 	EdgeLimit       int      `json:"edge_limit"`
 	Exclude         []string `json:"exclude"`
 	From            int64    `json:"from"`
@@ -109,6 +119,7 @@ func ParseQueryState(r *http.Request) QueryState {
 	query := r.URL.Query()
 	state := QueryState{
 		AddressFamily:   AddressFamilyAll,
+		Direction:       DirectionBoth,
 		EdgeLimit:       defaultEdgeLimit,
 		Exclude:         compactValues(query["exclude"]),
 		Granularity:     Granularity2LD,
@@ -126,6 +137,10 @@ func ParseQueryState(r *http.Request) QueryState {
 
 	if addressFamily := AddressFamily(query.Get("family")); addressFamily.valid() {
 		state.AddressFamily = addressFamily
+	}
+
+	if direction := DirectionFilter(query.Get("direction")); direction.valid() {
+		state.Direction = direction
 	}
 
 	if metric := Metric(query.Get("metric")); metric.valid() {
@@ -171,8 +186,14 @@ func (s QueryState) Normalized(span TimeSpan) QueryState {
 	if !state.AddressFamily.valid() {
 		state.AddressFamily = AddressFamilyAll
 	}
+	if !state.Direction.valid() {
+		state.Direction = DirectionBoth
+	}
 	if !state.Metric.valid() {
 		state.Metric = MetricBytes
+	}
+	if state.Metric == MetricDNSLookups {
+		state.Direction = DirectionBoth
 	}
 	if !state.Sort.valid() {
 		state.Sort = defaultSortForMetric(state.Metric)
@@ -218,6 +239,9 @@ func (s QueryState) Values() url.Values {
 	}
 	if s.AddressFamily != "" && s.AddressFamily != AddressFamilyAll {
 		values.Set("family", string(s.AddressFamily))
+	}
+	if s.Direction != "" && s.Direction != DirectionBoth {
+		values.Set("direction", string(s.Direction))
 	}
 	values.Set("metric", string(s.Metric))
 	values.Set("granularity", string(s.Granularity))
@@ -265,6 +289,7 @@ func (s QueryState) Clone() QueryState {
 func (s QueryState) ClientState() ClientState {
 	return ClientState{
 		AddressFamily:   string(s.AddressFamily),
+		Direction:       string(s.Direction),
 		EdgeLimit:       s.EdgeLimit,
 		Exclude:         append([]string(nil), s.Exclude...),
 		From:            s.FromNs,
@@ -438,6 +463,10 @@ func (g Granularity) valid() bool {
 
 func (a AddressFamily) valid() bool {
 	return a == AddressFamilyAll || a == AddressFamilyIPv4 || a == AddressFamilyIPv6
+}
+
+func (d DirectionFilter) valid() bool {
+	return d == DirectionBoth || d == DirectionOutbound || d == DirectionInbound
 }
 
 func (s TableSort) valid() bool {

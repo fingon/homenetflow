@@ -16,6 +16,11 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+const (
+	dnsLookupTestQuery2LD = "example.com"
+	dnsLookupTestQueryTLD = "com"
+)
+
 func TestNewServiceRejectsBaseParquet(t *testing.T) {
 	tempDir := t.TempDir()
 	writeBaseParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"))
@@ -102,6 +107,40 @@ func TestAppIndexRendersDevMetadataInDevMode(t *testing.T) {
 	assert.Equal(t, recorder.Code, http.StatusOK)
 	assert.Assert(t, strings.Contains(recorder.Body.String(), `data-dev-mode="true"`))
 	assert.Assert(t, strings.Contains(recorder.Body.String(), `data-dev-session-token="dev-token"`))
+}
+
+func TestAppIndexDisablesDirectionForDNSLookups(t *testing.T) {
+	const dnsLookupTestLAN = "lan"
+
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour)),
+	})
+	client2LD := dnsLookupTestLAN
+	clientTLD := dnsLookupTestLAN
+	query2LD := dnsLookupTestQuery2LD
+	queryTLD := dnsLookupTestQueryTLD
+	writeDNSLookupParquet(t, filepath.Join(tempDir, "dns_lookups_202604.parquet"), []model.DNSLookupRecord{
+		{Client2LD: &client2LD, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 1, Query2LD: &query2LD, QueryName: "www.example.com", QueryTLD: &queryTLD, QueryType: "A", TimeStartNs: int64(time.Hour)},
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	app := &App{service: service}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/?metric=dns_lookups&direction=inbound", nil)
+
+	app.routes().ServeHTTP(recorder, request)
+
+	assert.Equal(t, recorder.Code, http.StatusOK)
+	body := recorder.Body.String()
+	assert.Assert(t, strings.Contains(body, "Direction"))
+	assert.Assert(t, strings.Contains(body, `name="direction"`))
+	assert.Assert(t, strings.Contains(body, `value="both"`))
+	assert.Assert(t, strings.Contains(body, `disabled`))
+	assert.Assert(t, !strings.Contains(body, "Direction: Inbound"))
 }
 
 func TestAppIndexRendersAppShellForHTMXRequests(t *testing.T) {
@@ -298,6 +337,79 @@ func TestServiceGraphFiltersByAddressFamilyIPv6(t *testing.T) {
 	assert.Assert(t, !containsNode(graph.Nodes, "dns.google"))
 }
 
+func TestServiceGraphFiltersByDirection(t *testing.T) {
+	tempDir := t.TempDir()
+	outboundDirection := directionOutboundParquetValue
+	inboundDirection := directionInboundParquetValue
+	outboundRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
+	outboundRecord.Direction = &outboundDirection
+	inboundRecord := sampleRecord("8.8.4.4", "192.168.1.11", "dns-alt.google", "google.com", "com", "beta.lan", "lan", "lan", 200, 30, 40)
+	inboundRecord.Direction = &inboundDirection
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		outboundRecord,
+		inboundRecord,
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	outboundGraph, err := service.Graph(context.Background(), QueryState{
+		Direction:   DirectionOutbound,
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+	})
+	assert.NilError(t, err)
+
+	inboundGraph, err := service.Graph(context.Background(), QueryState{
+		Direction:   DirectionInbound,
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+	})
+	assert.NilError(t, err)
+
+	assert.Equal(t, outboundGraph.Totals.Connections, int64(1))
+	assert.Equal(t, outboundGraph.Totals.Bytes, int64(100))
+	assert.Assert(t, containsNode(outboundGraph.Nodes, "alpha.lan"))
+	assert.Assert(t, !containsNode(outboundGraph.Nodes, "beta.lan"))
+	assert.Equal(t, inboundGraph.Totals.Connections, int64(1))
+	assert.Equal(t, inboundGraph.Totals.Bytes, int64(200))
+	assert.Assert(t, containsNode(inboundGraph.Nodes, "beta.lan"))
+	assert.Assert(t, !containsNode(inboundGraph.Nodes, "alpha.lan"))
+}
+
+func TestServiceHistogramFiltersByDirection(t *testing.T) {
+	tempDir := t.TempDir()
+	outboundDirection := directionOutboundParquetValue
+	inboundDirection := directionInboundParquetValue
+	outboundRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
+	outboundRecord.Direction = &outboundDirection
+	inboundRecord := sampleRecord("8.8.4.4", "192.168.1.11", "dns-alt.google", "google.com", "com", "beta.lan", "lan", "lan", 200, 110, 120)
+	inboundRecord.Direction = &inboundDirection
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		outboundRecord,
+		inboundRecord,
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	bins, err := service.Histogram(context.Background(), QueryState{
+		Direction: DirectionOutbound,
+		Metric:    MetricBytes,
+		FromNs:    10,
+		ToNs:      120,
+	})
+	assert.NilError(t, err)
+
+	var total int64
+	for _, bin := range bins {
+		total += bin.Value
+	}
+	assert.Equal(t, total, int64(100))
+}
+
 func TestServiceGraphAddressFamilyUsesSummaryFastPath(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
@@ -325,7 +437,45 @@ func TestServiceGraphAddressFamilyUsesSummaryFastPath(t *testing.T) {
 	assert.Assert(t, containsNode(graph.Nodes, "google.com"))
 	assert.Assert(t, !containsNode(graph.Nodes, "example"))
 
-	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyIPv4, MetricBytes, service.currentRevision())
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyIPv4, DirectionBoth, MetricBytes, service.currentRevision())
+	_, ok := service.summaryGraphCache.Get(cacheKey)
+	assert.Assert(t, ok)
+}
+
+func TestServiceGraphDirectionUsesSummaryFastPath(t *testing.T) {
+	tempDir := t.TempDir()
+	outboundDirection := directionOutboundParquetValue
+	inboundDirection := directionInboundParquetValue
+	outboundRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour))
+	outboundRecord.Direction = &outboundDirection
+	inboundRecord := sampleRecord("8.8.4.4", "192.168.1.11", "dns-alt.google", "google.com", "com", "beta.lan", "lan", "lan", 200, int64(3*time.Hour), int64(4*time.Hour))
+	inboundRecord.Direction = &inboundDirection
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		outboundRecord,
+		inboundRecord,
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	span, err := service.Span(context.Background())
+	assert.NilError(t, err)
+	state := QueryState{
+		Direction:   DirectionOutbound,
+		Granularity: Granularity2LD,
+		Metric:      MetricBytes,
+	}.Normalized(span)
+
+	assert.Assert(t, service.canUseSummaryGraph(state, span))
+
+	graph, err := service.Graph(context.Background(), state)
+	assert.NilError(t, err)
+	assert.Equal(t, graph.Totals.Bytes, int64(100))
+	assert.Assert(t, containsNode(graph.Nodes, "google.com"))
+	assert.Assert(t, !containsNode(graph.Nodes, "beta.lan"))
+
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionOutbound, MetricBytes, service.currentRevision())
 	_, ok := service.summaryGraphCache.Get(cacheKey)
 	assert.Assert(t, ok)
 }
@@ -340,8 +490,8 @@ func TestServiceGraphShowsDNSLookups(t *testing.T) {
 	clientHost := "alpha.lan"
 	client2LD := dnsLookupTestLAN
 	clientTLD := dnsLookupTestLAN
-	query2LD := "example.com"
-	queryTLD := "com"
+	query2LD := dnsLookupTestQuery2LD
+	queryTLD := dnsLookupTestQueryTLD
 	writeDNSLookupParquet(t, filepath.Join(tempDir, "dns_lookups_202604.parquet"), []model.DNSLookupRecord{
 		{Client2LD: &client2LD, ClientHost: &clientHost, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 1, Query2LD: &query2LD, QueryName: "www.example.com", QueryTLD: &queryTLD, QueryType: "A", TimeStartNs: int64(time.Hour)},
 		{Client2LD: &client2LD, ClientHost: &clientHost, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 1, Query2LD: &query2LD, QueryName: "www.example.com", QueryTLD: &queryTLD, QueryType: "AAAA", TimeStartNs: int64(time.Hour) + 1},
@@ -376,8 +526,8 @@ func TestServiceDNSLookupSummaryFastPath(t *testing.T) {
 	})
 	client2LD := dnsLookupTestLAN
 	clientTLD := dnsLookupTestLAN
-	query2LD := "example.com"
-	queryTLD := "com"
+	query2LD := dnsLookupTestQuery2LD
+	queryTLD := dnsLookupTestQueryTLD
 	writeDNSLookupParquet(t, filepath.Join(tempDir, "dns_lookups_202604.parquet"), []model.DNSLookupRecord{
 		{Client2LD: &client2LD, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 1, Query2LD: &query2LD, QueryName: "www.example.com", QueryTLD: &queryTLD, QueryType: "A", TimeStartNs: int64(time.Hour)},
 	})
@@ -400,7 +550,7 @@ func TestServiceDNSLookupSummaryFastPath(t *testing.T) {
 	assert.Assert(t, containsNode(graph.Nodes, dnsLookupTestLAN))
 	assert.Assert(t, containsNode(graph.Nodes, "example.com"))
 
-	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, MetricDNSLookups, service.currentRevision())
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricDNSLookups, service.currentRevision())
 	_, ok := service.summaryGraphCache.Get(cacheKey)
 	assert.Assert(t, ok)
 }
@@ -463,7 +613,7 @@ func TestServiceGraphBuildsSummarySnapshotCache(t *testing.T) {
 	_, err = service.Graph(context.Background(), state)
 	assert.NilError(t, err)
 
-	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, MetricBytes, service.currentRevision())
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricBytes, service.currentRevision())
 	_, ok := service.summaryGraphCache.Get(cacheKey)
 	assert.Assert(t, ok)
 }
@@ -518,6 +668,43 @@ func TestNewServiceBuildsUISummariesWithIPVersion(t *testing.T) {
 	assert.Assert(t, containsEdgeSummaryIPVersion(edgeRows, model.IPVersion6))
 	assert.Assert(t, containsHistogramSummaryIPVersion(histogramRows, model.IPVersion4))
 	assert.Assert(t, containsHistogramSummaryIPVersion(histogramRows, model.IPVersion6))
+}
+
+func TestNewServiceBuildsUISummariesWithDirection(t *testing.T) {
+	tempDir := t.TempDir()
+	outboundDirection := directionOutboundParquetValue
+	inboundDirection := directionInboundParquetValue
+	outboundRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour))
+	outboundRecord.Direction = &outboundDirection
+	inboundRecord := sampleRecord("8.8.4.4", "192.168.1.11", "dns-alt.google", "google.com", "com", "beta.lan", "lan", "lan", 200, int64(3*time.Hour), int64(4*time.Hour))
+	inboundRecord.Direction = &inboundDirection
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		outboundRecord,
+		inboundRecord,
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	var edgeRows []parquetout.EdgeSummaryRow
+	err = parquetout.ReadEdgeSummaryRows(filepath.Join(tempDir, "ui_summary_edges_2ld_202604.parquet"), func(rows []parquetout.EdgeSummaryRow) error {
+		edgeRows = append(edgeRows, rows...)
+		return nil
+	})
+	assert.NilError(t, err)
+
+	var histogramRows []parquetout.HistogramSummaryRow
+	err = parquetout.ReadHistogramSummaryRows(filepath.Join(tempDir, "ui_summary_histogram_202604.parquet"), func(rows []parquetout.HistogramSummaryRow) error {
+		histogramRows = append(histogramRows, rows...)
+		return nil
+	})
+	assert.NilError(t, err)
+
+	assert.Assert(t, containsEdgeSummaryDirection(edgeRows, directionOutboundParquetValue))
+	assert.Assert(t, containsEdgeSummaryDirection(edgeRows, directionInboundParquetValue))
+	assert.Assert(t, containsHistogramSummaryDirection(histogramRows, directionOutboundParquetValue))
+	assert.Assert(t, containsHistogramSummaryDirection(histogramRows, directionInboundParquetValue))
 }
 
 func TestServiceRefreshMetadataRemovesStaleUISummaries(t *testing.T) {
@@ -689,6 +876,24 @@ func containsEdgeSummaryIPVersion(rows []parquetout.EdgeSummaryRow, ipVersion in
 func containsHistogramSummaryIPVersion(rows []parquetout.HistogramSummaryRow, ipVersion int32) bool {
 	for _, row := range rows {
 		if row.IPVersion == ipVersion {
+			return true
+		}
+	}
+	return false
+}
+
+func containsEdgeSummaryDirection(rows []parquetout.EdgeSummaryRow, direction int32) bool {
+	for _, row := range rows {
+		if row.Direction != nil && *row.Direction == direction {
+			return true
+		}
+	}
+	return false
+}
+
+func containsHistogramSummaryDirection(rows []parquetout.HistogramSummaryRow, direction int32) bool {
+	for _, row := range rows {
+		if row.Direction != nil && *row.Direction == direction {
 			return true
 		}
 	}

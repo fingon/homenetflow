@@ -16,6 +16,7 @@ func TestParseQueryStateDefaults(t *testing.T) {
 	assert.Equal(t, state.Metric, MetricBytes)
 	assert.Equal(t, state.Granularity, Granularity2LD)
 	assert.Equal(t, state.AddressFamily, AddressFamilyAll)
+	assert.Equal(t, state.Direction, DirectionBoth)
 	assert.Equal(t, state.EdgeLimit, defaultEdgeLimit)
 	assert.Equal(t, state.Page, defaultPage)
 	assert.Equal(t, state.PageSize, defaultPageSize)
@@ -35,6 +36,22 @@ func TestParseQueryStateInvalidAddressFamilyDefaultsToAll(t *testing.T) {
 	state := ParseQueryState(request)
 
 	assert.Equal(t, state.AddressFamily, AddressFamilyAll)
+}
+
+func TestParseQueryStateDirection(t *testing.T) {
+	request := httptest.NewRequest("GET", "/?direction=inbound", nil)
+
+	state := ParseQueryState(request)
+
+	assert.Equal(t, state.Direction, DirectionInbound)
+}
+
+func TestParseQueryStateInvalidDirectionDefaultsToBoth(t *testing.T) {
+	request := httptest.NewRequest("GET", "/?direction=sideways", nil)
+
+	state := ParseQueryState(request)
+
+	assert.Equal(t, state.Direction, DirectionBoth)
 }
 
 func TestParseQueryStateDefaultsSortForConnectionsMetric(t *testing.T) {
@@ -63,6 +80,20 @@ func TestQueryStateNormalizedAppliesSpanAndNodeLimit(t *testing.T) {
 	assert.Equal(t, normalized.ToNs, int64(100))
 	assert.Equal(t, normalized.NodeLimit, 150)
 	assert.Equal(t, normalized.Metric, MetricConnections)
+}
+
+func TestQueryStateNormalizedResetsDirectionForDNSLookups(t *testing.T) {
+	state := QueryState{
+		Direction: DirectionInbound,
+		Metric:    MetricDNSLookups,
+	}
+
+	normalized := state.Normalized(TimeSpan{
+		StartNs: 10,
+		EndNs:   100,
+	})
+
+	assert.Equal(t, normalized.Direction, DirectionBoth)
 }
 
 func TestQueryStateNormalizedExpandsPresetIntoRange(t *testing.T) {
@@ -110,6 +141,7 @@ func TestQueryStateNormalizedDefaultsSortForMetric(t *testing.T) {
 func TestQueryStateValuesSkipPreset(t *testing.T) {
 	state := QueryState{
 		AddressFamily: AddressFamilyIPv4,
+		Direction:     DirectionOutbound,
 		FromNs:        10,
 		ToNs:          20,
 		Metric:        MetricBytes,
@@ -122,7 +154,21 @@ func TestQueryStateValuesSkipPreset(t *testing.T) {
 
 	assert.Equal(t, values.Get("preset"), "")
 	assert.Equal(t, values.Get("family"), "ipv4")
+	assert.Equal(t, values.Get("direction"), "outbound")
 	assert.Equal(t, values.Get("view"), "")
+}
+
+func TestQueryStateValuesSkipDefaultDirection(t *testing.T) {
+	state := QueryState{
+		Direction:   DirectionBoth,
+		Metric:      MetricBytes,
+		Granularity: Granularity2LD,
+		Sort:        SortBytes,
+	}
+
+	values := state.Values()
+
+	assert.Equal(t, values.Get("direction"), "")
 }
 
 func TestParseQueryStateIgnoresLegacyView(t *testing.T) {

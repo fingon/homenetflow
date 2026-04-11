@@ -155,6 +155,11 @@ func SummaryPanel(state QueryState, graph GraphData) g.Node {
 	if currentAddressFamily != AddressFamilyAll {
 		addressFamilyChip = Span(Class("chip"), g.Text("Address Family: "+addressFamilyLabel(currentAddressFamily)))
 	}
+	currentDirection := normalizedDirection(state.Direction)
+	directionChip := g.Node(nil)
+	if currentDirection != DirectionBoth {
+		directionChip = Span(Class("chip"), g.Text("Direction: "+directionLabel(currentDirection)))
+	}
 
 	return Div(
 		Class("summary-panel"),
@@ -163,6 +168,7 @@ func SummaryPanel(state QueryState, graph GraphData) g.Node {
 			Class("filter-list"),
 			Span(Class("chip"), g.Text("Time: "+formatNsRange(state.FromNs, state.ToNs))),
 			addressFamilyChip,
+			directionChip,
 			renderNodes(state.Include, func(item string) g.Node {
 				return Span(Class("chip"), g.Text("Entity: "+item))
 			}),
@@ -325,6 +331,8 @@ func TablePanel(state QueryState, table TableData) g.Node {
 func topBar(dashboard DashboardData) g.Node {
 	state := dashboard.State
 	currentAddressFamily := normalizedAddressFamily(state.AddressFamily)
+	currentDirection := normalizedDirection(state.Direction)
+	directionDisabled := state.Metric == MetricDNSLookups
 
 	return Header(
 		Class("top-bar"),
@@ -374,6 +382,13 @@ func topBar(dashboard DashboardData) g.Node {
 					toggleRadio("family", string(AddressFamilyAll), "All", currentAddressFamily == AddressFamilyAll),
 					toggleRadio("family", string(AddressFamilyIPv4), "IPv4", currentAddressFamily == AddressFamilyIPv4),
 					toggleRadio("family", string(AddressFamilyIPv6), "IPv6", currentAddressFamily == AddressFamilyIPv6),
+				),
+				Div(
+					Class("group segmented"),
+					Label(g.Text("Direction")),
+					toggleRadioDisabled("direction", string(DirectionBoth), "Both", currentDirection == DirectionBoth, directionDisabled),
+					toggleRadioDisabled("direction", string(DirectionOutbound), "Outbound", currentDirection == DirectionOutbound, directionDisabled),
+					toggleRadioDisabled("direction", string(DirectionInbound), "Inbound", currentDirection == DirectionInbound, directionDisabled),
 				),
 				Div(
 					Class("group"),
@@ -438,9 +453,13 @@ func renderHiddenValues(name string, values []string) g.Node {
 }
 
 func toggleRadio(name, value, label string, checked bool) g.Node {
+	return toggleRadioDisabled(name, value, label, checked, false)
+}
+
+func toggleRadioDisabled(name, value, label string, checked, disabled bool) g.Node {
 	return Label(
-		Class(buttonClass(checked)),
-		Input(Type("radio"), Name(name), Value(value), checkedIf(checked)),
+		Class(buttonClassDisabled(checked, disabled)),
+		Input(Type("radio"), Name(name), Value(value), checkedIf(checked), disabledIf(disabled)),
 		Span(g.Text(label)),
 	)
 }
@@ -774,6 +793,14 @@ func buttonClass(active bool) string {
 	return "action-button"
 }
 
+func buttonClassDisabled(active, disabled bool) string {
+	className := buttonClass(active)
+	if disabled {
+		className += " disabled"
+	}
+	return className
+}
+
 func optionValue(value, label string, selected bool) g.Node {
 	return Option(Value(value), selectedIf(selected), g.Text(label))
 }
@@ -788,6 +815,13 @@ func selectedIf(selected bool) g.Node {
 func checkedIf(checked bool) g.Node {
 	if checked {
 		return Checked()
+	}
+	return nil
+}
+
+func disabledIf(disabled bool) g.Node {
+	if disabled {
+		return Disabled()
 	}
 	return nil
 }
@@ -842,11 +876,29 @@ func addressFamilyLabel(addressFamily AddressFamily) string {
 	}
 }
 
+func directionLabel(direction DirectionFilter) string {
+	switch direction {
+	case DirectionOutbound:
+		return "Outbound"
+	case DirectionInbound:
+		return "Inbound"
+	default:
+		return "Both"
+	}
+}
+
 func normalizedAddressFamily(addressFamily AddressFamily) AddressFamily {
 	if !addressFamily.valid() {
 		return AddressFamilyAll
 	}
 	return addressFamily
+}
+
+func normalizedDirection(direction DirectionFilter) DirectionFilter {
+	if !direction.valid() {
+		return DirectionBoth
+	}
+	return direction
 }
 
 func graphSVGClass(graph GraphData) string {

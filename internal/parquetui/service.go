@@ -21,25 +21,28 @@ import (
 )
 
 const (
-	filteredCTEName         = "filtered_flows"
-	graphRestSourceID       = "Rest Sources"
-	graphRestDestination    = "Rest Destinations"
-	histogramCacheKind      = "histogram"
-	histogramBinCount       = 48
-	layoutCacheKind         = "layout"
-	nodeDetailPeerLimit     = 12
-	graphCacheKind          = "graph"
-	dnsLookupFilenamePrefix = "dns_lookups_"
-	resultCacheLimit        = 96
-	restTopEntityLimit      = 10
-	srcEntityColumn         = "src_entity"
-	summaryTopItemLimit     = 10
-	tableCacheKind          = "table"
-	dstEntityColumn         = "dst_entity"
+	directionInboundParquetValue  int32 = 1
+	directionOutboundParquetValue int32 = 0
+	filteredCTEName                     = "filtered_flows"
+	graphRestSourceID                   = "Rest Sources"
+	graphRestDestination                = "Rest Destinations"
+	histogramCacheKind                  = "histogram"
+	histogramBinCount                   = 48
+	layoutCacheKind                     = "layout"
+	nodeDetailPeerLimit                 = 12
+	graphCacheKind                      = "graph"
+	dnsLookupFilenamePrefix             = "dns_lookups_"
+	resultCacheLimit                    = 96
+	restTopEntityLimit                  = 10
+	srcEntityColumn                     = "src_entity"
+	summaryTopItemLimit                 = 10
+	tableCacheKind                      = "table"
+	dstEntityColumn                     = "dst_entity"
 )
 
 var requiredColumns = []string{
 	"bytes",
+	"direction",
 	"dst_2ld",
 	"dst_host",
 	"dst_ip",
@@ -1151,6 +1154,17 @@ func filterClause(state QueryState, srcExpr, dstExpr string) (string, []any) {
 		args = append(args, searchLike, searchLike)
 	}
 
+	if state.Metric != MetricDNSLookups {
+		switch state.Direction {
+		case DirectionOutbound:
+			conditions = append(conditions, "direction = ?")
+			args = append(args, directionOutboundParquetValue)
+		case DirectionInbound:
+			conditions = append(conditions, "direction = ?")
+			args = append(args, directionInboundParquetValue)
+		}
+	}
+
 	switch state.AddressFamily {
 	case AddressFamilyIPv4:
 		conditions = append(conditions, "ip_version = ?")
@@ -1337,6 +1351,9 @@ func buildBreadcrumbs(state QueryState) []string {
 	}
 	if len(state.Exclude) > 0 {
 		breadcrumbs = append(breadcrumbs, "Exclude: "+strings.Join(state.Exclude, ", "))
+	}
+	if state.Direction != "" && state.Direction != DirectionBoth {
+		breadcrumbs = append(breadcrumbs, "Direction: "+directionLabel(state.Direction))
 	}
 	return breadcrumbs
 }
