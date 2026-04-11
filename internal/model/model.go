@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	EnrichmentLogicVersion          = 2
+	EnrichmentLogicVersion          = 3
 	EnrichmentManifestVersion       = 1
 	IPVersionUnknown          int32 = 0
 	IPVersion4                int32 = 4

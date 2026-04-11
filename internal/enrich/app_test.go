@@ -185,6 +185,128 @@ func TestRunSkipsLiveDNSLookupsButUsesExistingCache(t *testing.T) {
 	assert.Equal(t, lookupCount.Load(), int32(0))
 }
 
+func TestRunResolvesOlderIPv6FlowThroughNeighbourMappedIPv4LogName(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+	stubReverseLookup(t, nil)
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, model.FlowRecord{
+		SrcIP:       "2001:db8::10",
+		DstIP:       "198.51.100.20",
+		SrcPort:     123,
+		DstPort:     443,
+		IPVersion:   model.IPVersion6,
+		Protocol:    6,
+		Packets:     1,
+		Bytes:       2,
+		TimeStartNs: time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC).UnixNano(),
+		TimeEndNs:   time.Date(2026, 4, 1, 12, 30, 1, 0, time.UTC).UnixNano(),
+		DurationNs:  int64(time.Second),
+	})
+
+	logPath := filepath.Join(srcLogDir, "2026-04-01.jsonl")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"192.0.2.10\\\"],\\\"query_name\\\":\\\"mapped.example.net\\\",\\\"timestamp_end\\\":\\\"2026-04-01T12:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T12:00:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	neighbourLogPath := filepath.Join(srcLogDir, "2026-04-10.jsonl")
+	neighbourLogContents := []byte("{\"line\":\"{\\\"dst\\\":\\\"192.0.2.10\\\",\\\"lladdr\\\":\\\"aa:bb:cc:dd:ee:ff\\\"}\",\"timestamp\":\"2026-04-10T12:00:00Z\"}\n" +
+		"{\"line\":\"{\\\"dst\\\":\\\"2001:db8::10\\\",\\\"lladdr\\\":\\\"aa:bb:cc:dd:ee:ff\\\"}\",\"timestamp\":\"2026-04-10T12:00:01Z\"}\n")
+	assert.NilError(t, os.WriteFile(neighbourLogPath, neighbourLogContents, 0o600))
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, len(rows), 1)
+	assert.Equal(t, *rows[0].SrcHost, "mapped.example.net")
+	assert.Equal(t, *rows[0].Src2LD, "example.net")
+	assert.Equal(t, *rows[0].SrcTLD, "net")
+}
+
+func TestRunResolvesIPv6ThroughNeighbourMappedIPv4ReverseCache(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, model.FlowRecord{
+		SrcIP:       "2001:db8::10",
+		DstIP:       "198.51.100.20",
+		SrcPort:     123,
+		DstPort:     443,
+		IPVersion:   model.IPVersion6,
+		Protocol:    6,
+		Packets:     1,
+		Bytes:       2,
+		TimeStartNs: time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC).UnixNano(),
+		TimeEndNs:   time.Date(2026, 4, 1, 12, 30, 1, 0, time.UTC).UnixNano(),
+		DurationNs:  int64(time.Second),
+	})
+
+	cachePath := filepath.Join(dstDir, reverseDNSCacheFilename)
+	cacheContents := []byte("{\"ip\":\"192.0.2.10\",\"host\":\"cached.example.net\"}\n")
+	assert.NilError(t, os.WriteFile(cachePath, cacheContents, 0o600))
+
+	neighbourLogPath := filepath.Join(srcLogDir, "2026-04-10.jsonl")
+	neighbourLogContents := []byte("{\"line\":\"{\\\"dst\\\":\\\"192.0.2.10\\\",\\\"lladdr\\\":\\\"aa:bb:cc:dd:ee:ff\\\"}\",\"timestamp\":\"2026-04-10T12:00:00Z\"}\n" +
+		"{\"line\":\"{\\\"dst\\\":\\\"2001:db8::10\\\",\\\"lladdr\\\":\\\"aa:bb:cc:dd:ee:ff\\\"}\",\"timestamp\":\"2026-04-10T12:00:01Z\"}\n")
+	assert.NilError(t, os.WriteFile(neighbourLogPath, neighbourLogContents, 0o600))
+
+	var lookupCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SkipDNSLookups: true,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, len(rows), 1)
+	assert.Equal(t, *rows[0].SrcHost, "cached.example.net")
+	assert.Equal(t, lookupCount.Load(), int32(0))
+}
+
+func TestRunDoesNotRebuildOldOutputWhenFutureNeighbourLogChanges(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+	stubReverseLookup(t, nil)
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
+
+	logPath := filepath.Join(srcLogDir, "2026-04-01.jsonl")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"192.0.2.10\\\"],\\\"query_name\\\":\\\"www.fingon.iki.fi\\\",\\\"timestamp_end\\\":\\\"2026-04-01T12:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T12:00:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	neighbourLogPath := filepath.Join(srcLogDir, "2026-04-10.jsonl")
+	firstNeighbourLogContents := []byte("{\"line\":\"{\\\"dst\\\":\\\"192.0.2.10\\\",\\\"lladdr\\\":\\\"aa:bb:cc:dd:ee:ff\\\"}\",\"timestamp\":\"2026-04-10T12:00:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(neighbourLogPath, firstNeighbourLogContents, 0o600))
+
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+	outputPath := filepath.Join(dstDir, "nfcap_2026040112.parquet")
+	firstInfo, err := os.Stat(outputPath)
+	assert.NilError(t, err)
+
+	secondNeighbourLogContents := []byte(string(firstNeighbourLogContents) + "{\"line\":\"{\\\"dst\\\":\\\"2001:db8::10\\\",\\\"lladdr\\\":\\\"aa:bb:cc:dd:ee:ff\\\"}\",\"timestamp\":\"2026-04-10T12:00:01Z\"}\n")
+	assert.NilError(t, os.WriteFile(neighbourLogPath, secondNeighbourLogContents, 0o600))
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+
+	secondInfo, err := os.Stat(outputPath)
+	assert.NilError(t, err)
+	assert.Equal(t, secondInfo.ModTime(), firstInfo.ModTime())
+}
+
 func TestRunReportsRowProgressAcrossStaleJobs(t *testing.T) {
 	srcParquetDir := t.TempDir()
 	srcLogDir := t.TempDir()

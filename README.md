@@ -76,17 +76,19 @@ The tool ignores files and directories that do not match the expected `YYYY/MM/D
 
 ## `parquethosts`
 
-`parquethosts` reads flat `nfcap_*.parquet` files plus dnsmasq daily logs and writes a second flat parquet directory with additional host-derived fields.
+`parquethosts` reads flat `nfcap_*.parquet` files plus daily dnsmasq and neighbour logs, then writes a second flat parquet directory with additional host-derived fields.
 
 When enriched parquet files need rebuilding, the tool shows a stderr progress bar based on processed parquet rows.
 
 ### Inputs
 
 - `--src-parquet`: flat directory containing `nfcap_YYYYMM.parquet`, `nfcap_YYYYMMDD.parquet`, and `nfcap_YYYYMMDDHH.parquet`
-- `--src-log`: directory containing dnsmasq daily log files named `YYYY-MM-DD.jsonl`
+- `--src-log`: directory containing daily log files named `YYYY-MM-DD.jsonl`
 - `--dst`: flat output directory for enriched parquet files
 
-The dnsmasq logs may contain either:
+The log directory may contain dnsmasq entries and, starting from `2026-04-10.jsonl`, periodic `ip -j neighbour` table dumps.
+
+The dnsmasq entries may contain either:
 
 - structured nested JSON entries with `answers`, `query_name`, and `timestamp_end`
 - legacy `message` entries such as `reply ... is ...`, `cached ... is ...`, `config ... is ...`, or hosts-file lines ending in `... is <ip>`
@@ -102,7 +104,7 @@ go run ./cmd/parquethosts --src-parquet /flows/parquet --src-log /flows/logs --d
 Flags:
 
 - `--src-parquet`: flat input parquet directory
-- `--src-log`: dnsmasq log directory
+- `--src-log`: daily log directory
 - `--dst`: flat output directory for enriched parquet files
 - `--skip-dns-lookups`: skip live PTR lookups and use only dnsmasq logs plus existing reverse DNS cache entries
 - `-v`: enable debug logging
@@ -111,13 +113,16 @@ Flags:
 
 For each `src_ip` and `dst_ip`, `parquethosts` resolves names in this order:
 
-1. newest matching dnsmasq observation for the IP where the log timestamp is older than or equal to `time_start_ns`
-2. the dnsmasq observation must also be within one hour before the flow start
-3. if no log match is found, a persistent reverse-DNS cache hit
-4. if no cache hit is found, a live PTR lookup
+1. for IPv6 addresses with a non-conflicting neighbour-table mapping to an IPv4 address sharing the same `lladdr`, try resolving that IPv4 first
+2. newest matching dnsmasq observation for the selected IP where the log timestamp is older than or equal to `time_start_ns`
+3. the dnsmasq observation must also be within one hour before the flow start
+4. if no log match is found, a persistent reverse-DNS cache hit
+5. if no cache hit is found, a live PTR lookup
 
 Successful PTR results are appended to `<dst>/reverse_dns_cache.jsonl` and reused forever. PTR misses are cached only in memory for the current run. Malformed PTR responses are logged as warnings, treated as misses, and do not stop enrichment.
-When `--skip-dns-lookups` is enabled, step 4 is skipped. Existing `reverse_dns_cache.jsonl` entries and dnsmasq log observations are still used.
+When `--skip-dns-lookups` is enabled, step 5 is skipped. Existing `reverse_dns_cache.jsonl` entries and dnsmasq log observations are still used.
+
+Neighbour-table IPv6-to-IPv4 mappings are applied conservatively. If the same IPv6 address is observed with multiple link-layer addresses, the mapping is ignored for that IPv6 address. For flow data older than the neighbour logs, an IPv4 mapping is used only when the link-layer address has one observed IPv4 address. Future neighbour-log changes do not keep invalidating already rebuilt older parquet outputs.
 
 ### Refresh Behavior
 
@@ -231,7 +236,7 @@ go run ./cmd/nfdump2parquet \
   --now 2026-04-02T12:00:00Z
 ```
 
-Then enrich that parquet with dnsmasq logs into a second output directory:
+Then enrich that parquet with daily logs into a second output directory:
 
 ```bash
 go run ./cmd/parquethosts \

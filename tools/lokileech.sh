@@ -47,4 +47,9 @@ for i in $(seq 1 "$DAYS"); do
 # if using auth:
 #    --username="$TENANT_ID" \
 #    --password="$GRAFANA_TOKEN" \
+
+  # Delete empty output if any, to prevent cache poisoning
+  if [ ! -s "$out" ]; then
+    rm -f "$out"
+  fi
 done

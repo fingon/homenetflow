@@ -75,7 +75,20 @@ func Run(config Config) error {
 		return err
 	}
 
-	if err := rebuildJobs(jobs, logLoader, cache, config.Progress, config.SkipDNSLookups); err != nil {
+	if len(jobs) == 0 {
+		if err := cleanupDeletedOutputs(config.DstPath, sourceFilesByPeriod); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	neighbourIndex, err := loadNeighbourIndex(logFiles)
+	if err != nil {
+		return err
+	}
+
+	if err := rebuildJobs(jobs, logLoader, neighbourIndex, cache, config.Progress, config.SkipDNSLookups); err != nil {
 		return err
 	}
 
@@ -144,6 +157,7 @@ func staleJobs(
 func rebuildJobs(
 	jobs []periodJob,
 	logLoader *dnsLogLoader,
+	neighbourIndex *neighbourIndex,
 	cache *reverseDNSCache,
 	progress func(doneRowCount, totalRowCount int64),
 	skipDNSLookups bool,
@@ -159,7 +173,7 @@ func rebuildJobs(
 	for _, job := range jobs {
 		job := job
 		group.Go(func() error {
-			if err := rebuildJob(ctx, job, logLoader, cache, reportProgress, skipDNSLookups); err != nil {
+			if err := rebuildJob(ctx, job, logLoader, neighbourIndex, cache, reportProgress, skipDNSLookups); err != nil {
 				return fmt.Errorf("rebuild %q: %w", job.dstPath, err)
 			}
 
@@ -212,6 +226,7 @@ func rebuildJob(
 	ctx context.Context,
 	job periodJob,
 	logLoader *dnsLogLoader,
+	neighbourIndex *neighbourIndex,
 	cache *reverseDNSCache,
 	reportProgress func(deltaRowCount int64),
 	skipDNSLookups bool,
@@ -233,7 +248,7 @@ func rebuildJob(
 
 		enrichedRecords := make([]model.FlowRecord, 0, len(records))
 		for _, record := range records {
-			enrichedRecord, enrichErr := enrichRecord(record, logIndex, cache, skipDNSLookups)
+			enrichedRecord, enrichErr := enrichRecord(record, logIndex, neighbourIndex, cache, skipDNSLookups)
 			if enrichErr != nil {
 				return enrichErr
 			}
@@ -261,17 +276,23 @@ func rebuildJob(
 	return nil
 }
 
-func enrichRecord(record model.FlowRecord, logIndex *dnsIndex, cache *reverseDNSCache, skipDNSLookups bool) (model.FlowRecord, error) {
+func enrichRecord(
+	record model.FlowRecord,
+	logIndex *dnsIndex,
+	neighbourIndex *neighbourIndex,
+	cache *reverseDNSCache,
+	skipDNSLookups bool,
+) (model.FlowRecord, error) {
 	flowStart := time.Unix(0, record.TimeStartNs).UTC()
 	record.SrcIsPrivate = isPrivateIPAddress(record.SrcIP)
 	record.DstIsPrivate = isPrivateIPAddress(record.DstIP)
 
-	srcNames, err := resolveNames(record.SrcIP, flowStart, logIndex, cache, skipDNSLookups)
+	srcNames, err := resolveNames(record.SrcIP, flowStart, logIndex, neighbourIndex, cache, skipDNSLookups)
 	if err != nil {
 		return model.FlowRecord{}, err
 	}
 
-	dstNames, err := resolveNames(record.DstIP, flowStart, logIndex, cache, skipDNSLookups)
+	dstNames, err := resolveNames(record.DstIP, flowStart, logIndex, neighbourIndex, cache, skipDNSLookups)
 	if err != nil {
 		return model.FlowRecord{}, err
 	}
@@ -297,7 +318,35 @@ func enrichRecord(record model.FlowRecord, logIndex *dnsIndex, cache *reverseDNS
 	return record, nil
 }
 
-func resolveNames(ipAddress string, flowStart time.Time, logIndex *dnsIndex, cache *reverseDNSCache, skipDNSLookups bool) (*derivedNames, error) {
+func resolveNames(
+	ipAddress string,
+	flowStart time.Time,
+	logIndex *dnsIndex,
+	neighbourIndex *neighbourIndex,
+	cache *reverseDNSCache,
+	skipDNSLookups bool,
+) (*derivedNames, error) {
+	if mappedIPv4, ok := neighbourIndex.LookupIPv4(ipAddress, flowStart); ok {
+		names, err := resolveNamesForIP(mappedIPv4, flowStart, logIndex, cache, skipDNSLookups)
+		if err != nil {
+			return nil, err
+		}
+
+		if names != nil {
+			return names, nil
+		}
+	}
+
+	return resolveNamesForIP(ipAddress, flowStart, logIndex, cache, skipDNSLookups)
+}
+
+func resolveNamesForIP(
+	ipAddress string,
+	flowStart time.Time,
+	logIndex *dnsIndex,
+	cache *reverseDNSCache,
+	skipDNSLookups bool,
+) (*derivedNames, error) {
 	if names := logIndex.Lookup(ipAddress, flowStart); names != nil {
 		return names, nil
 	}
