@@ -93,3 +93,53 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 	assert.Assert(t, records[0].DstIsPrivate)
 	assert.Assert(t, !records[0].SrcIsPrivate)
 }
+
+func TestReadFileRoundTripPreservesDirection(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name      string
+		direction int32
+	}{
+		{name: "ingress", direction: 0},
+		{name: "egress", direction: 1},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			tempDir := t.TempDir()
+			path := tempDir + "/nfcap_202603.parquet"
+
+			writer, finalize, err := Create(path, model.RefreshManifest{Version: model.RefreshManifestVersion})
+			assert.NilError(t, err)
+			assert.NilError(t, writer.Write(model.FlowRecord{
+				Bytes:       1,
+				Direction:   &testCase.direction,
+				DurationNs:  2,
+				DstIP:       "198.51.100.1",
+				DstPort:     443,
+				IPVersion:   model.IPVersion4,
+				Packets:     3,
+				Protocol:    6,
+				SrcIP:       "192.0.2.1",
+				SrcPort:     12345,
+				TimeEndNs:   20,
+				TimeStartNs: 10,
+			}))
+			assert.NilError(t, finalize())
+
+			var records []model.FlowRecord
+			assert.NilError(t, ReadFile(path, func(record model.FlowRecord) error {
+				records = append(records, record)
+				return nil
+			}))
+
+			assert.Equal(t, len(records), 1)
+			assert.Assert(t, records[0].Direction != nil)
+			assert.Equal(t, *records[0].Direction, testCase.direction)
+		})
+	}
+}

@@ -16,7 +16,7 @@ const (
 	PeriodDay                       = "day"
 	PeriodHour                      = "hour"
 	PeriodMonth                     = "month"
-	RefreshManifestVersion          = 1
+	RefreshManifestVersion          = 2
 	UISummaryLogicVersion           = 4
 	UISummaryManifestVersion        = 1
 )
@@ -174,6 +174,7 @@ type FlowRecord struct {
 	DstAS        *int32
 	SrcMask      *int32
 	DstMask      *int32
+	Direction    *int32
 	TCPFlags     *int32
 	SrcHost      *string
 	DstHost      *string

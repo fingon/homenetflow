@@ -274,6 +274,7 @@ Each base parquet row contains:
 - `dst_ip`
 - `src_port`
 - `dst_port`
+- `direction`
 - `packets`
 - `bytes`
 

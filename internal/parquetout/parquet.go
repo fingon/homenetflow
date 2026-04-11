@@ -22,6 +22,7 @@ const (
 
 type Row struct {
 	Bytes        int64   `parquet:"bytes"`
+	Direction    *int32  `parquet:"direction,optional"`
 	DurationNs   int64   `parquet:"duration_ns"`
 	Dst2LD       *string `parquet:"dst_2ld,optional"`
 	DstAS        *int32  `parquet:"dst_as,optional"`
@@ -130,6 +131,7 @@ func (w *FileWriter) WriteBatch(records []model.FlowRecord) error {
 	for _, record := range records {
 		w.rows = append(w.rows, Row{
 			Bytes:        record.Bytes,
+			Direction:    record.Direction,
 			DurationNs:   record.DurationNs,
 			DstAS:        record.DstAS,
 			Dst2LD:       record.Dst2LD,
@@ -261,6 +263,7 @@ func ReadFileBatches(path string, emit func([]model.FlowRecord) error) error {
 func (r Row) toFlowRecord() model.FlowRecord {
 	return model.FlowRecord{
 		Bytes:        r.Bytes,
+		Direction:    r.Direction,
 		DurationNs:   r.DurationNs,
 		Dst2LD:       r.Dst2LD,
 		DstAS:        r.DstAS,

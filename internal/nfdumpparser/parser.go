@@ -87,9 +87,11 @@ func flowRecordFromNFDump(record *nfdump.FlowRecordV3) model.FlowRecord {
 
 	var srcMask *int32
 	var dstMask *int32
+	var direction *int32
 	if flowMisc != nil {
 		srcMask = optionalInt32(int32(flowMisc.SrcMask))
 		dstMask = optionalInt32(int32(flowMisc.DstMask))
+		direction = int32Pointer(int32(flowMisc.Dir))
 	}
 
 	var nextHopIP *string
@@ -123,6 +125,7 @@ func flowRecordFromNFDump(record *nfdump.FlowRecordV3) model.FlowRecord {
 		DstAS:       dstAS,
 		SrcMask:     srcMask,
 		DstMask:     dstMask,
+		Direction:   direction,
 		TCPFlags:    tcpFlags,
 	}
 }
@@ -151,6 +154,10 @@ func optionalInt32(value int32) *int32 {
 		return nil
 	}
 
+	return &value
+}
+
+func int32Pointer(value int32) *int32 {
 	return &value
 }
 
