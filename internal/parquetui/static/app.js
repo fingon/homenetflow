@@ -1,7 +1,11 @@
 (function () {
   const errorClassName = "is-error";
+  const collapsedClassName = "is-collapsed";
+  const collapsibleToggleSelector = "[data-collapsible-toggle]";
   const graphSceneSelector = ".graph-scene";
   const granularityName = "granularity";
+  const histogramTooltipClassName = "histogram-tooltip";
+  const histogramTooltipOffsetPx = 14;
   const loadingClassName = "is-loading";
   const loadingMessage = "Loading data...";
   const maxGraphScale = 6;
@@ -44,6 +48,8 @@
       graphCanvas.dataset.initialized = "true";
       bindGraph(graphCanvas);
     }
+
+    bindSectionToggles(root);
   }
 
   function bindForm(form) {
@@ -106,13 +112,50 @@
 
     function clearOverlay() {
       dragStartIndex = null;
+      hideTooltip();
       if (overlay) {
         overlay.remove();
         overlay = null;
       }
     }
 
+    function showTooltip(bar, clientX, clientY) {
+      const tooltip = histogramTooltip();
+      const value = document.createElement("strong");
+      const range = document.createElement("span");
+      value.textContent = `Value: ${bar.dataset.valueLabel || ""}`;
+      range.textContent = `${bar.dataset.fromLabel || ""} - ${bar.dataset.toLabel || ""}`;
+      tooltip.replaceChildren(value, range);
+      positionHistogramTooltip(tooltip, clientX, clientY);
+    }
+
+    function hideTooltip() {
+      const tooltip = document.querySelector(`.${histogramTooltipClassName}`);
+      if (tooltip) {
+        tooltip.remove();
+      }
+    }
+
+    function showTooltipForFocusedBar(bar) {
+      const bounds = bar.getBoundingClientRect();
+      showTooltip(bar, bounds.left + bounds.width / 2, bounds.top);
+    }
+
+    for (const bar of bars) {
+      bar.addEventListener("mouseenter", (event) => showTooltip(bar, event.clientX, event.clientY));
+      bar.addEventListener("mousemove", (event) => {
+        if (dragStartIndex !== null) {
+          return;
+        }
+        showTooltip(bar, event.clientX, event.clientY);
+      });
+      bar.addEventListener("mouseleave", hideTooltip);
+      bar.addEventListener("focus", () => showTooltipForFocusedBar(bar));
+      bar.addEventListener("blur", hideTooltip);
+    }
+
     svg.addEventListener("mousedown", (event) => {
+      hideTooltip();
       dragStartIndex = indexFromClientX(event.clientX);
       overlay = document.createElementNS("http://www.w3.org/2000/svg", "rect");
       overlay.setAttribute("y", "0");
@@ -153,6 +196,38 @@
       resetRange(form);
       submitForm(form);
     });
+  }
+
+  function histogramTooltip() {
+    const existingTooltip = document.querySelector(`.${histogramTooltipClassName}`);
+    if (existingTooltip instanceof HTMLElement) {
+      return existingTooltip;
+    }
+
+    const tooltip = document.createElement("div");
+    tooltip.className = histogramTooltipClassName;
+    tooltip.setAttribute("role", "tooltip");
+    document.body.appendChild(tooltip);
+    return tooltip;
+  }
+
+  function positionHistogramTooltip(tooltip, clientX, clientY) {
+    tooltip.style.left = "0";
+    tooltip.style.top = "0";
+    const bounds = tooltip.getBoundingClientRect();
+    const maxLeft = window.innerWidth - bounds.width - histogramTooltipOffsetPx;
+    const maxTop = window.innerHeight - bounds.height - histogramTooltipOffsetPx;
+    const preferredLeft = clientX + histogramTooltipOffsetPx;
+    const preferredTop = clientY + histogramTooltipOffsetPx;
+    tooltip.style.left = `${Math.max(histogramTooltipOffsetPx, Math.min(maxLeft, preferredLeft))}px`;
+    tooltip.style.top = `${Math.max(histogramTooltipOffsetPx, Math.min(maxTop, preferredTop))}px`;
+  }
+
+  function hideHistogramTooltip() {
+    const tooltip = document.querySelector(`.${histogramTooltipClassName}`);
+    if (tooltip) {
+      tooltip.remove();
+    }
   }
 
   function applyPreset(form, presetValue) {
@@ -365,6 +440,43 @@
     updateTransform();
   }
 
+  function bindSectionToggles(root) {
+    const toggles = root.querySelectorAll(collapsibleToggleSelector);
+    for (const toggle of toggles) {
+      if (!(toggle instanceof HTMLButtonElement) || toggle.dataset.initialized) {
+        continue;
+      }
+      toggle.dataset.initialized = "true";
+      applySectionToggleState(toggle, toggle.getAttribute("aria-expanded") === "true");
+      toggle.addEventListener("click", () => {
+        const expanded = toggle.getAttribute("aria-expanded") !== "true";
+        applySectionToggleState(toggle, expanded);
+      });
+    }
+  }
+
+  function applySectionToggleState(toggle, expanded) {
+    const contentID = toggle.getAttribute("aria-controls");
+    if (!contentID) {
+      return;
+    }
+
+    const content = document.getElementById(contentID);
+    if (!content) {
+      return;
+    }
+
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    toggle.setAttribute("aria-label", sectionToggleAriaLabel(toggle, expanded));
+
+    content.classList.toggle(collapsedClassName, !expanded);
+  }
+
+  function sectionToggleAriaLabel(toggle, expanded) {
+    const sectionTitle = toggle.dataset.sectionTitle || "section";
+    return `${expanded ? "Collapse" : "Expand"} ${sectionTitle}`;
+  }
+
   function cacheGraphLabels(scene) {
     const nodeGroups = Array.from(scene.querySelectorAll(".graph-node"));
     const cachedLabels = [];
@@ -566,6 +678,7 @@
     initializeHotReload();
   });
   document.body.addEventListener("htmx:beforeRequest", () => setLoadingStatus(loadingMessage));
+  document.body.addEventListener("htmx:beforeSwap", hideHistogramTooltip);
   document.body.addEventListener("htmx:afterSwap", (event) => {
     if (event.target instanceof HTMLElement) {
       initialize(event.target);

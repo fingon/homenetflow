@@ -34,11 +34,8 @@ body {
 
 .top-bar,
 .panel,
-.graph-panel,
 .histogram-panel,
-.rankings-panel,
-.table-panel,
-.side-panel {
+.section-panel {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 20px;
@@ -179,20 +176,42 @@ input[type="search"] {
   border-color: rgba(141, 47, 32, 0.25);
 }
 
-.graph-panel,
-.side-panel,
 .histogram-panel,
-.rankings-panel,
-.table-panel {
+.section-panel {
   padding: 1rem;
+}
+
+.section-block {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.graph-panel,
+.rankings-panel,
+.side-panel {
+  min-width: 0;
+}
+
+.rankings-panel {
+  display: grid;
+  gap: 0.6rem;
 }
 
 .rankings-section {
   display: grid;
-  display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
   align-items: start;
+}
+
+.section-heading {
+  margin-bottom: 0;
+}
+
+.section-content.is-collapsed,
+.content-grid.is-collapsed,
+.rankings-section.is-collapsed {
+  display: none;
 }
 
 .graph-canvas {
@@ -210,8 +229,12 @@ input[type="search"] {
   cursor: grabbing;
 }
 
+.histogram-panel {
+  position: relative;
+}
+
 .histogram {
-  min-height: 13rem;
+  min-height: 8.5rem;
 }
 
 .hidden {
@@ -229,6 +252,25 @@ input[type="search"] {
 .panel-heading h2,
 .section-title {
   margin: 0;
+}
+
+.graph-legend,
+.table-meta {
+  margin-bottom: 0.75rem;
+}
+
+.hover-help {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 140ms ease, visibility 140ms ease;
+}
+
+.histogram-panel:hover .timeline-help,
+.histogram-panel:focus-within .timeline-help,
+.graph-panel:hover .graph-help,
+.graph-panel:focus-within .graph-help {
+  opacity: 1;
+  visibility: visible;
 }
 
 .panel-subtle,
@@ -273,6 +315,41 @@ input[type="search"] {
   width: 100%;
   text-align: left;
   justify-content: flex-start;
+}
+
+.section-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+}
+
+.section-toggle:hover,
+.section-toggle:focus-visible {
+  border-color: rgba(31, 39, 51, 0.28);
+  color: var(--text);
+}
+
+.section-toggle-icon {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-0.1rem) rotate(45deg);
+  transition: transform 140ms ease;
+}
+
+.section-toggle[aria-expanded="false"] .section-toggle-icon {
+  transform: translateX(-0.1rem) rotate(-45deg);
 }
 
 .flows-table {
@@ -345,10 +422,39 @@ svg.histogram-svg {
   stroke-width: 1;
 }
 
+.histogram-grid-line {
+  stroke: rgba(31, 39, 51, 0.12);
+  stroke-width: 1;
+}
+
 .histogram-axis-label {
   fill: var(--muted);
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
   font-size: 11px;
+}
+
+.histogram-axis-label-y {
+  font-size: 10px;
+}
+
+.histogram-tooltip {
+  position: fixed;
+  z-index: 20;
+  max-width: min(24rem, calc(100vw - 2rem));
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(31, 39, 51, 0.94);
+  color: white;
+  box-shadow: 0 10px 28px rgba(31, 39, 51, 0.18);
+  font-size: 0.88rem;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.histogram-tooltip strong {
+  display: block;
+  margin-bottom: 0.2rem;
 }
 
 .panel-error {

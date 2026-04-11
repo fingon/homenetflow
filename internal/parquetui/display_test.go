@@ -59,9 +59,30 @@ func TestHistogramSVGMarkupAddsAxisLabels(t *testing.T) {
 	markup := histogramSVGMarkup(MetricBytes, bins)
 
 	assert.Assert(t, strings.Contains(markup, "histogram-axis-label"))
+	assert.Assert(t, strings.Contains(markup, "histogram-axis-label-y"))
+	assert.Assert(t, strings.Contains(markup, ">0<"))
+	assert.Assert(t, strings.Contains(markup, ">4000<"))
 	assert.Assert(t, strings.Contains(markup, ">00:00<"))
 	assert.Assert(t, strings.Contains(markup, ">23:59<"))
 	assert.Assert(t, strings.Contains(markup, "Value: 4000"))
+	assert.Assert(t, strings.Contains(markup, `tabindex="0"`))
+	assert.Assert(t, strings.Contains(markup, `data-from-label="2026-01-02T00:00:00Z"`))
+	assert.Assert(t, strings.Contains(markup, `data-to-label="2026-01-02T23:59:59Z"`))
+	assert.Assert(t, strings.Contains(markup, `data-value-label="4000"`))
+}
+
+func TestHistogramSVGMarkupFormatsYAxisLabelsForConnections(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, time.January, 2, 0, 0, 0, 0, time.UTC)
+	bins := []HistogramBin{
+		{FromNs: start.UnixNano(), ToNs: start.Add(time.Hour).UnixNano() - 1, Value: 10000},
+	}
+
+	markup := histogramSVGMarkup(MetricConnections, bins)
+
+	assert.Assert(t, strings.Contains(markup, `class="histogram-axis-label histogram-axis-label-y"`))
+	assert.Assert(t, strings.Contains(markup, ">10k<"))
 }
 
 func TestTopBarRendersTimePresetButtons(t *testing.T) {
@@ -73,7 +94,6 @@ func TestTopBarRendersTimePresetButtons(t *testing.T) {
 			ToNs:        20,
 			Metric:      MetricBytes,
 			Granularity: Granularity2LD,
-			View:        ViewSplit,
 			Sort:        SortBytes,
 		},
 	}))
@@ -84,6 +104,7 @@ func TestTopBarRendersTimePresetButtons(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `name="family"`))
 	assert.Assert(t, strings.Contains(markup, `value="ipv4"`))
 	assert.Assert(t, strings.Contains(markup, `value="ipv6"`))
+	assert.Assert(t, !strings.Contains(markup, `name="view"`))
 }
 
 func TestGraphSVGMarkupUsesDenseHooksForCrowdedGraphs(t *testing.T) {
@@ -235,7 +256,6 @@ func TestAppShellRendersSeparateRankingsSection(t *testing.T) {
 			ToNs:        20,
 			Metric:      MetricBytes,
 			Granularity: Granularity2LD,
-			View:        ViewSplit,
 		},
 		Span: TimeSpan{StartNs: 10, EndNs: 20},
 		Graph: GraphData{
@@ -250,8 +270,18 @@ func TestAppShellRendersSeparateRankingsSection(t *testing.T) {
 	}))
 
 	assert.Assert(t, strings.Contains(markup, `id="rankings-section"`))
+	assert.Assert(t, strings.Contains(markup, `class="section-panel section-block"`))
 	assert.Assert(t, strings.Contains(markup, `class="rankings-section"`))
 	assert.Assert(t, strings.Contains(markup, `class="rankings-panel"`))
+	assert.Assert(t, strings.Contains(markup, `data-collapsible-toggle`))
+	assert.Assert(t, strings.Contains(markup, `class="section-toggle-icon"`))
+	assert.Assert(t, strings.Contains(markup, `aria-label="Collapse Graph"`))
+	assert.Assert(t, strings.Contains(markup, `aria-label="Collapse Rankings"`))
+	assert.Assert(t, strings.Contains(markup, `aria-label="Collapse Flows Table"`))
+	assert.Assert(t, strings.Contains(markup, `aria-controls="graph-section-content"`))
+	assert.Assert(t, strings.Contains(markup, `aria-controls="rankings-content"`))
+	assert.Assert(t, strings.Contains(markup, `aria-controls="table-content"`))
+	assert.Assert(t, !strings.Contains(markup, `class="section-toggle-label"`))
 	assert.Assert(t, strings.Contains(markup, "Top Entities"))
 	assert.Assert(t, strings.Contains(markup, "Top Flows"))
 }
@@ -265,7 +295,6 @@ func TestAppShellDoesNotRenderBreadcrumbsOrIdleStatus(t *testing.T) {
 			ToNs:        20,
 			Metric:      MetricBytes,
 			Granularity: Granularity2LD,
-			View:        ViewSplit,
 		},
 		Span: TimeSpan{StartNs: 10, EndNs: 20},
 	}))
@@ -275,7 +304,7 @@ func TestAppShellDoesNotRenderBreadcrumbsOrIdleStatus(t *testing.T) {
 	assert.Assert(t, !strings.Contains(markup, ">Idle<"))
 }
 
-func TestAppShellHidesRankingsSectionInTableView(t *testing.T) {
+func TestAppShellRendersRankingsVisibleByDefault(t *testing.T) {
 	t.Parallel()
 
 	markup := renderNodeString(t, AppShell(DashboardData{
@@ -284,13 +313,13 @@ func TestAppShellHidesRankingsSectionInTableView(t *testing.T) {
 			ToNs:        20,
 			Metric:      MetricBytes,
 			Granularity: Granularity2LD,
-			View:        ViewTable,
 		},
 		Span: TimeSpan{StartNs: 10, EndNs: 20},
 	}))
 
 	assert.Assert(t, strings.Contains(markup, `id="rankings-section"`))
-	assert.Assert(t, strings.Contains(markup, `class="rankings-section hidden"`))
+	assert.Assert(t, strings.Contains(markup, `id="rankings-content"`))
+	assert.Assert(t, !strings.Contains(markup, `class="rankings-section is-collapsed"`))
 }
 
 func TestServiceGraphKeepsNodePositionsStableAcrossMetrics(t *testing.T) {

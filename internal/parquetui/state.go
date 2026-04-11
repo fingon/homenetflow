@@ -15,7 +15,6 @@ const (
 	defaultPage      = 1
 	defaultPageSize  = 100
 	defaultPort      = 8080
-	defaultView      = ViewSplit
 	presetAllValue   = "all"
 	presetHourValue  = "1h"
 	presetDayValue   = "1d"
@@ -38,14 +37,6 @@ const (
 	Granularity2LD      Granularity = "2ld"
 	GranularityHostname Granularity = "hostname"
 	GranularityIP       Granularity = "ip"
-)
-
-type View string
-
-const (
-	ViewGraph View = "graph"
-	ViewTable View = "table"
-	ViewSplit View = "split"
 )
 
 type TableSort string
@@ -83,7 +74,6 @@ type QueryState struct {
 	SelectedEntity  string
 	Sort            TableSort
 	ToNs            int64
-	View            View
 	Metric          Metric
 	Preset          string
 }
@@ -106,7 +96,6 @@ type ClientState struct {
 	SelectedEntity  string   `json:"selected_entity"`
 	Sort            string   `json:"sort"`
 	To              int64    `json:"to"`
-	View            string   `json:"view"`
 }
 
 type ClientSpan struct {
@@ -129,7 +118,6 @@ func ParseQueryState(r *http.Request) QueryState {
 		SelectedEdgeSrc: strings.TrimSpace(query.Get("selected_edge_src")),
 		SelectedEntity:  strings.TrimSpace(query.Get("selected_entity")),
 		Sort:            defaultSortForMetric(MetricBytes),
-		View:            defaultView,
 		Metric:          MetricBytes,
 		Preset:          strings.TrimSpace(query.Get("preset")),
 	}
@@ -145,10 +133,6 @@ func ParseQueryState(r *http.Request) QueryState {
 
 	if granularity := Granularity(query.Get("granularity")); granularity.valid() {
 		state.Granularity = granularity
-	}
-
-	if view := View(query.Get("view")); view.valid() {
-		state.View = view
 	}
 
 	if sort := TableSort(query.Get("sort")); sort.valid() {
@@ -187,9 +171,6 @@ func (s QueryState) Normalized(span TimeSpan) QueryState {
 	}
 	if !state.Metric.valid() {
 		state.Metric = MetricBytes
-	}
-	if !state.View.valid() {
-		state.View = defaultView
 	}
 	if !state.Sort.valid() {
 		state.Sort = defaultSortForMetric(state.Metric)
@@ -238,7 +219,6 @@ func (s QueryState) Values() url.Values {
 	}
 	values.Set("metric", string(s.Metric))
 	values.Set("granularity", string(s.Granularity))
-	values.Set("view", string(s.View))
 	values.Set("sort", string(s.Sort))
 	if s.EdgeLimit != defaultEdgeLimit {
 		values.Set("edge_limit", strconv.Itoa(s.EdgeLimit))
@@ -298,7 +278,6 @@ func (s QueryState) ClientState() ClientState {
 		SelectedEntity:  s.SelectedEntity,
 		Sort:            string(s.Sort),
 		To:              s.ToNs,
-		View:            string(s.View),
 	}
 }
 
@@ -338,7 +317,6 @@ func (s QueryState) ResetSelection() QueryState {
 func (s QueryState) layoutCacheState() QueryState {
 	state := s.Clone()
 	state.Metric = MetricBytes
-	state.View = defaultView
 	state.Sort = defaultSortForMetric(state.Metric)
 	state.Page = defaultPage
 	state.PageSize = defaultPageSize
@@ -449,10 +427,6 @@ func (m Metric) valid() bool {
 
 func (g Granularity) valid() bool {
 	return g == GranularityTLD || g == Granularity2LD || g == GranularityHostname || g == GranularityIP
-}
-
-func (v View) valid() bool {
-	return v == ViewGraph || v == ViewTable || v == ViewSplit
 }
 
 func (a AddressFamily) valid() bool {

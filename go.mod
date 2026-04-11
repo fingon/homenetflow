@@ -7,6 +7,7 @@ tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 require (
 	github.com/alecthomas/kong v1.14.0
 	github.com/duckdb/duckdb-go/v2 v2.5.5
+	github.com/gofrs/flock v0.13.0
 	github.com/parquet-go/parquet-go v0.25.1
 	github.com/phaag/go-nfdump v0.0.5
 	github.com/schollz/progressbar/v3 v3.18.0
@@ -98,7 +99,6 @@ require (
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/godoc-lint/godoc-lint v0.11.2 // indirect
-	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golangci/asciicheck v0.5.0 // indirect
 	github.com/golangci/dupl v0.0.0-20250308024227-f665c8d69b32 // indirect

@@ -19,7 +19,6 @@ func TestParseQueryStateDefaults(t *testing.T) {
 	assert.Equal(t, state.EdgeLimit, defaultEdgeLimit)
 	assert.Equal(t, state.Page, defaultPage)
 	assert.Equal(t, state.PageSize, defaultPageSize)
-	assert.Equal(t, state.View, defaultView)
 }
 
 func TestParseQueryStateAddressFamily(t *testing.T) {
@@ -115,7 +114,6 @@ func TestQueryStateValuesSkipPreset(t *testing.T) {
 		ToNs:          20,
 		Metric:        MetricBytes,
 		Granularity:   Granularity2LD,
-		View:          ViewSplit,
 		Sort:          SortBytes,
 		Preset:        presetWeekValue,
 	}
@@ -124,6 +122,16 @@ func TestQueryStateValuesSkipPreset(t *testing.T) {
 
 	assert.Equal(t, values.Get("preset"), "")
 	assert.Equal(t, values.Get("family"), "ipv4")
+	assert.Equal(t, values.Get("view"), "")
+}
+
+func TestParseQueryStateIgnoresLegacyView(t *testing.T) {
+	request := httptest.NewRequest("GET", "/?view=table", nil)
+
+	state := ParseQueryState(request)
+
+	assert.Equal(t, state.Metric, MetricBytes)
+	assert.Equal(t, state.Sort, SortBytes)
 }
 
 func TestLayoutCacheStateClearsSelectedEdge(t *testing.T) {
@@ -131,7 +139,6 @@ func TestLayoutCacheStateClearsSelectedEdge(t *testing.T) {
 		Metric:          MetricConnections,
 		SelectedEdgeDst: "dst.test",
 		SelectedEdgeSrc: "src.test",
-		View:            ViewTable,
 	}
 
 	cacheState := state.layoutCacheState()
@@ -139,5 +146,4 @@ func TestLayoutCacheStateClearsSelectedEdge(t *testing.T) {
 	assert.Equal(t, cacheState.SelectedEdgeSrc, "")
 	assert.Equal(t, cacheState.SelectedEdgeDst, "")
 	assert.Equal(t, cacheState.Metric, MetricBytes)
-	assert.Equal(t, cacheState.View, defaultView)
 }

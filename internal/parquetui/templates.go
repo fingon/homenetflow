@@ -19,9 +19,11 @@ const (
 	graphPrimaryRingCount   = 12
 	graphWidthPx            = 960
 	histogramAxisTickCount  = 5
-	histogramBottomPadPx    = 30
-	histogramHeightPx       = 180
+	histogramBottomPadPx    = 28
+	histogramHeightPx       = 132
 	histogramMinBarWidthPx  = 4
+	histogramRightPadPx     = 64
+	histogramTopPadPx       = 8
 	histogramWidthPx        = 960
 	hxSelectAppShellValue   = "#app-shell"
 	hxSwapOuterHTMLValue    = "outerHTML"
@@ -80,11 +82,11 @@ func AppShell(dashboard DashboardData) g.Node {
 			g.Attr("aria-live", "polite"),
 		),
 		Section(
-			Class(sectionClasses("histogram-panel", state.View == ViewTable)),
+			Class("histogram-panel"),
 			Div(
 				Class("panel-heading"),
 				H2(g.Text("Timeline")),
-				Span(Class("panel-subtle"), g.Text("Drag to zoom")),
+				Span(Class("panel-subtle hover-help timeline-help"), g.Text("Drag to zoom")),
 			),
 			Div(
 				ID("histogram"),
@@ -94,43 +96,55 @@ func AppShell(dashboard DashboardData) g.Node {
 				renderHistogramSVG(state.Metric, dashboard.Histogram),
 			),
 		),
-		Div(
-			Class(sectionClasses("content-grid", state.View == ViewTable)),
-			Section(
-				Class("graph-panel"),
-				ID("graph-panel"),
-				Div(
-					Class("panel-heading"),
-					H2(g.Text("Graph")),
+		Section(
+			Class("section-panel section-block"),
+			ID("graph-section"),
+			sectionHeader("Graph", "graph-section-content", true),
+			Div(
+				Class("content-grid"),
+				ID("graph-section-content"),
+				Section(
+					Class("graph-panel"),
+					ID("graph-panel"),
 					Div(
-						Class("legend-line"),
+						Class("legend-line graph-legend"),
 						Span(Class("legend-item"), g.Text("Node size = selected metric")),
 						Span(Class("legend-item"), g.Text("Edge width = selected metric")),
-						Span(Class("legend-item"), g.Text("Scroll to zoom, drag to pan")),
-						Span(Class("legend-item"), g.Text("Labels expand with zoom and hover")),
+						Span(Class("legend-item hover-help graph-help"), g.Text("Scroll to zoom, drag to pan")),
+						Span(Class("legend-item hover-help graph-help"), g.Text("Labels expand with zoom and hover")),
+					),
+					Div(
+						ID("graph-canvas"),
+						Class("graph-canvas"),
+						renderGraphSVG(state, dashboard.Graph),
 					),
 				),
-				Div(
-					ID("graph-canvas"),
-					Class("graph-canvas"),
-					renderGraphSVG(state, dashboard.Graph),
+				Aside(
+					Class("side-panel"),
+					ID("summary-panel"),
+					SummaryPanel(state, dashboard.Graph),
 				),
 			),
-			Aside(
-				Class("side-panel"),
-				ID("summary-panel"),
-				SummaryPanel(state, dashboard.Graph),
+		),
+		Section(
+			Class("section-panel section-block"),
+			ID("rankings-section"),
+			sectionHeader("Rankings", "rankings-content", true),
+			Div(
+				Class("rankings-section"),
+				ID("rankings-content"),
+				RankingsPanel(state, dashboard.Graph),
 			),
 		),
 		Section(
-			Class(sectionClasses("rankings-section", state.View == ViewTable)),
-			ID("rankings-section"),
-			RankingsPanel(state, dashboard.Graph),
-		),
-		Section(
-			Class(sectionClasses("table-panel", state.View == ViewGraph)),
+			Class("section-panel section-block"),
 			ID("table-panel"),
-			TablePanel(state, dashboard.Table),
+			sectionHeader("Flows Table", "table-content", true),
+			Div(
+				ID("table-content"),
+				Class("section-content"),
+				TablePanel(state, dashboard.Table),
+			),
 		),
 	)
 }
@@ -240,11 +254,7 @@ func selectedPanel(state QueryState, graph GraphData) g.Node {
 
 func TablePanel(state QueryState, table TableData) g.Node {
 	return Div(
-		Div(
-			Class("panel-heading"),
-			H2(g.Text("Flows Table")),
-			Span(Class("panel-subtle"), g.Text(fmt.Sprintf("%d rows", table.TotalCount))),
-		),
+		Div(Class("table-meta"), Span(Class("panel-subtle"), g.Text(fmt.Sprintf("%d rows", table.TotalCount)))),
 		Table(
 			Class("flows-table"),
 			THead(
@@ -348,13 +358,6 @@ func topBar(dashboard DashboardData) g.Node {
 					),
 				),
 				Div(
-					Class("group segmented"),
-					Label(g.Text("View")),
-					toggleRadio("view", string(ViewGraph), "Graph", state.View == ViewGraph),
-					toggleRadio("view", string(ViewTable), "Table", state.View == ViewTable),
-					toggleRadio("view", string(ViewSplit), "Split", state.View == ViewSplit),
-				),
-				Div(
 					Class("group"),
 					Label(For("node-limit"), g.Text("Nodes")),
 					Select(
@@ -415,6 +418,30 @@ func toggleRadio(name, value, label string, checked bool) g.Node {
 
 func renderGraphSVG(state QueryState, graph GraphData) g.Node {
 	return g.Raw(graphSVGMarkup(state, graph))
+}
+
+func sectionHeader(title, contentID string, expanded bool) g.Node {
+	return Div(
+		Class("panel-heading section-heading"),
+		H2(g.Text(title)),
+		Button(
+			Type("button"),
+			Class("section-toggle"),
+			g.Attr("aria-label", sectionToggleAriaLabel(title, expanded)),
+			g.Attr("aria-controls", contentID),
+			g.Attr("aria-expanded", strconv.FormatBool(expanded)),
+			g.Attr("data-collapsible-toggle", ""),
+			Data("section-title", title),
+			Span(Class("section-toggle-icon"), g.Attr("aria-hidden", "true")),
+		),
+	)
+}
+
+func sectionToggleAriaLabel(title string, expanded bool) string {
+	if expanded {
+		return "Collapse " + title
+	}
+	return "Expand " + title
 }
 
 func graphSVGMarkup(state QueryState, graph GraphData) string {
@@ -508,28 +535,35 @@ func histogramSVGMarkup(metric Metric, bins []HistogramBin) string {
 	for _, bin := range bins {
 		maxValue = max(maxValue, bin.Value)
 	}
-	barWidth := math.Max(histogramMinBarWidthPx, float64(histogramWidthPx)/float64(len(bins)))
-	plotHeightPx := float64(histogramHeightPx - histogramBottomPadPx)
+	plotWidthPx := float64(histogramWidthPx - histogramRightPadPx)
+	barWidth := math.Max(histogramMinBarWidthPx, plotWidthPx/float64(len(bins)))
+	plotHeightPx := float64(histogramHeightPx - histogramBottomPadPx - histogramTopPadPx)
 	builder.WriteString(`<g>`)
 	for index, bin := range bins {
-		barHeight := (float64(bin.Value) / float64(maxValue)) * math.Max(1, plotHeightPx-10)
+		barHeight := (float64(bin.Value) / float64(maxValue)) * math.Max(1, plotHeightPx-6)
 		x := float64(index) * barWidth
-		y := plotHeightPx - barHeight
-		fmt.Fprintf(&builder, `<rect class="histogram-bar" x="%0.2f" y="%0.2f" width="%0.2f" height="%0.2f" rx="2" fill="rgba(177, 77, 36, 0.62)" data-bin-index="%d" data-from-ns="%d" data-to-ns="%d">`,
+		y := histogramTopPadPx + plotHeightPx - barHeight
+		formattedValue := formatMetricValue(metric, bin.Value)
+		fromLabel := formatTimestamp(bin.FromNs)
+		toLabel := formatTimestamp(bin.ToNs)
+		fmt.Fprintf(&builder, `<rect class="histogram-bar" x="%0.2f" y="%0.2f" width="%0.2f" height="%0.2f" rx="2" fill="rgba(177, 77, 36, 0.62)" tabindex="0" data-bin-index="%d" data-from-ns="%d" data-to-ns="%d" data-from-label="%s" data-to-label="%s" data-value-label="%s">`,
 			x,
 			y,
 			math.Max(2, barWidth-1),
 			barHeight,
 			index,
 			bin.FromNs,
-			bin.ToNs)
+			bin.ToNs,
+			html.EscapeString(fromLabel),
+			html.EscapeString(toLabel),
+			html.EscapeString(formattedValue))
 		builder.WriteString(titleMarkup(fmt.Sprintf("%s - %s\nValue: %s",
-			formatTimestamp(bin.FromNs),
-			formatTimestamp(bin.ToNs),
-			formatMetricValue(metric, bin.Value))))
+			fromLabel,
+			toLabel,
+			formattedValue)))
 		builder.WriteString(`</rect>`)
 	}
-	builder.WriteString(histogramAxisMarkup(bins))
+	builder.WriteString(histogramAxisMarkup(metric, bins, maxValue))
 	builder.WriteString(`</g></svg>`)
 	return builder.String()
 }
@@ -689,13 +723,6 @@ func stateURL(state QueryState) string {
 		return "/"
 	}
 	return "/?" + query
-}
-
-func sectionClasses(baseClass string, hidden bool) string {
-	if hidden {
-		return baseClass + " hidden"
-	}
-	return baseClass
 }
 
 func sectionTitle(title string) g.Node {
@@ -866,7 +893,7 @@ func edgePathMarkup(source, destination LayoutPoint) string {
 	return fmt.Sprintf("M %0.2f %0.2f Q %0.2f %0.2f %0.2f %0.2f", source.X, source.Y, controlX, controlY, destination.X, destination.Y)
 }
 
-func histogramAxisMarkup(bins []HistogramBin) string {
+func histogramAxisMarkup(metric Metric, bins []HistogramBin, maxValue int64) string {
 	if len(bins) == 0 {
 		return ""
 	}
@@ -874,17 +901,21 @@ func histogramAxisMarkup(bins []HistogramBin) string {
 	spanStartNs := bins[0].FromNs
 	spanEndNs := bins[len(bins)-1].ToNs
 	spanWidthNs := max(int64(1), spanEndNs-spanStartNs)
+	plotWidthPx := float64(histogramWidthPx - histogramRightPadPx)
+	plotHeightPx := float64(histogramHeightPx - histogramBottomPadPx - histogramTopPadPx)
 	baselineY := float64(histogramHeightPx - histogramBottomPadPx)
 	labelY := float64(histogramHeightPx - 8)
+	yAxisX := plotWidthPx + 10
+	maxValueFloat := math.Max(float64(maxValue), 1)
 
 	var builder strings.Builder
-	fmt.Fprintf(&builder, `<line class="histogram-axis" x1="0" y1="%0.2f" x2="%d" y2="%0.2f"></line>`, baselineY, histogramWidthPx, baselineY)
+	fmt.Fprintf(&builder, `<line class="histogram-axis" x1="0" y1="%0.2f" x2="%0.2f" y2="%0.2f"></line>`, baselineY, plotWidthPx, baselineY)
 	for tickIndex := range histogramAxisTickCount {
 		ratio := 0.0
 		if histogramAxisTickCount > 1 {
 			ratio = float64(tickIndex) / float64(histogramAxisTickCount-1)
 		}
-		x := ratio * float64(histogramWidthPx)
+		x := ratio * plotWidthPx
 		labelNs := spanStartNs + int64(ratio*float64(spanWidthNs))
 		fmt.Fprintf(&builder, `<line class="histogram-axis-tick" x1="%0.2f" y1="%0.2f" x2="%0.2f" y2="%0.2f"></line>`,
 			x,
@@ -897,6 +928,30 @@ func histogramAxisMarkup(bins []HistogramBin) string {
 			labelY,
 			histogramTickAnchor(tickIndex),
 			html.EscapeString(formatTimelineTickLabel(labelNs, spanWidthNs)),
+		)
+	}
+	for tickIndex := range histogramAxisTickCount {
+		ratio := 0.0
+		if histogramAxisTickCount > 1 {
+			ratio = float64(tickIndex) / float64(histogramAxisTickCount-1)
+		}
+		value := int64(math.Round((1 - ratio) * maxValueFloat))
+		y := histogramTopPadPx + ratio*plotHeightPx
+		fmt.Fprintf(&builder, `<line class="histogram-grid-line" x1="0" y1="%0.2f" x2="%0.2f" y2="%0.2f"></line>`,
+			y,
+			plotWidthPx,
+			y,
+		)
+		fmt.Fprintf(&builder, `<line class="histogram-axis-tick" x1="%0.2f" y1="%0.2f" x2="%0.2f" y2="%0.2f"></line>`,
+			plotWidthPx,
+			y,
+			plotWidthPx+6,
+			y,
+		)
+		fmt.Fprintf(&builder, `<text class="histogram-axis-label histogram-axis-label-y" x="%0.2f" y="%0.2f" text-anchor="start" dominant-baseline="middle">%s</text>`,
+			yAxisX,
+			y,
+			html.EscapeString(formatMetricValue(metric, value)),
 		)
 	}
 	return builder.String()
