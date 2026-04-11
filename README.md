@@ -3,6 +3,7 @@
 `homenetflow` contains tools for turning flow captures into parquet, enriching those parquet files with host-derived metadata, and browsing the enriched parquet in a web UI.
 
 - `nfdump2parquet`: converts a `YYYY/MM/DD/HH/nfcapd.*` tree into flat `nfcap_*.parquet` files
+- `lokileech`: fetches daily dnsmasq and neighbour logs from Loki into `YYYY-MM-DD.jsonl` files
 - `parquethosts`: reads those flat parquet files plus dnsmasq `.jsonl` logs and writes enriched parquet files with host, `_2ld`, and `_tld` fields
 - `parquetflowui`: serves a web UI for browsing enriched parquet netflows with graph, timeline, and table views
 
@@ -73,6 +74,32 @@ Cleanup rules:
 - if a parquet file has no source files left at all, it is preserved
 
 The tool ignores files and directories that do not match the expected `YYYY/MM/DD/HH/nfcapd.*` layout. Future-dated matching inputs still fail explicitly.
+
+## `lokileech`
+
+`lokileech` fetches daily Loki logs into `YYYY-MM-DD.jsonl` files without calling the external `logcli` binary.
+
+### Usage
+
+```bash
+go run ./cmd/lokileech --dst data/logs
+go run ./cmd/lokileech --dst data/logs --also-today
+go run ./cmd/lokileech --dst data/logs --addr https://fw.fingon.iki.fi:3100 -v
+```
+
+Flags:
+
+- `--dst`: output directory for daily log files, default `.`
+- `--addr`: Loki server address, default `LOKI_ADDR` or the home Loki endpoint
+- `--query`: LogQL query, default `{source=~"dnsmasq|ip_neighbour"}`
+- `--days`: number of daily files to fetch, default `80`
+- `--batch`: Loki query batch size, default `5000`
+- `--parallel-duration`: duration of each parallel query range, default `15m`
+- `--parallel-workers`: maximum parallel workers per day, default `10`
+- `--also-today`: delete the newest existing daily output and include today's logs
+- `-v`: enable debug logging
+
+The tool skips non-empty existing outputs. Missing or empty outputs are fetched through a `.new` file and atomically renamed when the daily fetch succeeds.
 
 ## `parquethosts`
 
