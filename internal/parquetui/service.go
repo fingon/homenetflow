@@ -21,23 +21,23 @@ import (
 )
 
 const (
-	directionInboundParquetValue  int32 = 1
-	directionOutboundParquetValue int32 = 0
-	filteredCTEName                     = "filtered_flows"
-	graphRestSourceID                   = "Rest Sources"
-	graphRestDestination                = "Rest Destinations"
-	histogramCacheKind                  = "histogram"
-	histogramBinCount                   = 48
-	layoutCacheKind                     = "layout"
-	nodeDetailPeerLimit                 = 12
-	graphCacheKind                      = "graph"
-	dnsLookupFilenamePrefix             = "dns_lookups_"
-	resultCacheLimit                    = 96
-	restTopEntityLimit                  = 10
-	srcEntityColumn                     = "src_entity"
-	summaryTopItemLimit                 = 10
-	tableCacheKind                      = "table"
-	dstEntityColumn                     = "dst_entity"
+	directionIngressParquetValue int32 = 0
+	directionEgressParquetValue  int32 = 1
+	filteredCTEName                    = "filtered_flows"
+	graphRestSourceID                  = "Rest Sources"
+	graphRestDestination               = "Rest Destinations"
+	histogramCacheKind                 = "histogram"
+	histogramBinCount                  = 48
+	layoutCacheKind                    = "layout"
+	nodeDetailPeerLimit                = 12
+	graphCacheKind                     = "graph"
+	dnsLookupFilenamePrefix            = "dns_lookups_"
+	resultCacheLimit                   = 96
+	restTopEntityLimit                 = 10
+	srcEntityColumn                    = "src_entity"
+	summaryTopItemLimit                = 10
+	tableCacheKind                     = "table"
+	dstEntityColumn                    = "dst_entity"
 )
 
 var requiredColumns = []string{
@@ -100,9 +100,9 @@ type Node struct {
 	CollapsedEntityCount int              `json:"collapsedEntityCount"`
 	AddressClass         nodeAddressClass `json:"addressClass"`
 	ID                   string           `json:"id"`
-	Inbound              int64            `json:"inbound"`
+	Ingress              int64            `json:"ingress"`
 	Label                string           `json:"label"`
-	Outbound             int64            `json:"outbound"`
+	Egress               int64            `json:"egress"`
 	PrivateMetric        int64
 	PublicMetric         int64
 	Selected             bool  `json:"selected"`
@@ -761,16 +761,16 @@ func (s *Service) queryNodeTotals(ctx context.Context, state QueryState) ([]Node
 	query := fmt.Sprintf(`%s
 SELECT entity,
   SUM(total_metric) AS total_metric,
-  SUM(inbound_metric) AS inbound_metric,
-  SUM(outbound_metric) AS outbound_metric,
+  SUM(ingress_metric) AS ingress_metric,
+  SUM(egress_metric) AS egress_metric,
   SUM(private_metric) AS private_metric,
   SUM(public_metric) AS public_metric
 FROM (
-  SELECT src_entity AS entity, %s AS total_metric, 0 AS inbound_metric, %s AS outbound_metric,
+  SELECT src_entity AS entity, %s AS total_metric, 0 AS ingress_metric, %s AS egress_metric,
     %s AS private_metric, %s AS public_metric
   FROM %s
   UNION ALL
-  SELECT dst_entity AS entity, %s AS total_metric, %s AS inbound_metric, 0 AS outbound_metric,
+  SELECT dst_entity AS entity, %s AS total_metric, %s AS ingress_metric, 0 AS egress_metric,
     %s AS private_metric, %s AS public_metric
   FROM %s
 ) aggregate_nodes
@@ -798,7 +798,7 @@ ORDER BY total_metric DESC, entity
 	nodes := make([]Node, 0, 128)
 	for rows.Next() {
 		var node Node
-		if err := rows.Scan(&node.ID, &node.Total, &node.Inbound, &node.Outbound, &node.PrivateMetric, &node.PublicMetric); err != nil {
+		if err := rows.Scan(&node.ID, &node.Total, &node.Ingress, &node.Egress, &node.PrivateMetric, &node.PublicMetric); err != nil {
 			return nil, fmt.Errorf("scan node total row: %w", err)
 		}
 		node.Label = node.ID
@@ -855,9 +855,9 @@ FROM (
 		Total:                total,
 	}
 	if sourceRole {
-		node.Outbound = total
+		node.Egress = total
 	} else {
-		node.Inbound = total
+		node.Ingress = total
 	}
 	if node.ID == state.SelectedEntity {
 		node.Selected = true
@@ -1156,12 +1156,12 @@ func filterClause(state QueryState, srcExpr, dstExpr string) (string, []any) {
 
 	if state.Metric != MetricDNSLookups {
 		switch state.Direction {
-		case DirectionOutbound:
+		case DirectionEgress:
 			conditions = append(conditions, "direction = ?")
-			args = append(args, directionOutboundParquetValue)
-		case DirectionInbound:
+			args = append(args, directionEgressParquetValue)
+		case DirectionIngress:
 			conditions = append(conditions, "direction = ?")
-			args = append(args, directionInboundParquetValue)
+			args = append(args, directionIngressParquetValue)
 		}
 	}
 

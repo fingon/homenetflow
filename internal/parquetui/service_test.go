@@ -21,6 +21,11 @@ const (
 	dnsLookupTestQueryTLD = "com"
 )
 
+func TestDirectionParquetValuesMatchIPFIX(t *testing.T) {
+	assert.Equal(t, directionIngressParquetValue, int32(0))
+	assert.Equal(t, directionEgressParquetValue, int32(1))
+}
+
 func TestNewServiceRejectsBaseParquet(t *testing.T) {
 	tempDir := t.TempDir()
 	writeBaseParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"))
@@ -130,7 +135,7 @@ func TestAppIndexDisablesDirectionForDNSLookups(t *testing.T) {
 
 	app := &App{service: service}
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/?metric=dns_lookups&direction=inbound", nil)
+	request := httptest.NewRequest(http.MethodGet, "/?metric=dns_lookups&direction=ingress", nil)
 
 	app.routes().ServeHTTP(recorder, request)
 
@@ -140,7 +145,7 @@ func TestAppIndexDisablesDirectionForDNSLookups(t *testing.T) {
 	assert.Assert(t, strings.Contains(body, `name="direction"`))
 	assert.Assert(t, strings.Contains(body, `value="both"`))
 	assert.Assert(t, strings.Contains(body, `disabled`))
-	assert.Assert(t, !strings.Contains(body, "Direction: Inbound"))
+	assert.Assert(t, !strings.Contains(body, "Direction: Ingress"))
 }
 
 func TestAppIndexRendersAppShellForHTMXRequests(t *testing.T) {
@@ -339,56 +344,56 @@ func TestServiceGraphFiltersByAddressFamilyIPv6(t *testing.T) {
 
 func TestServiceGraphFiltersByDirection(t *testing.T) {
 	tempDir := t.TempDir()
-	outboundDirection := directionOutboundParquetValue
-	inboundDirection := directionInboundParquetValue
-	outboundRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
-	outboundRecord.Direction = &outboundDirection
-	inboundRecord := sampleRecord("8.8.4.4", "192.168.1.11", "dns-alt.google", "google.com", "com", "beta.lan", "lan", "lan", 200, 30, 40)
-	inboundRecord.Direction = &inboundDirection
+	egressDirection := directionEgressParquetValue
+	ingressDirection := directionIngressParquetValue
+	egressRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
+	egressRecord.Direction = &egressDirection
+	ingressRecord := sampleRecord("8.8.4.4", "192.168.1.11", "dns-alt.google", "google.com", "com", "beta.lan", "lan", "lan", 200, 30, 40)
+	ingressRecord.Direction = &ingressDirection
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
-		outboundRecord,
-		inboundRecord,
+		egressRecord,
+		ingressRecord,
 	})
 
 	service, err := NewService(context.Background(), tempDir, time.Hour)
 	assert.NilError(t, err)
 	defer service.Close()
 
-	outboundGraph, err := service.Graph(context.Background(), QueryState{
-		Direction:   DirectionOutbound,
+	egressGraph, err := service.Graph(context.Background(), QueryState{
+		Direction:   DirectionEgress,
 		Granularity: GranularityHostname,
 		Metric:      MetricBytes,
 	})
 	assert.NilError(t, err)
 
-	inboundGraph, err := service.Graph(context.Background(), QueryState{
-		Direction:   DirectionInbound,
+	ingressGraph, err := service.Graph(context.Background(), QueryState{
+		Direction:   DirectionIngress,
 		Granularity: GranularityHostname,
 		Metric:      MetricBytes,
 	})
 	assert.NilError(t, err)
 
-	assert.Equal(t, outboundGraph.Totals.Connections, int64(1))
-	assert.Equal(t, outboundGraph.Totals.Bytes, int64(100))
-	assert.Assert(t, containsNode(outboundGraph.Nodes, "alpha.lan"))
-	assert.Assert(t, !containsNode(outboundGraph.Nodes, "beta.lan"))
-	assert.Equal(t, inboundGraph.Totals.Connections, int64(1))
-	assert.Equal(t, inboundGraph.Totals.Bytes, int64(200))
-	assert.Assert(t, containsNode(inboundGraph.Nodes, "beta.lan"))
-	assert.Assert(t, !containsNode(inboundGraph.Nodes, "alpha.lan"))
+	assert.Equal(t, egressGraph.Totals.Connections, int64(1))
+	assert.Equal(t, egressGraph.Totals.Bytes, int64(100))
+	assert.Assert(t, containsNode(egressGraph.Nodes, "alpha.lan"))
+	assert.Assert(t, !containsNode(egressGraph.Nodes, "beta.lan"))
+	assert.Equal(t, ingressGraph.Totals.Connections, int64(1))
+	assert.Equal(t, ingressGraph.Totals.Bytes, int64(200))
+	assert.Assert(t, containsNode(ingressGraph.Nodes, "beta.lan"))
+	assert.Assert(t, !containsNode(ingressGraph.Nodes, "alpha.lan"))
 }
 
 func TestServiceHistogramFiltersByDirection(t *testing.T) {
 	tempDir := t.TempDir()
-	outboundDirection := directionOutboundParquetValue
-	inboundDirection := directionInboundParquetValue
-	outboundRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
-	outboundRecord.Direction = &outboundDirection
-	inboundRecord := sampleRecord("8.8.4.4", "192.168.1.11", "dns-alt.google", "google.com", "com", "beta.lan", "lan", "lan", 200, 110, 120)
-	inboundRecord.Direction = &inboundDirection
+	egressDirection := directionEgressParquetValue
+	ingressDirection := directionIngressParquetValue
+	egressRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
+	egressRecord.Direction = &egressDirection
+	ingressRecord := sampleRecord("8.8.4.4", "192.168.1.11", "dns-alt.google", "google.com", "com", "beta.lan", "lan", "lan", 200, 110, 120)
+	ingressRecord.Direction = &ingressDirection
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
-		outboundRecord,
-		inboundRecord,
+		egressRecord,
+		ingressRecord,
 	})
 
 	service, err := NewService(context.Background(), tempDir, time.Hour)
@@ -396,7 +401,7 @@ func TestServiceHistogramFiltersByDirection(t *testing.T) {
 	defer service.Close()
 
 	bins, err := service.Histogram(context.Background(), QueryState{
-		Direction: DirectionOutbound,
+		Direction: DirectionEgress,
 		Metric:    MetricBytes,
 		FromNs:    10,
 		ToNs:      120,
@@ -444,15 +449,15 @@ func TestServiceGraphAddressFamilyUsesSummaryFastPath(t *testing.T) {
 
 func TestServiceGraphDirectionUsesSummaryFastPath(t *testing.T) {
 	tempDir := t.TempDir()
-	outboundDirection := directionOutboundParquetValue
-	inboundDirection := directionInboundParquetValue
-	outboundRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour))
-	outboundRecord.Direction = &outboundDirection
-	inboundRecord := sampleRecord("8.8.4.4", "192.168.1.11", "dns-alt.google", "google.com", "com", "beta.lan", "lan", "lan", 200, int64(3*time.Hour), int64(4*time.Hour))
-	inboundRecord.Direction = &inboundDirection
+	egressDirection := directionEgressParquetValue
+	ingressDirection := directionIngressParquetValue
+	egressRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour))
+	egressRecord.Direction = &egressDirection
+	ingressRecord := sampleRecord("8.8.4.4", "192.168.1.11", "dns-alt.google", "google.com", "com", "beta.lan", "lan", "lan", 200, int64(3*time.Hour), int64(4*time.Hour))
+	ingressRecord.Direction = &ingressDirection
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
-		outboundRecord,
-		inboundRecord,
+		egressRecord,
+		ingressRecord,
 	})
 
 	service, err := NewService(context.Background(), tempDir, time.Hour)
@@ -462,7 +467,7 @@ func TestServiceGraphDirectionUsesSummaryFastPath(t *testing.T) {
 	span, err := service.Span(context.Background())
 	assert.NilError(t, err)
 	state := QueryState{
-		Direction:   DirectionOutbound,
+		Direction:   DirectionEgress,
 		Granularity: Granularity2LD,
 		Metric:      MetricBytes,
 	}.Normalized(span)
@@ -475,7 +480,7 @@ func TestServiceGraphDirectionUsesSummaryFastPath(t *testing.T) {
 	assert.Assert(t, containsNode(graph.Nodes, "google.com"))
 	assert.Assert(t, !containsNode(graph.Nodes, "beta.lan"))
 
-	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionOutbound, MetricBytes, service.currentRevision())
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionEgress, MetricBytes, service.currentRevision())
 	_, ok := service.summaryGraphCache.Get(cacheKey)
 	assert.Assert(t, ok)
 }
@@ -672,15 +677,15 @@ func TestNewServiceBuildsUISummariesWithIPVersion(t *testing.T) {
 
 func TestNewServiceBuildsUISummariesWithDirection(t *testing.T) {
 	tempDir := t.TempDir()
-	outboundDirection := directionOutboundParquetValue
-	inboundDirection := directionInboundParquetValue
-	outboundRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour))
-	outboundRecord.Direction = &outboundDirection
-	inboundRecord := sampleRecord("8.8.4.4", "192.168.1.11", "dns-alt.google", "google.com", "com", "beta.lan", "lan", "lan", 200, int64(3*time.Hour), int64(4*time.Hour))
-	inboundRecord.Direction = &inboundDirection
+	egressDirection := directionEgressParquetValue
+	ingressDirection := directionIngressParquetValue
+	egressRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour))
+	egressRecord.Direction = &egressDirection
+	ingressRecord := sampleRecord("8.8.4.4", "192.168.1.11", "dns-alt.google", "google.com", "com", "beta.lan", "lan", "lan", 200, int64(3*time.Hour), int64(4*time.Hour))
+	ingressRecord.Direction = &ingressDirection
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
-		outboundRecord,
-		inboundRecord,
+		egressRecord,
+		ingressRecord,
 	})
 
 	service, err := NewService(context.Background(), tempDir, time.Hour)
@@ -701,10 +706,10 @@ func TestNewServiceBuildsUISummariesWithDirection(t *testing.T) {
 	})
 	assert.NilError(t, err)
 
-	assert.Assert(t, containsEdgeSummaryDirection(edgeRows, directionOutboundParquetValue))
-	assert.Assert(t, containsEdgeSummaryDirection(edgeRows, directionInboundParquetValue))
-	assert.Assert(t, containsHistogramSummaryDirection(histogramRows, directionOutboundParquetValue))
-	assert.Assert(t, containsHistogramSummaryDirection(histogramRows, directionInboundParquetValue))
+	assert.Assert(t, containsEdgeSummaryDirection(edgeRows, directionEgressParquetValue))
+	assert.Assert(t, containsEdgeSummaryDirection(edgeRows, directionIngressParquetValue))
+	assert.Assert(t, containsHistogramSummaryDirection(histogramRows, directionEgressParquetValue))
+	assert.Assert(t, containsHistogramSummaryDirection(histogramRows, directionIngressParquetValue))
 }
 
 func TestServiceRefreshMetadataRemovesStaleUISummaries(t *testing.T) {

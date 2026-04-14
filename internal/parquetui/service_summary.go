@@ -356,7 +356,7 @@ func buildSummaryMetricView(snapshot *summaryGraphSnapshotData, metric Metric) s
 		sourceNode.Label = aggregate.Source
 		sourceNode.PrivateMetric += summaryMetricValue(metric, aggregate.SrcPrivateBytes, aggregate.SrcPrivateConnections)
 		sourceNode.PublicMetric += summaryMetricValue(metric, aggregate.SrcPublicBytes, aggregate.SrcPublicConnections)
-		sourceNode.Outbound += edge.MetricValue
+		sourceNode.Egress += edge.MetricValue
 		sourceNode.Total += edge.MetricValue
 		sourceNode.AddressClass = classifyNodeAddress(sourceNode.PrivateMetric, sourceNode.PublicMetric)
 		nodeTotalsByID[aggregate.Source] = sourceNode
@@ -366,7 +366,7 @@ func buildSummaryMetricView(snapshot *summaryGraphSnapshotData, metric Metric) s
 		destinationNode.Label = aggregate.Destination
 		destinationNode.PrivateMetric += summaryMetricValue(metric, aggregate.DstPrivateBytes, aggregate.DstPrivateConnections)
 		destinationNode.PublicMetric += summaryMetricValue(metric, aggregate.DstPublicBytes, aggregate.DstPublicConnections)
-		destinationNode.Inbound += edge.MetricValue
+		destinationNode.Ingress += edge.MetricValue
 		destinationNode.Total += edge.MetricValue
 		destinationNode.AddressClass = classifyNodeAddress(destinationNode.PrivateMetric, destinationNode.PublicMetric)
 		nodeTotalsByID[aggregate.Destination] = destinationNode
@@ -504,9 +504,9 @@ func summaryRestNode(nodeTotals []Node, keepLookup map[string]struct{}, sourceRo
 		if _, ok := keepLookup[node.ID]; ok {
 			continue
 		}
-		metricValue := node.Outbound
+		metricValue := node.Egress
 		if !sourceRole {
-			metricValue = node.Inbound
+			metricValue = node.Ingress
 		}
 		if metricValue == 0 {
 			continue
@@ -526,9 +526,9 @@ func summaryRestNode(nodeTotals []Node, keepLookup map[string]struct{}, sourceRo
 		Total:                total,
 	}
 	if sourceRole {
-		node.Outbound = total
+		node.Egress = total
 	} else {
-		node.Inbound = total
+		node.Ingress = total
 	}
 	return node
 }
@@ -598,12 +598,12 @@ func summaryFilterClause(addressFamily AddressFamily, direction DirectionFilter)
 		args = append(args, model.IPVersion6)
 	}
 	switch direction {
-	case DirectionOutbound:
+	case DirectionEgress:
 		conditions = append(conditions, "direction = ?")
-		args = append(args, directionOutboundParquetValue)
-	case DirectionInbound:
+		args = append(args, directionEgressParquetValue)
+	case DirectionIngress:
 		conditions = append(conditions, "direction = ?")
-		args = append(args, directionInboundParquetValue)
+		args = append(args, directionIngressParquetValue)
 	}
 	if len(conditions) == 0 {
 		return "", nil

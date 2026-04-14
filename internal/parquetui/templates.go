@@ -268,8 +268,8 @@ func selectedPanel(state QueryState, graph GraphData) g.Node {
 	return Div(
 		sectionTitle("Selected Entity"),
 		P(g.Text(selectedNode.Label)),
-		P(g.Text("Inbound: "+formatMetricValue(graph.ActiveMetric, selectedNode.Inbound))),
-		P(g.Text("Outbound: "+formatMetricValue(graph.ActiveMetric, selectedNode.Outbound))),
+		P(g.Text("Ingress: "+formatMetricValue(graph.ActiveMetric, selectedNode.Ingress))),
+		P(g.Text("Egress: "+formatMetricValue(graph.ActiveMetric, selectedNode.Egress))),
 		Div(
 			Class("button-row"),
 			navLink(entityURL, "action-button", "Filter to this entity"),
@@ -387,8 +387,8 @@ func topBar(dashboard DashboardData) g.Node {
 					Class("group segmented"),
 					Label(g.Text("Direction")),
 					toggleRadioDisabled("direction", string(DirectionBoth), "Both", currentDirection == DirectionBoth, directionDisabled),
-					toggleRadioDisabled("direction", string(DirectionOutbound), "Outbound", currentDirection == DirectionOutbound, directionDisabled),
-					toggleRadioDisabled("direction", string(DirectionInbound), "Inbound", currentDirection == DirectionInbound, directionDisabled),
+					toggleRadioDisabled("direction", string(DirectionEgress), "Egress", currentDirection == DirectionEgress, directionDisabled),
+					toggleRadioDisabled("direction", string(DirectionIngress), "Ingress", currentDirection == DirectionIngress, directionDisabled),
 				),
 				Div(
 					Class("group"),
@@ -553,10 +553,10 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 			nodeFill(node),
 			nodeStroke(node.Selected),
 			nodeStrokeWidth(node.Selected))
-		builder.WriteString(titleMarkup(fmt.Sprintf("%s\nInbound: %s\nOutbound: %s",
+		builder.WriteString(titleMarkup(fmt.Sprintf("%s\nIngress: %s\nEgress: %s",
 			node.Label,
-			formatMetricValue(state.Metric, node.Inbound),
-			formatMetricValue(state.Metric, node.Outbound))))
+			formatMetricValue(state.Metric, node.Ingress),
+			formatMetricValue(state.Metric, node.Egress))))
 		builder.WriteString(`</circle>`)
 		builder.WriteString(labelTextMarkup(0, radius+18, node.Label, "middle"))
 		builder.WriteString(`</g></a>`)
@@ -878,10 +878,10 @@ func addressFamilyLabel(addressFamily AddressFamily) string {
 
 func directionLabel(direction DirectionFilter) string {
 	switch direction {
-	case DirectionOutbound:
-		return "Outbound"
-	case DirectionInbound:
-		return "Inbound"
+	case DirectionEgress:
+		return "Egress"
+	case DirectionIngress:
+		return "Ingress"
 	default:
 		return "Both"
 	}

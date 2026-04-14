@@ -63,9 +63,9 @@ const (
 type DirectionFilter string
 
 const (
-	DirectionBoth     DirectionFilter = "both"
-	DirectionOutbound DirectionFilter = "outbound"
-	DirectionInbound  DirectionFilter = "inbound"
+	DirectionBoth    DirectionFilter = "both"
+	DirectionEgress  DirectionFilter = "egress"
+	DirectionIngress DirectionFilter = "ingress"
 )
 
 type QueryState struct {
@@ -466,7 +466,7 @@ func (a AddressFamily) valid() bool {
 }
 
 func (d DirectionFilter) valid() bool {
-	return d == DirectionBoth || d == DirectionOutbound || d == DirectionInbound
+	return d == DirectionBoth || d == DirectionEgress || d == DirectionIngress
 }
 
 func (s TableSort) valid() bool {

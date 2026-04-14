@@ -39,19 +39,21 @@ func TestParseQueryStateInvalidAddressFamilyDefaultsToAll(t *testing.T) {
 }
 
 func TestParseQueryStateDirection(t *testing.T) {
-	request := httptest.NewRequest("GET", "/?direction=inbound", nil)
+	request := httptest.NewRequest("GET", "/?direction=ingress", nil)
 
 	state := ParseQueryState(request)
 
-	assert.Equal(t, state.Direction, DirectionInbound)
+	assert.Equal(t, state.Direction, DirectionIngress)
 }
 
 func TestParseQueryStateInvalidDirectionDefaultsToBoth(t *testing.T) {
-	request := httptest.NewRequest("GET", "/?direction=sideways", nil)
+	for _, direction := range []string{"sideways", "inbound", "outbound"} {
+		request := httptest.NewRequest("GET", "/?direction="+direction, nil)
 
-	state := ParseQueryState(request)
+		state := ParseQueryState(request)
 
-	assert.Equal(t, state.Direction, DirectionBoth)
+		assert.Equal(t, state.Direction, DirectionBoth)
+	}
 }
 
 func TestParseQueryStateDefaultsSortForConnectionsMetric(t *testing.T) {
@@ -84,7 +86,7 @@ func TestQueryStateNormalizedAppliesSpanAndNodeLimit(t *testing.T) {
 
 func TestQueryStateNormalizedResetsDirectionForDNSLookups(t *testing.T) {
 	state := QueryState{
-		Direction: DirectionInbound,
+		Direction: DirectionIngress,
 		Metric:    MetricDNSLookups,
 	}
 
@@ -141,7 +143,7 @@ func TestQueryStateNormalizedDefaultsSortForMetric(t *testing.T) {
 func TestQueryStateValuesSkipPreset(t *testing.T) {
 	state := QueryState{
 		AddressFamily: AddressFamilyIPv4,
-		Direction:     DirectionOutbound,
+		Direction:     DirectionEgress,
 		FromNs:        10,
 		ToNs:          20,
 		Metric:        MetricBytes,
@@ -154,7 +156,7 @@ func TestQueryStateValuesSkipPreset(t *testing.T) {
 
 	assert.Equal(t, values.Get("preset"), "")
 	assert.Equal(t, values.Get("family"), "ipv4")
-	assert.Equal(t, values.Get("direction"), "outbound")
+	assert.Equal(t, values.Get("direction"), "egress")
 	assert.Equal(t, values.Get("view"), "")
 }
 
