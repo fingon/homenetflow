@@ -45,6 +45,83 @@ func TestFormatMetricValue(t *testing.T) {
 	}
 }
 
+func TestFormatTimelineYAxisMetricValue(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		axisMaxValue int64
+		expected     string
+		metric       Metric
+		name         string
+		tickStep     int64
+		value        int64
+	}{
+		{name: "bytes zero", metric: MetricBytes, axisMaxValue: 4000, tickStep: 1000, value: 0, expected: "0"},
+		{name: "bytes below thousand", metric: MetricBytes, axisMaxValue: 500, tickStep: 100, value: 500, expected: "500"},
+		{name: "bytes compact thousand", metric: MetricBytes, axisMaxValue: 4000, tickStep: 1000, value: 1000, expected: "1kb"},
+		{name: "bytes shared decimal granularity", metric: MetricBytes, axisMaxValue: 2000, tickStep: 500, value: 1500, expected: "1.5kb"},
+		{name: "bytes shared decimal top", metric: MetricBytes, axisMaxValue: 2000, tickStep: 500, value: 2000, expected: "2.0kb"},
+		{name: "connections compact", metric: MetricConnections, axisMaxValue: 4000, tickStep: 1000, value: 4000, expected: "4k"},
+		{name: "dns compact", metric: MetricDNSLookups, axisMaxValue: 3000000, tickStep: 1000000, value: 2000000, expected: "2m"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			scale := newTimelineYAxisLabelScale(testCase.metric, testCase.axisMaxValue, testCase.tickStep)
+			assert.Equal(t, formatTimelineYAxisMetricValue(testCase.value, scale), testCase.expected)
+		})
+	}
+}
+
+func TestHistogramYAxisScaleUsesOneSignificantDigitTicks(t *testing.T) {
+	t.Parallel()
+
+	yAxisMaxValue, tickStep, ticks := histogramYAxisScale(4000)
+
+	assert.Equal(t, yAxisMaxValue, int64(4000))
+	assert.Equal(t, tickStep, int64(1000))
+	assert.DeepEqual(t, ticks, []int64{4000, 3000, 2000, 1000, 0})
+	assert.Equal(t, histogramYAxisSignificantDigits(4000), histogramYAxisOneDigit)
+}
+
+func TestHistogramYAxisScaleUsesLadderForThreeGigabytes(t *testing.T) {
+	t.Parallel()
+
+	yAxisMaxValue, tickStep, ticks := histogramYAxisScale(2800000000)
+	scale := newTimelineYAxisLabelScale(MetricBytes, yAxisMaxValue, tickStep)
+	labels := make([]string, 0, len(ticks))
+	for _, tick := range ticks {
+		labels = append(labels, formatTimelineYAxisMetricValue(tick, scale))
+	}
+
+	assert.Equal(t, yAxisMaxValue, int64(3000000000))
+	assert.Equal(t, tickStep, int64(1000000000))
+	assert.DeepEqual(t, ticks, []int64{3000000000, 2000000000, 1000000000, 0})
+	assert.DeepEqual(t, labels, []string{"3gb", "2gb", "1gb", "0"})
+}
+
+func TestHistogramYAxisScaleFallsBackToTwoSignificantDigits(t *testing.T) {
+	t.Parallel()
+
+	yAxisMaxValue, tickStep, ticks := histogramYAxisScale(2)
+
+	assert.Equal(t, yAxisMaxValue, int64(2))
+	assert.Equal(t, tickStep, int64(1))
+	assert.DeepEqual(t, ticks, []int64{2, 1, 0})
+	assert.Equal(t, histogramYAxisSignificantDigits(2), histogramYAxisTwoDigits)
+}
+
+func TestHistogramYAxisScaleRoundsDomainUp(t *testing.T) {
+	t.Parallel()
+
+	yAxisMaxValue, tickStep, ticks := histogramYAxisScale(1234)
+
+	assert.Equal(t, yAxisMaxValue, int64(2000))
+	assert.Equal(t, tickStep, int64(500))
+	assert.DeepEqual(t, ticks, []int64{2000, 1500, 1000, 500, 0})
+}
+
 func TestHistogramSVGMarkupAddsAxisLabels(t *testing.T) {
 	t.Parallel()
 
@@ -61,7 +138,10 @@ func TestHistogramSVGMarkupAddsAxisLabels(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, "histogram-axis-label"))
 	assert.Assert(t, strings.Contains(markup, "histogram-axis-label-y"))
 	assert.Assert(t, strings.Contains(markup, ">0<"))
-	assert.Assert(t, strings.Contains(markup, ">4000<"))
+	assert.Assert(t, strings.Contains(markup, ">4kb<"))
+	assert.Assert(t, strings.Contains(markup, ">3kb<"))
+	assert.Assert(t, strings.Contains(markup, ">2kb<"))
+	assert.Assert(t, strings.Contains(markup, ">1kb<"))
 	assert.Assert(t, strings.Contains(markup, ">00:00<"))
 	assert.Assert(t, strings.Contains(markup, ">23:59<"))
 	assert.Assert(t, strings.Contains(markup, "Value: 4000"))
@@ -82,7 +162,10 @@ func TestHistogramSVGMarkupFormatsYAxisLabelsForConnections(t *testing.T) {
 	markup := histogramSVGMarkup(MetricConnections, bins)
 
 	assert.Assert(t, strings.Contains(markup, `class="histogram-axis-label histogram-axis-label-y"`))
-	assert.Assert(t, strings.Contains(markup, ">10k<"))
+	assert.Assert(t, strings.Contains(markup, ">10.0k<"))
+	assert.Assert(t, strings.Contains(markup, ">7.5k<"))
+	assert.Assert(t, strings.Contains(markup, ">5.0k<"))
+	assert.Assert(t, strings.Contains(markup, ">2.5k<"))
 }
 
 func TestTopBarRendersTimePresetButtons(t *testing.T) {

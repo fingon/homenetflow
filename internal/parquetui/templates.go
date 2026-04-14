@@ -25,6 +25,9 @@ const (
 	histogramRightPadPx     = 64
 	histogramTopPadPx       = 8
 	histogramWidthPx        = 960
+	histogramYAxisMinTicks  = 3
+	histogramYAxisOneDigit  = 1
+	histogramYAxisTwoDigits = 2
 	hxSelectAppShellValue   = "#app-shell"
 	hxSwapOuterHTMLValue    = "outerHTML"
 	hxTargetAppShellValue   = "#app-shell"
@@ -584,12 +587,13 @@ func histogramSVGMarkup(metric Metric, bins []HistogramBin) string {
 	for _, bin := range bins {
 		maxValue = max(maxValue, bin.Value)
 	}
+	yAxisMaxValue, yAxisTickStep, yAxisTicks := histogramYAxisScale(maxValue)
 	plotWidthPx := float64(histogramWidthPx - histogramRightPadPx)
 	barWidth := math.Max(histogramMinBarWidthPx, plotWidthPx/float64(len(bins)))
 	plotHeightPx := float64(histogramHeightPx - histogramBottomPadPx - histogramTopPadPx)
 	builder.WriteString(`<g>`)
 	for index, bin := range bins {
-		barHeight := (float64(bin.Value) / float64(maxValue)) * math.Max(1, plotHeightPx-6)
+		barHeight := (float64(bin.Value) / float64(yAxisMaxValue)) * math.Max(1, plotHeightPx-6)
 		x := float64(index) * barWidth
 		y := histogramTopPadPx + plotHeightPx - barHeight
 		formattedValue := formatMetricValue(metric, bin.Value)
@@ -612,7 +616,7 @@ func histogramSVGMarkup(metric Metric, bins []HistogramBin) string {
 			formattedValue)))
 		builder.WriteString(`</rect>`)
 	}
-	builder.WriteString(histogramAxisMarkup(metric, bins, maxValue))
+	builder.WriteString(histogramAxisMarkup(metric, bins, yAxisMaxValue, yAxisTickStep, yAxisTicks))
 	builder.WriteString(`</g></svg>`)
 	return builder.String()
 }
@@ -975,7 +979,7 @@ func edgePathMarkup(source, destination LayoutPoint) string {
 	return fmt.Sprintf("M %0.2f %0.2f Q %0.2f %0.2f %0.2f %0.2f", source.X, source.Y, controlX, controlY, destination.X, destination.Y)
 }
 
-func histogramAxisMarkup(metric Metric, bins []HistogramBin, maxValue int64) string {
+func histogramAxisMarkup(metric Metric, bins []HistogramBin, yAxisMaxValue, yAxisTickStep int64, yAxisTicks []int64) string {
 	if len(bins) == 0 {
 		return ""
 	}
@@ -988,7 +992,8 @@ func histogramAxisMarkup(metric Metric, bins []HistogramBin, maxValue int64) str
 	baselineY := float64(histogramHeightPx - histogramBottomPadPx)
 	labelY := float64(histogramHeightPx - 8)
 	yAxisX := plotWidthPx + 10
-	maxValueFloat := math.Max(float64(maxValue), 1)
+	yAxisMaxValueFloat := math.Max(float64(yAxisMaxValue), 1)
+	yAxisLabelScale := newTimelineYAxisLabelScale(metric, yAxisMaxValue, yAxisTickStep)
 
 	var builder strings.Builder
 	fmt.Fprintf(&builder, `<line class="histogram-axis" x1="0" y1="%0.2f" x2="%0.2f" y2="%0.2f"></line>`, baselineY, plotWidthPx, baselineY)
@@ -1012,12 +1017,8 @@ func histogramAxisMarkup(metric Metric, bins []HistogramBin, maxValue int64) str
 			html.EscapeString(formatTimelineTickLabel(labelNs, spanWidthNs)),
 		)
 	}
-	for tickIndex := range histogramAxisTickCount {
-		ratio := 0.0
-		if histogramAxisTickCount > 1 {
-			ratio = float64(tickIndex) / float64(histogramAxisTickCount-1)
-		}
-		value := int64(math.Round((1 - ratio) * maxValueFloat))
+	for _, value := range yAxisTicks {
+		ratio := 1 - float64(value)/yAxisMaxValueFloat
 		y := histogramTopPadPx + ratio*plotHeightPx
 		fmt.Fprintf(&builder, `<line class="histogram-grid-line" x1="0" y1="%0.2f" x2="%0.2f" y2="%0.2f"></line>`,
 			y,
@@ -1033,10 +1034,84 @@ func histogramAxisMarkup(metric Metric, bins []HistogramBin, maxValue int64) str
 		fmt.Fprintf(&builder, `<text class="histogram-axis-label histogram-axis-label-y" x="%0.2f" y="%0.2f" text-anchor="start" dominant-baseline="middle">%s</text>`,
 			yAxisX,
 			y,
-			html.EscapeString(formatMetricValue(metric, value)),
+			html.EscapeString(formatTimelineYAxisMetricValue(value, yAxisLabelScale)),
 		)
 	}
 	return builder.String()
+}
+
+func histogramYAxisScale(maxValue int64) (int64, int64, []int64) {
+	yAxisMaxValue := roundUpSignificantInt(maxValue, histogramYAxisOneDigit)
+	tickStep := histogramYAxisTickStep(yAxisMaxValue, histogramYAxisOneDigit)
+	ticks := histogramYAxisTicks(yAxisMaxValue, tickStep)
+	if histogramPositiveTickCount(ticks) >= histogramYAxisMinTicks {
+		return yAxisMaxValue, tickStep, ticks
+	}
+
+	tickStep = histogramYAxisTickStep(yAxisMaxValue, histogramYAxisTwoDigits)
+	ticks = histogramYAxisTicks(yAxisMaxValue, tickStep)
+	return yAxisMaxValue, tickStep, ticks
+}
+
+func histogramYAxisSignificantDigits(maxValue int64) int {
+	yAxisMaxValue := roundUpSignificantInt(maxValue, histogramYAxisOneDigit)
+	tickStep := histogramYAxisTickStep(yAxisMaxValue, histogramYAxisOneDigit)
+	if histogramPositiveTickCount(histogramYAxisTicks(yAxisMaxValue, tickStep)) >= histogramYAxisMinTicks {
+		return histogramYAxisOneDigit
+	}
+	return histogramYAxisTwoDigits
+}
+
+func histogramYAxisTickStep(yAxisMaxValue int64, significantDigits int) int64 {
+	if yAxisMaxValue <= 1 {
+		return 1
+	}
+	if significantDigits == histogramYAxisOneDigit {
+		return int64(math.Pow10(int(math.Floor(math.Log10(float64(yAxisMaxValue))))))
+	}
+
+	step := int64(math.Round(float64(yAxisMaxValue) / float64(histogramAxisTickCount-1)))
+	return max(int64(1), step)
+}
+
+func histogramYAxisTicks(yAxisMaxValue, tickStep int64) []int64 {
+	ticks := make([]int64, 0, histogramAxisTickCount)
+	for value := yAxisMaxValue; value > 0; value -= tickStep {
+		ticks = append(ticks, value)
+	}
+	ticks = append(ticks, 0)
+	return ticks
+}
+
+func histogramPositiveTickCount(ticks []int64) int {
+	count := 0
+	for _, tick := range ticks {
+		if tick > 0 {
+			count++
+		}
+	}
+	return count
+}
+
+func roundUpSignificantInt(value int64, significantDigits int) int64 {
+	if value <= 0 {
+		return 1
+	}
+
+	factor := significantFactor(float64(value), significantDigits)
+	if factor < 1 {
+		return value
+	}
+	return int64(math.Ceil(float64(value)/factor) * factor)
+}
+
+func significantFactor(value float64, significantDigits int) float64 {
+	if significantDigits < 1 {
+		significantDigits = 1
+	}
+
+	exponent := math.Floor(math.Log10(value))
+	return math.Pow(10, exponent-float64(significantDigits)+1)
 }
 
 func histogramTickAnchor(tickIndex int) string {
