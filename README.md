@@ -206,7 +206,7 @@ The UI includes:
 - metric scaling by bytes or connections
 - global granularity switching across `tld`, `2ld`, `hostname`, and `ip`
 - entity selection, include/exclude filtering, and a sortable flows table
-- capped node counts at granular levels with explicit `Rest Sources` and `Rest Destinations` buckets
+- capped node counts at granular levels with explicit `Other Sources` and `Other Destinations` buckets
 - private-aware graph coloring: private nodes are green, mixed nodes are yellow, public nodes use the default blue
 
 The UI uses htmx for navigation and filter updates, with only a small amount of custom JavaScript for histogram brushing and request status handling.

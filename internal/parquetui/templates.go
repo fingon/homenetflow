@@ -428,7 +428,7 @@ func topBar(dashboard DashboardData) g.Node {
 						optionValue("0", "All", state.EdgeLimit == 0),
 					),
 				),
-				navLink("/", "action-button", "Reset"),
+				navLink("/", "action-button danger", "Reset"),
 			),
 		),
 	)

@@ -24,8 +24,8 @@ const (
 	directionIngressParquetValue int32 = 0
 	directionEgressParquetValue  int32 = 1
 	filteredCTEName                    = "filtered_flows"
-	graphRestSourceID                  = "Rest Sources"
-	graphRestDestination               = "Rest Destinations"
+	graphRestSourceID                  = "Other Sources"
+	graphRestDestination               = "Other Destinations"
 	histogramCacheKind                 = "histogram"
 	histogramBinCount                  = 48
 	layoutCacheKind                    = "layout"

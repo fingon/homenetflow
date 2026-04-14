@@ -60,6 +60,8 @@ func TestServiceGraphAddsRestNodesAtGranularLevels(t *testing.T) {
 	assert.Equal(t, graph.Totals.Bytes, int64(600))
 	assert.Assert(t, containsNode(graph.Nodes, graphRestSourceID))
 	assert.Assert(t, containsNode(graph.Nodes, graphRestDestination))
+	assert.Assert(t, containsNodeLabel(graph.Nodes, "Other Sources"))
+	assert.Assert(t, containsNodeLabel(graph.Nodes, "Other Destinations"))
 }
 
 func TestAppIndexRendersMainRegions(t *testing.T) {
@@ -853,6 +855,15 @@ func TestServiceGraphClassifiesPrivateAndMixedNodes(t *testing.T) {
 func containsNode(nodes []Node, nodeID string) bool {
 	for _, node := range nodes {
 		if node.ID == nodeID {
+			return true
+		}
+	}
+	return false
+}
+
+func containsNodeLabel(nodes []Node, label string) bool {
+	for _, node := range nodes {
+		if node.Label == label {
 			return true
 		}
 	}

@@ -187,6 +187,7 @@ func TestTopBarRendersTimePresetButtons(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `name="family"`))
 	assert.Assert(t, strings.Contains(markup, `value="ipv4"`))
 	assert.Assert(t, strings.Contains(markup, `value="ipv6"`))
+	assert.Assert(t, strings.Contains(markup, `class="action-button danger"`))
 	assert.Assert(t, !strings.Contains(markup, `name="view"`))
 }
 
