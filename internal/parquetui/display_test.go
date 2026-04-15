@@ -396,6 +396,87 @@ func TestDNSLookupPanelsHideBytes(t *testing.T) {
 	assert.Assert(t, strings.Contains(selectedEdgeMarkup, "DNS Lookups: 7"))
 }
 
+func TestSelectedPanelRendersRawFlowLinkForEligibleSelections(t *testing.T) {
+	t.Parallel()
+
+	nodeMarkup := renderNodeString(t, selectedPanelAt(QueryState{
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+	}, GraphData{
+		ActiveMetric: MetricBytes,
+		SelectedNode: &Node{ID: "alpha.lan", Label: "alpha.lan"},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	assert.Assert(t, strings.Contains(nodeMarkup, "Show matching flows"))
+	assert.Assert(t, strings.Contains(nodeMarkup, "flow_scope=entity"))
+	assert.Assert(t, strings.Contains(nodeMarkup, "flow_entity=alpha.lan"))
+
+	edgeMarkup := renderNodeString(t, selectedPanelAt(QueryState{
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+	}, GraphData{
+		ActiveMetric: MetricBytes,
+		SelectedEdge: &Edge{Source: "alpha.lan", Destination: "dns.google"},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	assert.Assert(t, strings.Contains(edgeMarkup, "flow_scope=edge"))
+	assert.Assert(t, strings.Contains(edgeMarkup, "flow_source=alpha.lan"))
+	assert.Assert(t, strings.Contains(edgeMarkup, "flow_destination=dns.google"))
+}
+
+func TestTablePanelRendersRawFlowChevronForEligibleRows(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, TablePanel(QueryState{
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+	}, TableData{
+		Page:       1,
+		TotalPages: 1,
+		VisibleRows: []TableRow{
+			{Destination: "dns.google", Source: "alpha.lan"},
+			{Destination: "Other Destinations", Source: "beta.lan", Synthetic: true},
+		},
+	}))
+
+	assert.Assert(t, strings.Contains(markup, `aria-label="Show flows from alpha.lan to dns.google"`))
+	assert.Assert(t, strings.Contains(markup, "flow_scope=edge"))
+	assert.Assert(t, !strings.Contains(markup, `aria-label="Show flows from beta.lan to Other Destinations"`))
+}
+
+func TestFlowDetailTableRendersRawRows(t *testing.T) {
+	t.Parallel()
+
+	direction := directionEgressParquetValue
+	markup := renderNodeString(t, flowDetailTableAt(FlowDetailData{
+		Page:       1,
+		TotalPages: 1,
+		VisibleRows: []FlowDetailRow{
+			{
+				Bytes:       1200,
+				Destination: "dns.google",
+				DstIP:       "8.8.8.8",
+				Direction:   &direction,
+				EndNs:       time.Date(2026, time.April, 15, 1, 2, 4, 0, time.UTC).UnixNano(),
+				Packets:     7,
+				Protocol:    17,
+				Source:      "alpha.lan",
+				SrcIP:       "192.168.1.10",
+				StartNs:     time.Date(2026, time.April, 15, 1, 2, 3, 0, time.UTC).UnixNano(),
+			},
+		},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	assert.Assert(t, strings.Contains(markup, "alpha.lan"))
+	assert.Assert(t, strings.Contains(markup, "192.168.1.10:0"))
+	assert.Assert(t, strings.Contains(markup, "dns.google"))
+	assert.Assert(t, strings.Contains(markup, "8.8.8.8:0"))
+	assert.Assert(t, strings.Contains(markup, ">17</td>"))
+	assert.Assert(t, strings.Contains(markup, ">7</td>"))
+	assert.Assert(t, strings.Contains(markup, ">1200</td>"))
+	assert.Assert(t, strings.Contains(markup, ">Egress</td>"))
+}
+
 func TestTablePanelRendersCompactTimestampWithFullMetadata(t *testing.T) {
 	t.Parallel()
 

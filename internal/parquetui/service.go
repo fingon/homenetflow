@@ -179,6 +179,22 @@ type TableRow struct {
 	Synthetic         bool
 }
 
+type FlowDetailRow struct {
+	Bytes       int64
+	Destination string
+	DstIP       string
+	DstPort     int32
+	Direction   *int32
+	EndNs       int64
+	IPVersion   int32
+	Packets     int64
+	Protocol    int32
+	Source      string
+	SrcIP       string
+	SrcPort     int32
+	StartNs     int64
+}
+
 type TableData struct {
 	Page        int
 	PageSize    int
@@ -187,6 +203,17 @@ type TableData struct {
 	TotalCount  int
 	TotalPages  int
 	VisibleRows []TableRow
+}
+
+type FlowDetailData struct {
+	Page        int
+	PageSize    int
+	Query       FlowQuery
+	Rows        []FlowDetailRow
+	Span        TimeSpan
+	TotalCount  int
+	TotalPages  int
+	VisibleRows []FlowDetailRow
 }
 
 type DashboardData struct {
@@ -541,6 +568,116 @@ func (s *Service) Table(ctx context.Context, state QueryState) (TableData, error
 	return table, nil
 }
 
+func (s *Service) FlowDetails(ctx context.Context, query FlowQuery) (FlowDetailData, error) {
+	span, err := s.Span(ctx)
+	if err != nil {
+		return FlowDetailData{}, err
+	}
+	state := query.State.Normalized(span)
+	query.State = state
+	if state.Metric == MetricDNSLookups {
+		return FlowDetailData{}, errors.New("raw flow details are not available for DNS lookup metrics")
+	}
+	if !query.Scope.valid() {
+		return FlowDetailData{}, fmt.Errorf("invalid flow scope %q", query.Scope)
+	}
+	switch query.Scope {
+	case FlowScopeEntity:
+		if query.Entity == "" {
+			return FlowDetailData{}, errors.New("flow entity is required")
+		}
+	case FlowScopeEdge:
+		if query.Source == "" || query.Destination == "" {
+			return FlowDetailData{}, errors.New("flow source and destination are required")
+		}
+	}
+
+	page := state.Page
+	if page <= 0 {
+		page = defaultPage
+	}
+	pageSize := state.PageSize
+	if pageSize <= 0 {
+		pageSize = defaultPageSize
+	}
+
+	cte, args := s.filteredRawFlowsCTE(state)
+	scopeClause, scopeArgs := flowScopeClause(query)
+	countQuery := fmt.Sprintf(`%s
+SELECT COUNT(*)
+FROM %s
+WHERE %s
+`, cte, filteredCTEName, scopeClause)
+	countArgs := append(append([]any(nil), args...), scopeArgs...)
+
+	var totalCount int
+	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&totalCount); err != nil {
+		return FlowDetailData{}, fmt.Errorf("count selected flows: %w", err)
+	}
+	totalPages := max(1, (totalCount+pageSize-1)/pageSize)
+	if page > totalPages {
+		page = totalPages
+		query.State.Page = page
+	}
+	offset := (page - 1) * pageSize
+
+	rowsQuery := fmt.Sprintf(`%s
+SELECT time_start_ns, time_end_ns, src_entity, dst_entity, src_ip, dst_ip, src_port, dst_port, protocol, packets, bytes, direction, ip_version
+FROM %s
+WHERE %s
+ORDER BY time_start_ns DESC, time_end_ns DESC, src_entity, dst_entity, src_ip, dst_ip, src_port, dst_port, protocol
+LIMIT ? OFFSET ?
+`, cte, filteredCTEName, scopeClause)
+	rowArgs := append(append([]any(nil), countArgs...), pageSize, offset)
+	rows, err := s.db.QueryContext(ctx, rowsQuery, rowArgs...)
+	if err != nil {
+		return FlowDetailData{}, fmt.Errorf("query selected flows: %w", err)
+	}
+	defer rows.Close()
+
+	visibleRows := make([]FlowDetailRow, 0, min(pageSize, totalCount))
+	for rows.Next() {
+		var row FlowDetailRow
+		var direction sql.NullInt32
+		if err := rows.Scan(
+			&row.StartNs,
+			&row.EndNs,
+			&row.Source,
+			&row.Destination,
+			&row.SrcIP,
+			&row.DstIP,
+			&row.SrcPort,
+			&row.DstPort,
+			&row.Protocol,
+			&row.Packets,
+			&row.Bytes,
+			&direction,
+			&row.IPVersion,
+		); err != nil {
+			return FlowDetailData{}, fmt.Errorf("scan selected flow row: %w", err)
+		}
+		if direction.Valid {
+			value := direction.Int32
+			row.Direction = &value
+		}
+		visibleRows = append(visibleRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return FlowDetailData{}, fmt.Errorf("iterate selected flow rows: %w", err)
+	}
+
+	return FlowDetailData{
+		Page:        page,
+		PageSize:    pageSize,
+		Query:       query,
+		Rows:        visibleRows,
+		Span:        span,
+		TotalCount:  totalCount,
+		TotalPages:  totalPages,
+		VisibleRows: visibleRows,
+	}, nil
+}
+
 func tableFromGraph(graph GraphData, state QueryState) TableData {
 	rows := make([]TableRow, 0, len(graph.Edges))
 	for _, edge := range graph.Edges {
@@ -767,6 +904,29 @@ func (s *Service) filteredCTE(state QueryState) (string, []any) {
 		quoteLiteral(s.globPath),
 		whereClause,
 	), args
+}
+
+func (s *Service) filteredRawFlowsCTE(state QueryState) (string, []any) {
+	srcExpr, dstExpr := entityExpressions(state.Granularity)
+	whereClause, args := filterClause(state, srcExpr, dstExpr)
+	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, bytes, direction, dst_ip, dst_port, ip_version, packets, protocol, src_ip, src_port, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
+		filteredCTEName,
+		srcExpr,
+		dstExpr,
+		quoteLiteral(s.globPath),
+		whereClause,
+	), args
+}
+
+func flowScopeClause(query FlowQuery) (string, []any) {
+	switch query.Scope {
+	case FlowScopeEntity:
+		return "(src_entity = ? OR dst_entity = ?)", []any{query.Entity, query.Entity}
+	case FlowScopeEdge:
+		return "(src_entity = ? AND dst_entity = ?)", []any{query.Source, query.Destination}
+	default:
+		return "false", nil
+	}
 }
 
 func (s *Service) filteredDNSLookupCTE(state QueryState) (string, []any) {

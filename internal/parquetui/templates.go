@@ -53,6 +53,8 @@ const (
 	unselectedNodeFill      = "#587ea3"
 	unselectedNodeStroke    = "rgba(31, 39, 51, 0.24)"
 	yearTimestampFormat     = "02.01.2006 15:04:05"
+	actionButtonClass       = "action-button"
+	disabledClassSuffix     = " disabled"
 )
 
 func Index(dashboard DashboardData, devMode bool, devSessionToken string) g.Node {
@@ -72,6 +74,32 @@ func Index(dashboard DashboardData, devMode bool, devSessionToken string) g.Node
 				Meta(Charset("utf-8")),
 				Meta(Name("viewport"), Content("width=device-width, initial-scale=1")),
 				TitleEl(g.Text("Netflow Browser")),
+				Link(Rel("stylesheet"), Href("/static/style.css")),
+				Script(Src("/static/htmx.min.js"), Defer()),
+				Script(Src("/static/app.js"), Defer()),
+			),
+			Body(bodyNodes...),
+		),
+	)
+}
+
+func FlowDetailIndex(flows FlowDetailData, devMode bool, devSessionToken string) g.Node {
+	bodyNodes := []g.Node{
+		FlowDetailShell(flows),
+	}
+	if devMode {
+		bodyNodes = append([]g.Node{
+			Data("dev-mode", "true"),
+			Data("dev-session-token", devSessionToken),
+		}, bodyNodes...)
+	}
+
+	return Doctype(
+		HTML(Lang("en"),
+			Head(
+				Meta(Charset("utf-8")),
+				Meta(Name("viewport"), Content("width=device-width, initial-scale=1")),
+				TitleEl(g.Text("Selected Flows")),
 				Link(Rel("stylesheet"), Href("/static/style.css")),
 				Script(Src("/static/htmx.min.js"), Defer()),
 				Script(Src("/static/app.js"), Defer()),
@@ -158,6 +186,31 @@ func AppShell(dashboard DashboardData) g.Node {
 				ID("table-content"),
 				Class("section-content"),
 				TablePanel(state, dashboard.Table),
+			),
+		),
+	)
+}
+
+func FlowDetailShell(flows FlowDetailData) g.Node {
+	return Div(
+		ID("app-shell"),
+		Class("app-shell"),
+		Data("span-start-ns", strconv.FormatInt(flows.Span.StartNs, 10)),
+		Data("span-end-ns", strconv.FormatInt(flows.Span.EndNs, 10)),
+		Section(
+			Class("section-panel section-block flow-detail-page"),
+			Div(
+				Class("panel-heading"),
+				Div(
+					H2(g.Text(flowDetailTitle(flows.Query))),
+					Span(Class("panel-subtle"), g.Text(fmt.Sprintf("%d rows", flows.TotalCount))),
+				),
+				navLink(stateURL(flows.Query.State), actionButtonClass, "Back to graph"),
+			),
+			Div(
+				Class("section-content"),
+				flowDetailFilters(flows.Query.State),
+				FlowDetailTable(flows),
 			),
 		),
 	)
@@ -286,6 +339,12 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 				navLink(deselectStateURL(state), "action-button", "Deselect"),
 			),
 		)
+		if flowDetailLinksEnabled(state, graph.SelectedEdge.Synthetic) {
+			nodes = append(nodes, Div(
+				Class("button-row"),
+				navLink(selectedFlowEdgeURL(state, graph.SelectedEdge.Source, graph.SelectedEdge.Destination), actionButtonClass, "Show matching flows"),
+			))
+		}
 		return Div(nodes...)
 	}
 
@@ -314,10 +373,11 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 	nodes = append(nodes,
 		Div(
 			Class("button-row"),
-			navLink(entityURL, "action-button", "Filter to this entity"),
-			navLink(excludeURL, "action-button", "Exclude"),
-			navLink(drillURL, "action-button", "Drill down granularity"),
-			navLink(deselectStateURL(state), "action-button", "Deselect"),
+			navLink(entityURL, actionButtonClass, "Filter to this entity"),
+			navLink(excludeURL, actionButtonClass, "Exclude"),
+			navLink(drillURL, actionButtonClass, "Drill down granularity"),
+			navLink(deselectStateURL(state), actionButtonClass, "Deselect"),
+			flowDetailEntityLink(state, selectedNode),
 		),
 		sectionTitle("Peers"),
 		Ul(
@@ -347,6 +407,9 @@ func tablePanelAt(state QueryState, table TableData, now time.Time) g.Node {
 		Th(sortLink(state, "First Seen", SortFirstSeen)),
 		Th(sortLink(state, "Last Seen", SortLastSeen)),
 	)
+	if flowDetailTableLinksEnabled(state) {
+		headerNodes = append(headerNodes, Th(Class("flow-detail-column"), g.Text("")))
+	}
 
 	return Div(
 		Div(Class("table-meta"), Span(Class("panel-subtle"), g.Text(fmt.Sprintf("%d rows", table.TotalCount)))),
@@ -373,6 +436,9 @@ func tablePanelAt(state QueryState, table TableData, now time.Time) g.Node {
 						Td(timestampNode(row.FirstSeenNs, now)),
 						Td(timestampNode(row.LastSeenNs, now)),
 					)
+					if flowDetailTableLinksEnabled(state) {
+						cells = append(cells, Td(Class("flow-detail-column"), flowDetailRowLink(state, row)))
+					}
 					return Tr(append([]g.Node{Class(rowClass)}, cells...)...)
 				}),
 			),
@@ -382,6 +448,50 @@ func tablePanelAt(state QueryState, table TableData, now time.Time) g.Node {
 			paginationLink(state, "Previous", max(1, table.Page-1), table.Page <= 1),
 			Span(Class("panel-subtle"), g.Text(fmt.Sprintf("Page %d / %d", table.Page, table.TotalPages))),
 			paginationLink(state, "Next", min(table.TotalPages, table.Page+1), table.Page >= table.TotalPages),
+		),
+	)
+}
+
+func FlowDetailTable(flows FlowDetailData) g.Node {
+	return flowDetailTableAt(flows, time.Now().UTC())
+}
+
+func flowDetailTableAt(flows FlowDetailData, now time.Time) g.Node {
+	return Div(
+		Table(
+			Class("flows-table raw-flows-table"),
+			THead(
+				Tr(
+					Th(g.Text("Start")),
+					Th(g.Text("End")),
+					Th(g.Text("Source")),
+					Th(g.Text("Destination")),
+					Th(g.Text("Protocol")),
+					Th(g.Text("Packets")),
+					Th(g.Text("Bytes")),
+					Th(g.Text("Direction")),
+				),
+			),
+			TBody(
+				renderNodes(flows.VisibleRows, func(row FlowDetailRow) g.Node {
+					return Tr(
+						Td(timestampNode(row.StartNs, now)),
+						Td(timestampNode(row.EndNs, now)),
+						Td(flowEndpointNode(row.Source, row.SrcIP, row.SrcPort)),
+						Td(flowEndpointNode(row.Destination, row.DstIP, row.DstPort)),
+						Td(g.Text(strconv.FormatInt(int64(row.Protocol), 10))),
+						Td(g.Text(strconv.FormatInt(row.Packets, 10))),
+						Td(g.Text(formatMetricValue(MetricBytes, row.Bytes))),
+						Td(g.Text(rawFlowDirectionLabel(row.Direction))),
+					)
+				}),
+			),
+		),
+		Div(
+			Class("pagination-row"),
+			flowDetailPaginationLink(flows, "Previous", max(1, flows.Page-1), flows.Page <= 1),
+			Span(Class("panel-subtle"), g.Text(fmt.Sprintf("Page %d / %d", flows.Page, flows.TotalPages))),
+			flowDetailPaginationLink(flows, "Next", min(flows.TotalPages, flows.Page+1), flows.Page >= flows.TotalPages),
 		),
 	)
 }
@@ -789,6 +899,82 @@ func rankingLink(href string, dnsState dnsResultState, label, value string) g.No
 	)
 }
 
+func selectedFlowEntityURL(state QueryState, entity string) string {
+	nextState := state.Clone()
+	nextState.Page = defaultPage
+	query := FlowQuery{
+		Entity: entity,
+		Scope:  FlowScopeEntity,
+		State:  nextState,
+	}
+	return flowDetailURL(query)
+}
+
+func selectedFlowEdgeURL(state QueryState, source, destination string) string {
+	nextState := state.Clone()
+	nextState.Page = defaultPage
+	query := FlowQuery{
+		Destination: destination,
+		Scope:       FlowScopeEdge,
+		Source:      source,
+		State:       nextState,
+	}
+	return flowDetailURL(query)
+}
+
+func flowDetailURL(query FlowQuery) string {
+	values := query.Values().Encode()
+	if values == "" {
+		return "/flows"
+	}
+	return "/flows?" + values
+}
+
+func flowDetailLinksEnabled(state QueryState, synthetic bool) bool {
+	return state.Metric != MetricDNSLookups && !synthetic
+}
+
+func flowDetailTableLinksEnabled(state QueryState) bool {
+	return state.Metric != MetricDNSLookups
+}
+
+func flowDetailEntityLink(state QueryState, node *Node) g.Node {
+	if node == nil || !flowDetailLinksEnabled(state, node.Synthetic) {
+		return nil
+	}
+	return navLink(selectedFlowEntityURL(state, node.ID), actionButtonClass, "Show matching flows")
+}
+
+func flowDetailRowLink(state QueryState, row TableRow) g.Node {
+	if row.Synthetic {
+		return Span(Class("flow-detail-empty"), g.Text(""))
+	}
+	href := selectedFlowEdgeURL(state, row.Source, row.Destination)
+	return A(
+		Href(href),
+		Class("flow-detail-link"),
+		g.Attr("aria-label", fmt.Sprintf("Show flows from %s to %s", row.Source, row.Destination)),
+		g.Attr("hx-get", href),
+		g.Attr("hx-target", hxTargetAppShellValue),
+		g.Attr("hx-select", hxSelectAppShellValue),
+		g.Attr("hx-swap", hxSwapOuterHTMLValue),
+		g.Attr("hx-push-url", "true"),
+		g.Text(">"),
+	)
+}
+
+func flowDetailPaginationLink(flows FlowDetailData, label string, page int, disabled bool) g.Node {
+	className := actionButtonClass
+	if disabled {
+		className += disabledClassSuffix
+		return Span(Class(className), g.Text(label))
+	}
+
+	nextQuery := flows.Query
+	nextQuery.State.Page = page
+	return navLink(flowDetailURL(nextQuery), className, label)
+}
+
 func sortLink(state QueryState, label string, sortKey TableSort) g.Node {
 	nextState := state.Clone()
 	nextState.Sort = sortKey
@@ -797,9 +983,9 @@ func sortLink(state QueryState, label string, sortKey TableSort) g.Node {
 }
 
 func paginationLink(state QueryState, label string, page int, disabled bool) g.Node {
-	className := "action-button"
+	className := actionButtonClass
 	if disabled {
-		className += " disabled"
+		className += disabledClassSuffix
 		return Span(Class(className), g.Text(label))
 	}
 
@@ -870,6 +1056,64 @@ func sectionTitle(title string) g.Node {
 	return H3(Class("section-title"), g.Text(title))
 }
 
+func flowDetailTitle(query FlowQuery) string {
+	switch query.Scope {
+	case FlowScopeEntity:
+		return "Flows involving " + query.Entity
+	case FlowScopeEdge:
+		return fmt.Sprintf("Flows from %s to %s", query.Source, query.Destination)
+	default:
+		return "Selected flows"
+	}
+}
+
+func flowDetailFilters(state QueryState) g.Node {
+	currentAddressFamily := normalizedAddressFamily(state.AddressFamily)
+	currentDirection := normalizedDirection(state.Direction)
+	chips := []g.Node{
+		Span(Class("chip"), g.Text("Time: "), timestampRangeNode(state.FromNs, state.ToNs)),
+		Span(Class("chip"), g.Text("Granularity: "+strings.ToUpper(string(state.Granularity)))),
+	}
+	if currentAddressFamily != AddressFamilyAll {
+		chips = append(chips, Span(Class("chip"), g.Text("Address Family: "+addressFamilyLabel(currentAddressFamily))))
+	}
+	if currentDirection != DirectionBoth {
+		chips = append(chips, Span(Class("chip"), g.Text("Direction: "+directionLabel(currentDirection))))
+	}
+	for _, item := range state.Include {
+		chips = append(chips, Span(Class("chip"), g.Text("Entity: "+item)))
+	}
+	for _, item := range state.Exclude {
+		chips = append(chips, Span(Class("chip"), g.Text("Exclude: "+item)))
+	}
+	if state.Search != "" {
+		chips = append(chips, Span(Class("chip"), g.Text("Search: "+state.Search)))
+	}
+	return Div(append([]g.Node{Class("filter-list flow-detail-filters")}, chips...)...)
+}
+
+func flowEndpointNode(entity, ip string, port int32) g.Node {
+	return Div(
+		Class("flow-endpoint"),
+		Span(g.Text(entity)),
+		Span(Class("panel-subtle"), g.Text(fmt.Sprintf("%s:%d", ip, port))),
+	)
+}
+
+func rawFlowDirectionLabel(direction *int32) string {
+	if direction == nil {
+		return "-"
+	}
+	switch *direction {
+	case directionEgressParquetValue:
+		return "Egress"
+	case directionIngressParquetValue:
+		return "Ingress"
+	default:
+		return strconv.FormatInt(int64(*direction), 10)
+	}
+}
+
 func statBlock(label, value string) g.Node {
 	return Div(
 		Class("stat-block"),
@@ -882,13 +1126,13 @@ func buttonClass(active bool) string {
 	if active {
 		return "action-button active"
 	}
-	return "action-button"
+	return actionButtonClass
 }
 
 func buttonClassDisabled(active, disabled bool) string {
 	className := buttonClass(active)
 	if disabled {
-		className += " disabled"
+		className += disabledClassSuffix
 	}
 	return className
 }

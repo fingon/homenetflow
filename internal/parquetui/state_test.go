@@ -22,6 +22,18 @@ func TestParseQueryStateDefaults(t *testing.T) {
 	assert.Equal(t, state.PageSize, defaultPageSize)
 }
 
+func TestParseFlowQueryEdge(t *testing.T) {
+	request := httptest.NewRequest("GET", "/flows?metric=bytes&flow_scope=edge&flow_source=alpha.lan&flow_destination=dns.google", nil)
+
+	query, err := ParseFlowQuery(request)
+
+	assert.NilError(t, err)
+	assert.Equal(t, query.Scope, FlowScopeEdge)
+	assert.Equal(t, query.Source, "alpha.lan")
+	assert.Equal(t, query.Destination, "dns.google")
+	assert.Equal(t, query.State.Metric, MetricBytes)
+}
+
 func TestParseQueryStateAddressFamily(t *testing.T) {
 	request := httptest.NewRequest("GET", "/?family=ipv6", nil)
 

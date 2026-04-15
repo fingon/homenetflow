@@ -157,6 +157,7 @@ func (a *App) routes() http.Handler {
 	}
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	mux.HandleFunc("/version", a.handleVersion)
+	mux.HandleFunc("/flows", a.handleFlows)
 	mux.HandleFunc("/", a.handleIndex)
 	return requestLogger(mux)
 }
@@ -187,6 +188,33 @@ func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if err := Index(dashboard, a.devMode, a.devSessionToken).Render(w); err != nil {
 		slog.Error("render index failed", "err", err)
 		http.Error(w, "failed rendering index", http.StatusInternalServerError)
+	}
+}
+
+func (a *App) handleFlows(w http.ResponseWriter, r *http.Request) {
+	flowQuery, err := ParseFlowQuery(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	flows, err := a.service.FlowDetails(r.Context(), flowQuery)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if isHTMXRequest(r) {
+		if err := FlowDetailShell(flows).Render(w); err != nil {
+			slog.Error("render flow detail shell failed", "err", err)
+			http.Error(w, "failed rendering flow detail shell", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if err := FlowDetailIndex(flows, a.devMode, a.devSessionToken).Render(w); err != nil {
+		slog.Error("render flow detail index failed", "err", err)
+		http.Error(w, "failed rendering flow detail index", http.StatusInternalServerError)
 	}
 }
 
