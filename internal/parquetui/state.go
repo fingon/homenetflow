@@ -16,6 +16,7 @@ const (
 	defaultPage      = 1
 	defaultPageSize  = 100
 	defaultPort      = 8080
+	entityActionDays = 7
 	presetAllValue   = "all"
 	presetHourValue  = "1h"
 	presetDayValue   = "1d"
@@ -23,6 +24,8 @@ const (
 	presetWeekValue  = "7d"
 	presetMonthValue = "30d"
 )
+
+var errEntityActionsDisabled = errors.New("entity actions are available for ranges up to 7 days")
 
 type Metric string
 
@@ -267,6 +270,11 @@ func (s QueryState) Normalized(span TimeSpan) QueryState {
 	if state.NodeLimit == 0 {
 		state.NodeLimit = defaultNodeLimit(state.Granularity)
 	}
+	if !state.EntityActionsEnabled() {
+		state = state.ResetSelection()
+		state.Include = nil
+		state.Exclude = nil
+	}
 	return state
 }
 
@@ -393,6 +401,13 @@ func (s QueryState) ResetSelection() QueryState {
 	state.SelectedEdgeSrc = ""
 	state.SelectedEdgeDst = ""
 	return state
+}
+
+func (s QueryState) EntityActionsEnabled() bool {
+	if s.FromNs == 0 || s.ToNs == 0 || s.ToNs < s.FromNs {
+		return true
+	}
+	return s.ToNs-s.FromNs <= int64(entityActionDays*24*time.Hour)
 }
 
 func (s FlowScope) valid() bool {

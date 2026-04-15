@@ -578,6 +578,9 @@ func (s *Service) FlowDetails(ctx context.Context, query FlowQuery) (FlowDetailD
 	if state.Metric == MetricDNSLookups {
 		return FlowDetailData{}, errors.New("raw flow details are not available for DNS lookup metrics")
 	}
+	if !state.EntityActionsEnabled() {
+		return FlowDetailData{}, errEntityActionsDisabled
+	}
 	if !query.Scope.valid() {
 		return FlowDetailData{}, fmt.Errorf("invalid flow scope %q", query.Scope)
 	}

@@ -161,6 +161,12 @@ input[type="search"] {
   cursor: default;
 }
 
+.table-link.disabled {
+  color: var(--muted);
+  cursor: default;
+  text-decoration: none;
+}
+
 .breadcrumbs,
 .loading-indicator,
 .filter-list,
@@ -532,6 +538,11 @@ svg.histogram-svg {
 
 .graph-node {
   cursor: pointer;
+}
+
+.graph-svg.is-entity-actions-disabled .graph-node,
+.graph-svg.is-entity-actions-disabled .graph-edge-hitbox {
+  cursor: default;
 }
 
 .graph-node.is-selected .graph-label {

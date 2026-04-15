@@ -14,47 +14,48 @@ import (
 )
 
 const (
-	graphHeightPx           = 560
-	graphDenseNodeCount     = 36
-	graphPrimaryRingCount   = 12
-	graphWidthPx            = 960
-	fullTimestampFormat     = time.RFC3339
-	histogramAxisTickCount  = 5
-	histogramBottomPadPx    = 28
-	histogramHeightPx       = 132
-	histogramMinBarWidthPx  = 4
-	histogramRightPadPx     = 64
-	histogramTopPadPx       = 8
-	histogramWidthPx        = 960
-	histogramYAxisMinTicks  = 3
-	histogramYAxisOneDigit  = 1
-	histogramYAxisTwoDigits = 2
-	hxSelectAppShellValue   = "#app-shell"
-	hxSwapOuterHTMLValue    = "outerHTML"
-	hxTargetAppShellValue   = "#app-shell"
-	nxdomainEdgeStroke      = "#8d2f20"
-	nxdomainNodeFill        = "#8d2f20"
-	mixedDNSEdgeStroke      = "#c4a237"
-	mixedDNSNodeFill        = "#c4a237"
-	spanWidthNsDataAttr     = "data-span-width-ns"
-	sameDayTimestampFormat  = "15:04:05"
-	sameWeekTimestampFormat = "Mon 15:04:05"
-	sameYearTimestampFormat = "02.01 15:04:05"
-	timestampNsDataAttr     = "data-timestamp-ns"
-	mixedEntityNodeFill     = "#c4a237"
-	nodeBaseRadiusPx        = 10
-	nodeRadiusScalePx       = 24
-	privateEntityNodeFill   = "#4d6f52"
-	selectedEdgeStroke      = "#b14d24"
-	selectedNodeStroke      = "#943a15"
-	selectedRegularNodeFill = "#b14d24"
-	syntheticNodeFill       = "#a69b84"
-	unselectedEdgeStroke    = "rgba(55, 68, 87, 0.28)"
-	unselectedNodeFill      = "#587ea3"
-	unselectedNodeStroke    = "rgba(31, 39, 51, 0.24)"
-	yearTimestampFormat     = "02.01.2006 15:04:05"
-	actionButtonClass       = "action-button"
-	disabledClassSuffix     = " disabled"
+	graphHeightPx                   = 560
+	graphDenseNodeCount             = 36
+	graphPrimaryRingCount           = 12
+	graphWidthPx                    = 960
+	fullTimestampFormat             = time.RFC3339
+	histogramAxisTickCount          = 5
+	histogramBottomPadPx            = 28
+	histogramHeightPx               = 132
+	histogramMinBarWidthPx          = 4
+	histogramRightPadPx             = 64
+	histogramTopPadPx               = 8
+	histogramWidthPx                = 960
+	histogramYAxisMinTicks          = 3
+	histogramYAxisOneDigit          = 1
+	histogramYAxisTwoDigits         = 2
+	hxSelectAppShellValue           = "#app-shell"
+	hxSwapOuterHTMLValue            = "outerHTML"
+	hxTargetAppShellValue           = "#app-shell"
+	entityActionsUnavailableMessage = "Entity actions are available for ranges up to 7 days."
+	nxdomainEdgeStroke              = "#8d2f20"
+	nxdomainNodeFill                = "#8d2f20"
+	mixedDNSEdgeStroke              = "#c4a237"
+	mixedDNSNodeFill                = "#c4a237"
+	spanWidthNsDataAttr             = "data-span-width-ns"
+	sameDayTimestampFormat          = "15:04:05"
+	sameWeekTimestampFormat         = "Mon 15:04:05"
+	sameYearTimestampFormat         = "02.01 15:04:05"
+	timestampNsDataAttr             = "data-timestamp-ns"
+	mixedEntityNodeFill             = "#c4a237"
+	nodeBaseRadiusPx                = 10
+	nodeRadiusScalePx               = 24
+	privateEntityNodeFill           = "#4d6f52"
+	selectedEdgeStroke              = "#b14d24"
+	selectedNodeStroke              = "#943a15"
+	selectedRegularNodeFill         = "#b14d24"
+	syntheticNodeFill               = "#a69b84"
+	unselectedEdgeStroke            = "rgba(55, 68, 87, 0.28)"
+	unselectedNodeFill              = "#587ea3"
+	unselectedNodeStroke            = "rgba(31, 39, 51, 0.24)"
+	yearTimestampFormat             = "02.01.2006 15:04:05"
+	actionButtonClass               = "action-button"
+	disabledClassSuffix             = " disabled"
 )
 
 func Index(dashboard DashboardData, devMode bool, devSessionToken string) g.Node {
@@ -272,7 +273,7 @@ func RankingsPanel(state QueryState, graph GraphData) g.Node {
 			Ul(
 				Class("rank-list"),
 				renderNodes(graph.TopEntities, func(node Node) g.Node {
-					return Li(rankingLink(selectEntityStateURL(state, node.ID), node.DNSResultState, node.Label, formatMetricValue(graph.ActiveMetric, node.Total)))
+					return Li(rankingItem(state, selectEntityStateURL(state, node.ID), node.DNSResultState, node.Label, formatMetricValue(graph.ActiveMetric, node.Total)))
 				}),
 			),
 		),
@@ -282,7 +283,7 @@ func RankingsPanel(state QueryState, graph GraphData) g.Node {
 			Ul(
 				Class("rank-list"),
 				renderNodes(graph.TopEdges, func(edge Edge) g.Node {
-					return Li(rankingLink(selectEdgeStateURL(state, edge.Source, edge.Destination), edge.DNSResultState, fmt.Sprintf("%s -> %s", edge.Source, edge.Destination), formatMetricValue(graph.ActiveMetric, edge.MetricValue)))
+					return Li(rankingItem(state, selectEdgeStateURL(state, edge.Source, edge.Destination), edge.DNSResultState, fmt.Sprintf("%s -> %s", edge.Source, edge.Destination), formatMetricValue(graph.ActiveMetric, edge.MetricValue)))
 				}),
 			),
 		),
@@ -349,9 +350,21 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 	}
 
 	if graph.SelectedNode == nil {
+		if !state.EntityActionsEnabled() {
+			return Div(
+				sectionTitle("Selected Item"),
+				P(Class("panel-subtle"), g.Text(entityActionsUnavailableMessage)),
+			)
+		}
 		return Div(
 			sectionTitle("Selected Item"),
 			P(Class("panel-subtle"), g.Text("Click a node to highlight it and inspect its peers.")),
+		)
+	}
+	if !state.EntityActionsEnabled() {
+		return Div(
+			sectionTitle("Selected Item"),
+			P(Class("panel-subtle"), g.Text(entityActionsUnavailableMessage)),
 		)
 	}
 
@@ -383,7 +396,7 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 		Ul(
 			Class("rank-list"),
 			renderNodes(graph.SelectedNodePeers, func(peer DetailPeer) g.Node {
-				return Li(rankingLink(selectEntityStateURL(state, peer.Entity), dnsResultStateSuccess, peer.Entity, formatMetricValue(graph.ActiveMetric, peer.MetricValue)))
+				return Li(rankingItem(state, selectEntityStateURL(state, peer.Entity), dnsResultStateSuccess, peer.Entity, formatMetricValue(graph.ActiveMetric, peer.MetricValue)))
 			}),
 		),
 	)
@@ -425,8 +438,8 @@ func tablePanelAt(state QueryState, table TableData, now time.Time) g.Node {
 						rowClass = strings.TrimSpace(rowClass + " synthetic-row")
 					}
 					cells := []g.Node{
-						Td(tableEntityLink(state, row.Source)),
-						Td(tableEntityLink(state, row.Destination)),
+						Td(tableEntityNode(state, row.Source)),
+						Td(tableEntityNode(state, row.Destination)),
 					}
 					if state.Metric != MetricDNSLookups {
 						cells = append(cells, Td(g.Text(formatMetricValue(MetricBytes, row.Bytes))))
@@ -663,7 +676,7 @@ func sectionToggleAriaLabel(title string, expanded bool) string {
 func graphSVGMarkup(state QueryState, graph GraphData) string {
 	var builder strings.Builder
 
-	fmt.Fprintf(&builder, `<svg class="%s" viewBox="0 0 %d %d" role="img" aria-label="Traffic graph">`, graphSVGClass(graph), graphWidthPx, graphHeightPx)
+	fmt.Fprintf(&builder, `<svg class="%s" viewBox="0 0 %d %d" role="img" aria-label="Traffic graph">`, graphSVGClass(state, graph), graphWidthPx, graphHeightPx)
 	if len(graph.Nodes) == 0 {
 		builder.WriteString(labelTextMarkup(float64(graphWidthPx)/2, float64(graphHeightPx)/2, "No graph data", "middle"))
 		builder.WriteString(`</svg>`)
@@ -683,7 +696,9 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 			continue
 		}
 
-		builder.WriteString(`<a ` + navAttrString(selectEdgeStateURL(state, edge.Source, edge.Destination)) + `>`)
+		if state.EntityActionsEnabled() {
+			builder.WriteString(`<a ` + navAttrString(selectEdgeStateURL(state, edge.Source, edge.Destination)) + `>`)
+		}
 		fmt.Fprintf(&builder, `<path d="%s" stroke="%s" stroke-width="%0.2f" fill="none"%s>`,
 			edgePathMarkup(source, destination),
 			edgeStroke(edge),
@@ -693,7 +708,9 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 		builder.WriteString(`</path>`)
 		fmt.Fprintf(&builder, `<path class="graph-edge-hitbox" d="%s" stroke="transparent" stroke-width="16" fill="none"></path>`,
 			edgePathMarkup(source, destination))
-		builder.WriteString(`</a>`)
+		if state.EntityActionsEnabled() {
+			builder.WriteString(`</a>`)
+		}
 	}
 	builder.WriteString(`</g><g class="graph-nodes">`)
 
@@ -702,7 +719,9 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 		position := positions[node.ID]
 		radius := nodeRadius(node.Total, maxTotal)
 		labelPersistent := node.Selected || node.Synthetic
-		builder.WriteString(`<a ` + navAttrString(selectEntityStateURL(state, node.ID)) + `>`)
+		if state.EntityActionsEnabled() {
+			builder.WriteString(`<a ` + navAttrString(selectEntityStateURL(state, node.ID)) + `>`)
+		}
 		fmt.Fprintf(&builder, `<g class="%s" transform="translate(%0.2f, %0.2f)" data-node-id="%s" data-node-priority="%d" data-node-radius="%0.2f" data-label-persistent="%t">`,
 			graphNodeClass(node),
 			position.X,
@@ -722,7 +741,10 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 			formatMetricValue(state.Metric, node.Egress))))
 		builder.WriteString(`</circle>`)
 		builder.WriteString(labelTextMarkup(0, radius+18, node.Label, "middle"))
-		builder.WriteString(`</g></a>`)
+		builder.WriteString(`</g>`)
+		if state.EntityActionsEnabled() {
+			builder.WriteString(`</a>`)
+		}
 	}
 
 	builder.WriteString(`</g></g></svg>`)
@@ -881,7 +903,10 @@ func navLink(href, className, label string) g.Node {
 	)
 }
 
-func tableEntityLink(state QueryState, entity string) g.Node {
+func tableEntityNode(state QueryState, entity string) g.Node {
+	if !state.EntityActionsEnabled() {
+		return Span(Class("table-link disabled"), g.Text(entity))
+	}
 	return navLink(selectEntityStateURL(state, entity), "table-link", entity)
 }
 
@@ -894,6 +919,17 @@ func rankingLink(href string, dnsState dnsResultState, label, value string) g.No
 		g.Attr("hx-select", hxSelectAppShellValue),
 		g.Attr("hx-swap", hxSwapOuterHTMLValue),
 		g.Attr("hx-push-url", "true"),
+		Span(Class("ranking-label"), g.Text(label)),
+		Span(Class("ranking-value"), g.Text(value)),
+	)
+}
+
+func rankingItem(state QueryState, href string, dnsState dnsResultState, label, value string) g.Node {
+	if state.EntityActionsEnabled() {
+		return rankingLink(href, dnsState, label, value)
+	}
+	return Div(
+		Class(dnsResultClass("table-link ranking-link disabled", dnsState)),
 		Span(Class("ranking-label"), g.Text(label)),
 		Span(Class("ranking-value"), g.Text(value)),
 	)
@@ -931,11 +967,11 @@ func flowDetailURL(query FlowQuery) string {
 }
 
 func flowDetailLinksEnabled(state QueryState, synthetic bool) bool {
-	return state.Metric != MetricDNSLookups && !synthetic
+	return state.EntityActionsEnabled() && state.Metric != MetricDNSLookups && !synthetic
 }
 
 func flowDetailTableLinksEnabled(state QueryState) bool {
-	return state.Metric != MetricDNSLookups
+	return state.EntityActionsEnabled() && state.Metric != MetricDNSLookups
 }
 
 func flowDetailEntityLink(state QueryState, node *Node) g.Node {
@@ -1286,11 +1322,15 @@ func normalizedDirection(direction DirectionFilter) DirectionFilter {
 	return direction
 }
 
-func graphSVGClass(graph GraphData) string {
+func graphSVGClass(state QueryState, graph GraphData) string {
+	className := "graph-svg"
 	if len(graph.Nodes) >= graphDenseNodeCount {
-		return "graph-svg is-dense"
+		className += " is-dense"
 	}
-	return "graph-svg"
+	if !state.EntityActionsEnabled() {
+		className += " is-entity-actions-disabled"
+	}
+	return className
 }
 
 func graphNodeClass(node Node) string {

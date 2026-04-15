@@ -328,6 +328,31 @@ func TestServiceFlowDetailsEdgeMatchesExactDirectionAndFilters(t *testing.T) {
 	assert.Equal(t, flows.VisibleRows[0].Destination, "dns.google")
 }
 
+func TestServiceFlowDetailsRejectsLongRangeEntityActions(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 1, 20),
+		sampleRecord("192.168.1.11", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 200, int64(8*24*time.Hour), int64(8*24*time.Hour)+20),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	_, err = service.FlowDetails(context.Background(), FlowQuery{
+		Entity: "alpha.lan",
+		Scope:  FlowScopeEntity,
+		State: QueryState{
+			Granularity: GranularityHostname,
+			Metric:      MetricBytes,
+			FromNs:      1,
+			ToNs:        1 + int64(8*24*time.Hour),
+		},
+	})
+
+	assert.ErrorContains(t, err, "entity actions are available for ranges up to 7 days")
+}
+
 func TestServiceGraphPresetRangeDiffersAcrossFiles(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_20260320.parquet"), []model.FlowRecord{

@@ -200,6 +200,10 @@ func (a *App) handleFlows(w http.ResponseWriter, r *http.Request) {
 
 	flows, err := a.service.FlowDetails(r.Context(), flowQuery)
 	if err != nil {
+		if errors.Is(err, errEntityActionsDisabled) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

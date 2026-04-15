@@ -152,6 +152,48 @@ func TestQueryStateNormalizedDefaultsSortForMetric(t *testing.T) {
 	assert.Equal(t, normalized.Sort, SortConnections)
 }
 
+func TestQueryStateNormalizedClearsEntityActionsForLongRange(t *testing.T) {
+	state := QueryState{
+		Exclude:         []string{"drop.lan"},
+		FromNs:          1,
+		Include:         []string{"keep.lan"},
+		SelectedEdgeDst: "dns.google",
+		SelectedEdgeSrc: "alpha.lan",
+		SelectedEntity:  "alpha.lan",
+		ToNs:            1 + int64(8*24*time.Hour),
+	}
+
+	normalized := state.Normalized(TimeSpan{
+		StartNs: 1,
+		EndNs:   1 + int64(8*24*time.Hour),
+	})
+
+	assert.Equal(t, normalized.SelectedEntity, "")
+	assert.Equal(t, normalized.SelectedEdgeSrc, "")
+	assert.Equal(t, normalized.SelectedEdgeDst, "")
+	assert.Equal(t, len(normalized.Include), 0)
+	assert.Equal(t, len(normalized.Exclude), 0)
+}
+
+func TestQueryStateNormalizedKeepsEntityActionsAtWeekRange(t *testing.T) {
+	state := QueryState{
+		Exclude:        []string{"drop.lan"},
+		FromNs:         1,
+		Include:        []string{"keep.lan"},
+		SelectedEntity: "alpha.lan",
+		ToNs:           1 + int64(7*24*time.Hour),
+	}
+
+	normalized := state.Normalized(TimeSpan{
+		StartNs: 1,
+		EndNs:   1 + int64(7*24*time.Hour),
+	})
+
+	assert.Equal(t, normalized.SelectedEntity, "alpha.lan")
+	assert.DeepEqual(t, normalized.Include, []string{"keep.lan"})
+	assert.DeepEqual(t, normalized.Exclude, []string{"drop.lan"})
+}
+
 func TestQueryStateValuesSkipPreset(t *testing.T) {
 	state := QueryState{
 		AddressFamily: AddressFamilyIPv4,

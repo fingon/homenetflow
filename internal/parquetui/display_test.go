@@ -272,6 +272,33 @@ func TestGraphSVGMarkupMarksPersistentLabels(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `data-label-persistent="true"`))
 }
 
+func TestGraphSVGMarkupDisablesSelectionForLongRange(t *testing.T) {
+	t.Parallel()
+
+	markup := graphSVGMarkup(QueryState{
+		FromNs: 1,
+		Metric: MetricBytes,
+		ToNs:   1 + int64(8*24*time.Hour),
+	}, GraphData{
+		Edges: []Edge{
+			{Destination: "dns.google", MetricValue: 10, Source: "alpha.lan"},
+		},
+		Nodes: []Node{
+			{ID: "alpha.lan", Label: "alpha.lan", Total: 10},
+			{ID: "dns.google", Label: "dns.google", Total: 10},
+		},
+		NodePositions: map[string]LayoutPoint{
+			"alpha.lan":  {X: 100, Y: 100},
+			"dns.google": {X: 200, Y: 100},
+		},
+	})
+
+	assert.Assert(t, strings.Contains(markup, `is-entity-actions-disabled`))
+	assert.Assert(t, !strings.Contains(markup, `<a `))
+	assert.Assert(t, !strings.Contains(markup, `selected_entity`))
+	assert.Assert(t, !strings.Contains(markup, `selected_edge_src`))
+}
+
 func TestGraphSVGMarkupColorsPrivateAndMixedNodes(t *testing.T) {
 	t.Parallel()
 
@@ -552,6 +579,29 @@ func TestTablePanelEndpointLinksSelectGraphEntity(t *testing.T) {
 	assert.Assert(t, strings.Contains(destinationAnchor, `selected_entity=dns.google`))
 }
 
+func TestTablePanelDisablesEntityActionsForLongRange(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, tablePanelAt(QueryState{
+		FromNs:      1,
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+		Sort:        SortBytes,
+		ToNs:        1 + int64(8*24*time.Hour),
+	}, TableData{
+		Page:       1,
+		TotalPages: 1,
+		VisibleRows: []TableRow{
+			{Destination: "dns.google", Source: "alpha.lan"},
+		},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	assert.Assert(t, strings.Contains(markup, `class="table-link disabled"`))
+	assert.Assert(t, !strings.Contains(markup, `selected_entity=alpha.lan`))
+	assert.Assert(t, !strings.Contains(markup, `selected_entity=dns.google`))
+	assert.Assert(t, !strings.Contains(markup, `flow_scope=edge`))
+}
+
 func TestSelectedPanelRendersCompactTimestampWithFullMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -640,6 +690,24 @@ func TestSelectedPanelRendersDeselectForSelectedEntity(t *testing.T) {
 	assert.Assert(t, !strings.Contains(deselectAnchor, `selected_entity`))
 	assert.Assert(t, !strings.Contains(deselectAnchor, `selected_edge_src`))
 	assert.Assert(t, !strings.Contains(deselectAnchor, `selected_edge_dst`))
+}
+
+func TestSelectedPanelDisablesEntityActionsForLongRange(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, selectedPanelAt(QueryState{
+		FromNs: 1,
+		Metric: MetricBytes,
+		ToNs:   1 + int64(8*24*time.Hour),
+	}, GraphData{
+		ActiveMetric: MetricBytes,
+		SelectedNode: &Node{ID: "alpha.lan", Label: "alpha.lan"},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	assert.Assert(t, strings.Contains(markup, "Entity actions are available for ranges up to 7 days."))
+	assert.Assert(t, !strings.Contains(markup, "Filter to this entity"))
+	assert.Assert(t, !strings.Contains(markup, "Exclude"))
+	assert.Assert(t, !strings.Contains(markup, "Show matching flows"))
 }
 
 func TestSelectedPanelPeerLinksSelectPeerEntity(t *testing.T) {
@@ -817,6 +885,31 @@ func TestRankingsPanelUsesSelectionLinkStyling(t *testing.T) {
 	assert.Assert(t, strings.Contains(edgeAnchor, `selected_edge_src=alpha.lan`))
 	assert.Assert(t, strings.Contains(edgeAnchor, `selected_edge_dst=dns.google`))
 	assert.Assert(t, strings.Contains(edgeAnchor, `>200</span>`))
+}
+
+func TestRankingsPanelDisablesSelectionForLongRange(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, RankingsPanel(QueryState{
+		FromNs:      1,
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+		Sort:        SortBytes,
+		ToNs:        1 + int64(8*24*time.Hour),
+	}, GraphData{
+		ActiveMetric: MetricBytes,
+		TopEntities: []Node{
+			{ID: "alpha.lan", Label: "alpha.lan", Total: 100},
+		},
+		TopEdges: []Edge{
+			{Destination: "dns.google", MetricValue: 200, Source: "alpha.lan"},
+		},
+	}))
+
+	assert.Assert(t, strings.Contains(markup, `class="table-link ranking-link disabled"`))
+	assert.Assert(t, !strings.Contains(markup, `selected_entity=alpha.lan`))
+	assert.Assert(t, !strings.Contains(markup, `selected_edge_src=alpha.lan`))
+	assert.Assert(t, !strings.Contains(markup, `hx-get=`))
 }
 
 func TestSummaryPanelActiveFiltersOnlyRenderTimeAndEntityFilters(t *testing.T) {

@@ -16,6 +16,7 @@
   const minGraphScale = 0.75;
   const nodeLimitAutoValue = "auto";
   const oneDayNs = 24n * 3600n * 1000000000n;
+  const entityActionMaxRangeNs = 7n * oneDayNs;
   const oneHourNs = 3600n * 1000000000n;
   const presetAllValue = "all";
   const presetBehavior = "preset";
@@ -413,7 +414,34 @@
   }
 
   function submitForm(form) {
+    if (!entityActionsEnabled(form)) {
+      clearEntityActionFields(form);
+    }
     form.requestSubmit();
+  }
+
+  function entityActionsEnabled(form) {
+    const fromInput = form.querySelector("#filter-from-ns");
+    const toInput = form.querySelector("#filter-to-ns");
+    const fromNs = fromInput instanceof HTMLInputElement ? parseBigIntValue(fromInput.value) : null;
+    const toNs = toInput instanceof HTMLInputElement ? parseBigIntValue(toInput.value) : null;
+    if (fromNs === null || toNs === null || toNs < fromNs) {
+      return true;
+    }
+    return toNs - fromNs <= entityActionMaxRangeNs;
+  }
+
+  function clearEntityActionFields(form) {
+    for (const name of ["selected_entity", "selected_edge_src", "selected_edge_dst"]) {
+      const input = form.querySelector(`input[name="${name}"]`);
+      if (input instanceof HTMLInputElement) {
+        input.value = "";
+      }
+    }
+
+    for (const input of form.querySelectorAll(`input[name="include"], input[name="exclude"]`)) {
+      input.remove();
+    }
   }
 
   function resetDirection(form) {
