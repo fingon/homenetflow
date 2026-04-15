@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +161,32 @@ func TestAppIndexDisablesDirectionForDNSLookups(t *testing.T) {
 	assert.Assert(t, strings.Contains(body, `value="both"`))
 	assert.Assert(t, strings.Contains(body, `disabled`))
 	assert.Assert(t, !strings.Contains(body, "Direction: Ingress"))
+}
+
+func TestAppIndexDisablesUnsupportedControlsForLongRange(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 1, 20),
+		sampleRecord("192.168.1.11", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 200, 1+int64(8*24*time.Hour), 1+int64(8*24*time.Hour)+20),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	app := &App{service: service}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/?from=1&to="+strconv.FormatInt(1+int64(8*24*time.Hour), 10)+"&granularity=hostname&search=alpha", nil)
+
+	app.routes().ServeHTTP(recorder, request)
+
+	assert.Equal(t, recorder.Code, http.StatusOK)
+	body := recorder.Body.String()
+	assert.Assert(t, strings.Contains(body, `id="search-input"`))
+	assert.Assert(t, strings.Contains(body, `disabled`))
+	assert.Assert(t, !strings.Contains(body, `value="alpha"`))
+	assert.Assert(t, !strings.Contains(body, `value="hostname" checked`))
+	assert.Assert(t, strings.Contains(body, `value="2ld" checked`))
 }
 
 func TestAppIndexRendersAppShellForHTMXRequests(t *testing.T) {
@@ -392,6 +419,42 @@ func TestServiceGraphPresetRangeDiffersAcrossFiles(t *testing.T) {
 
 	assert.Equal(t, dayGraph.Totals.Bytes, int64(700))
 	assert.Equal(t, monthGraph.Totals.Bytes, int64(1000))
+}
+
+func TestServiceGraphMonthPresetUsesBucketedSummaryFastPath(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_20260301.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "old.lan", "lan", "lan", "old.google", "google.com", "com", 300, time.Date(2026, time.March, 1, 1, 0, 0, 0, time.UTC).UnixNano(), time.Date(2026, time.March, 1, 2, 0, 0, 0, time.UTC).UnixNano()),
+	})
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_20260415.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.11", "1.1.1.1", "new.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 700, time.Date(2026, time.April, 15, 1, 0, 0, 0, time.UTC).UnixNano(), time.Date(2026, time.April, 15, 2, 0, 0, 0, time.UTC).UnixNano()),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	span, err := service.Span(context.Background())
+	assert.NilError(t, err)
+	state := QueryState{
+		Granularity: Granularity2LD,
+		Metric:      MetricBytes,
+		Preset:      presetMonthValue,
+	}.Normalized(span)
+
+	assert.Assert(t, service.canUseSummaryGraph(state, span))
+	graph, err := service.Graph(context.Background(), state)
+	assert.NilError(t, err)
+
+	assert.Equal(t, graph.Totals.Bytes, int64(700))
+	assert.Assert(t, containsNode(graph.Nodes, "one.one.one.one"))
+	assert.Assert(t, !containsNode(graph.Nodes, "google.com"))
+
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricBytes, service.currentRevision()) +
+		":" + strconv.FormatInt(summaryBucketStartNs(state.FromNs), 10) +
+		":" + strconv.FormatInt(summaryBucketStartNs(state.ToNs), 10)
+	_, ok := service.summaryGraphCache.Get(cacheKey)
+	assert.Assert(t, ok)
 }
 
 func TestServiceSearchFiltersCaseInsensitively(t *testing.T) {
@@ -809,10 +872,16 @@ func TestNewServiceBuildsUISummaries(t *testing.T) {
 
 	assert.Equal(t, len(service.summaries.edgePathsByGranulariy[GranularityTLD]), 1)
 	assert.Equal(t, len(service.summaries.edgePathsByGranulariy[Granularity2LD]), 1)
+	assert.Equal(t, len(service.summaries.bucketedEdgePathsByGranulariy[GranularityTLD]), 1)
+	assert.Equal(t, len(service.summaries.bucketedEdgePathsByGranulariy[Granularity2LD]), 1)
 	assert.Equal(t, len(service.summaries.histogramPaths), 1)
 	_, err = os.Stat(filepath.Join(tempDir, "ui_summary_edges_tld_202604.parquet"))
 	assert.NilError(t, err)
 	_, err = os.Stat(filepath.Join(tempDir, "ui_summary_edges_2ld_202604.parquet"))
+	assert.NilError(t, err)
+	_, err = os.Stat(filepath.Join(tempDir, "ui_summary_bucketed_edges_tld_202604.parquet"))
+	assert.NilError(t, err)
+	_, err = os.Stat(filepath.Join(tempDir, "ui_summary_bucketed_edges_2ld_202604.parquet"))
 	assert.NilError(t, err)
 	_, err = os.Stat(filepath.Join(tempDir, "ui_summary_histogram_202604.parquet"))
 	assert.NilError(t, err)

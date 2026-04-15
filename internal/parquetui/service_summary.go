@@ -48,7 +48,8 @@ func (s *Service) canUseSummaryGraph(state QueryState, span TimeSpan) bool {
 	if state.Granularity != GranularityTLD && state.Granularity != Granularity2LD {
 		return false
 	}
-	if state.FromNs != span.StartNs || state.ToNs != span.EndNs {
+	fullRange := state.FromNs == span.StartNs && state.ToNs == span.EndNs
+	if !fullRange && state.EntityActionsEnabled() {
 		return false
 	}
 	if len(state.Include) > 0 || len(state.Exclude) > 0 || state.Search != "" {
@@ -62,9 +63,15 @@ func (s *Service) canUseSummaryGraph(state QueryState, span TimeSpan) bool {
 	defer s.mu.RUnlock()
 	if state.Metric == MetricDNSLookups {
 		paths := s.summaries.dnsEdgePathsByGranulariy[state.Granularity]
+		if !fullRange {
+			paths = s.summaries.dnsBucketedEdgePathsByGranulariy[state.Granularity]
+		}
 		return len(paths) > 0 && s.summaries.spanValid
 	}
 	paths := s.summaries.edgePathsByGranulariy[state.Granularity]
+	if !fullRange {
+		paths = s.summaries.bucketedEdgePathsByGranulariy[state.Granularity]
+	}
 	return len(paths) > 0 && s.summaries.spanValid
 }
 
@@ -82,7 +89,7 @@ func (s *Service) summaryGraph(ctx context.Context, state QueryState, span TimeS
 	}
 
 	queryStart := time.Now()
-	snapshot, err := s.summaryGraphSnapshot(ctx, state.Granularity, state.AddressFamily, state.Direction, state.Metric)
+	snapshot, err := s.summaryGraphSnapshotForState(ctx, state, span)
 	if err != nil {
 		return GraphData{}, err
 	}
@@ -157,15 +164,20 @@ func (s *Service) summaryHistogram(ctx context.Context, state QueryState) ([]His
 	queryStart := time.Now()
 	widthNs := max(int64(1), (state.ToNs-state.FromNs+1)/histogramBinCount)
 	whereClause, args := summaryFilterClause(state.AddressFamily, state.Direction)
+	rangeClause := "WHERE bucket_start_ns BETWEEN ? AND ?"
+	if whereClause != "" {
+		rangeClause = whereClause + " AND bucket_start_ns BETWEEN ? AND ?"
+	}
 	query := fmt.Sprintf(`
 SELECT CAST(FLOOR((bucket_start_ns - ?) / ?) AS BIGINT) AS bucket, SUM(%s) AS value
 FROM read_parquet(%s)
 %s
 GROUP BY bucket
 ORDER BY bucket
-`, summaryMetricColumn(state.Metric), quoteLiteral(s.summaryHistogramGlob(state.Metric)), whereClause)
+`, summaryMetricColumn(state.Metric), quoteLiteral(s.summaryHistogramGlob(state.Metric)), rangeClause)
 
 	queryArgs := append([]any{state.FromNs, widthNs}, args...)
+	queryArgs = append(queryArgs, summaryBucketStartNs(state.FromNs), summaryBucketStartNs(state.ToNs))
 	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query summary histogram: %w", err)
@@ -217,7 +229,7 @@ func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) 
 	}
 
 	if cacheState.Metric == MetricDNSLookups {
-		snapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily, cacheState.Direction, MetricDNSLookups)
+		snapshot, err := s.summaryGraphSnapshotForCurrentSpan(ctx, cacheState, MetricDNSLookups)
 		if err != nil {
 			return nil, err
 		}
@@ -231,11 +243,11 @@ func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) 
 		return positions, nil
 	}
 
-	bytesSnapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily, cacheState.Direction, MetricBytes)
+	bytesSnapshot, err := s.summaryGraphSnapshotForCurrentSpan(ctx, cacheState, MetricBytes)
 	if err != nil {
 		return nil, err
 	}
-	connectionSnapshot, err := s.summaryGraphSnapshot(ctx, cacheState.Granularity, cacheState.AddressFamily, cacheState.Direction, MetricConnections)
+	connectionSnapshot, err := s.summaryGraphSnapshotForCurrentSpan(ctx, cacheState, MetricConnections)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +272,21 @@ func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) 
 	)
 	s.layoutCache.Set(cacheKey, positions)
 	return positions, nil
+}
+
+func (s *Service) summaryGraphSnapshotForCurrentSpan(ctx context.Context, state QueryState, metric Metric) (*summaryGraphSnapshotData, error) {
+	s.mu.RLock()
+	span := s.span
+	s.mu.RUnlock()
+	state.Metric = metric
+	return s.summaryGraphSnapshotForState(ctx, state, span)
+}
+
+func (s *Service) summaryGraphSnapshotForState(ctx context.Context, state QueryState, span TimeSpan) (*summaryGraphSnapshotData, error) {
+	if state.FromNs == span.StartNs && state.ToNs == span.EndNs {
+		return s.summaryGraphSnapshot(ctx, state.Granularity, state.AddressFamily, state.Direction, state.Metric)
+	}
+	return s.bucketedSummaryGraphSnapshot(ctx, state)
 }
 
 func (s *Service) summaryGraphSnapshot(ctx context.Context, granularity Granularity, addressFamily AddressFamily, direction DirectionFilter, metric Metric) (*summaryGraphSnapshotData, error) {
@@ -339,6 +366,101 @@ GROUP BY src_entity, dst_entity, direction, ip_version
 
 	s.summaryGraphCache.Set(cacheKey, snapshot)
 	slog.Debug("UI summary graph snapshot built", "granularity", granularity, "family", addressFamily, "direction", direction, "edge_count", len(snapshot.edges), "duration_ms", time.Since(queryStart).Milliseconds())
+	return snapshot, nil
+}
+
+func (s *Service) bucketedSummaryGraphSnapshot(ctx context.Context, state QueryState) (*summaryGraphSnapshotData, error) {
+	fromBucketStartNs := summaryBucketStartNs(state.FromNs)
+	toBucketStartNs := summaryBucketStartNs(state.ToNs)
+	cacheKey := summaryGraphSnapshotCacheKey(state.Granularity, state.AddressFamily, state.Direction, state.Metric, s.currentRevision()) +
+		fmt.Sprintf(":%d:%d", fromBucketStartNs, toBucketStartNs)
+	if snapshot, ok := s.summaryGraphCache.Get(cacheKey); ok {
+		return snapshot, nil
+	}
+
+	queryStart := time.Now()
+	whereClause, args := summaryFilterClause(state.AddressFamily, state.Direction)
+	rangeClause := "WHERE bucket_start_ns BETWEEN ? AND ?"
+	if whereClause != "" {
+		rangeClause = whereClause + " AND bucket_start_ns BETWEEN ? AND ?"
+	}
+	args = append(args, fromBucketStartNs, toBucketStartNs)
+	query := fmt.Sprintf(`
+SELECT src_entity, dst_entity,
+  COALESCE(SUM(bytes), 0) AS bytes_total,
+  COALESCE(SUM(connections), 0) AS connection_total,
+  direction,
+  COALESCE(SUM(src_private_bytes), 0) AS src_private_bytes,
+  COALESCE(SUM(src_private_connections), 0) AS src_private_connections,
+  COALESCE(SUM(src_public_bytes), 0) AS src_public_bytes,
+  COALESCE(SUM(src_public_connections), 0) AS src_public_connections,
+  COALESCE(SUM(dst_private_bytes), 0) AS dst_private_bytes,
+  COALESCE(SUM(dst_private_connections), 0) AS dst_private_connections,
+  COALESCE(SUM(dst_public_bytes), 0) AS dst_public_bytes,
+  COALESCE(SUM(dst_public_connections), 0) AS dst_public_connections,
+  COALESCE(MIN(first_seen_ns), 0) AS first_seen_ns,
+  ip_version,
+  COALESCE(MAX(last_seen_ns), 0) AS last_seen_ns,
+  COALESCE(SUM(nxdomain_lookups), 0) AS nxdomain_lookup_total,
+  COALESCE(SUM(successful_lookups), 0) AS successful_lookup_total
+FROM read_parquet(%s)
+%s
+GROUP BY src_entity, dst_entity, direction, ip_version
+`, quoteLiteral(s.summaryBucketedEdgeGlob(state.Granularity, state.Metric)), rangeClause)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query bucketed summary graph snapshot: %w", err)
+	}
+	defer rows.Close()
+
+	snapshot := &summaryGraphSnapshotData{
+		edges:       make([]summaryEdgeAggregate, 0, 128),
+		granularity: state.Granularity,
+	}
+	for rows.Next() {
+		var edge summaryEdgeAggregate
+		var direction sql.NullInt32
+		if err := rows.Scan(
+			&edge.Source,
+			&edge.Destination,
+			&edge.Bytes,
+			&edge.Connections,
+			&direction,
+			&edge.SrcPrivateBytes,
+			&edge.SrcPrivateConnections,
+			&edge.SrcPublicBytes,
+			&edge.SrcPublicConnections,
+			&edge.DstPrivateBytes,
+			&edge.DstPrivateConnections,
+			&edge.DstPublicBytes,
+			&edge.DstPublicConnections,
+			&edge.FirstSeenNs,
+			&edge.IPVersion,
+			&edge.LastSeenNs,
+			&edge.NXDomainLookups,
+			&edge.SuccessfulLookups,
+		); err != nil {
+			return nil, fmt.Errorf("scan bucketed summary graph snapshot row: %w", err)
+		}
+		edge.Direction = directionValue(direction)
+		snapshot.edges = append(snapshot.edges, edge)
+		snapshot.totals.Bytes += edge.Bytes
+		snapshot.totals.Connections += edge.Connections
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate bucketed summary graph snapshot rows: %w", err)
+	}
+
+	s.summaryGraphCache.Set(cacheKey, snapshot)
+	slog.Debug(
+		"UI bucketed summary graph snapshot built",
+		"granularity", state.Granularity,
+		"family", state.AddressFamily,
+		"direction", state.Direction,
+		"edge_count", len(snapshot.edges),
+		"duration_ms", time.Since(queryStart).Milliseconds(),
+	)
 	return snapshot, nil
 }
 
@@ -586,6 +708,13 @@ func summaryGraphSnapshotCacheKey(granularity Granularity, addressFamily Address
 	return fmt.Sprintf("summary-graph:%d:%s:%s:%s:%s", revision, granularity, addressFamily, direction, metric)
 }
 
+func summaryBucketStartNs(timestampNs int64) int64 {
+	if timestampNs <= 0 {
+		return 0
+	}
+	return (timestampNs / summaryBucketWidthNs) * summaryBucketWidthNs
+}
+
 func (s *Service) summaryEdgeGlob(granularity Granularity, metric Metric) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -593,6 +722,15 @@ func (s *Service) summaryEdgeGlob(granularity Granularity, metric Metric) string
 		return s.summaries.dnsEdgeGlobByGranularity[granularity]
 	}
 	return s.summaries.edgeGlobByGranularity[granularity]
+}
+
+func (s *Service) summaryBucketedEdgeGlob(granularity Granularity, metric Metric) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if metric == MetricDNSLookups {
+		return s.summaries.dnsBucketedEdgeGlobByGranularity[granularity]
+	}
+	return s.summaries.bucketedEdgeGlobByGranularity[granularity]
 }
 
 func (s *Service) summaryHistogramGlob(metric Metric) string {

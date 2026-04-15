@@ -34,6 +34,28 @@ type EdgeSummaryRow struct {
 	SuccessfulLookups     int64  `parquet:"successful_lookups"`
 }
 
+type BucketedEdgeSummaryRow struct {
+	BucketStartNs         int64  `parquet:"bucket_start_ns"`
+	Bytes                 int64  `parquet:"bytes"`
+	Connections           int64  `parquet:"connections"`
+	Destination           string `parquet:"dst_entity"`
+	Direction             *int32 `parquet:"direction,optional"`
+	DstPrivateBytes       int64  `parquet:"dst_private_bytes"`
+	DstPrivateConnections int64  `parquet:"dst_private_connections"`
+	DstPublicBytes        int64  `parquet:"dst_public_bytes"`
+	DstPublicConnections  int64  `parquet:"dst_public_connections"`
+	FirstSeenNs           int64  `parquet:"first_seen_ns"`
+	IPVersion             int32  `parquet:"ip_version"`
+	LastSeenNs            int64  `parquet:"last_seen_ns"`
+	NXDomainLookups       int64  `parquet:"nxdomain_lookups"`
+	Source                string `parquet:"src_entity"`
+	SrcPrivateBytes       int64  `parquet:"src_private_bytes"`
+	SrcPrivateConnections int64  `parquet:"src_private_connections"`
+	SrcPublicBytes        int64  `parquet:"src_public_bytes"`
+	SrcPublicConnections  int64  `parquet:"src_public_connections"`
+	SuccessfulLookups     int64  `parquet:"successful_lookups"`
+}
+
 type HistogramSummaryRow struct {
 	BucketStartNs int64  `parquet:"bucket_start_ns"`
 	Bytes         int64  `parquet:"bytes"`
@@ -45,6 +67,11 @@ type HistogramSummaryRow struct {
 type EdgeSummaryWriter struct {
 	rows   []EdgeSummaryRow
 	writer *parquet.GenericWriter[EdgeSummaryRow]
+}
+
+type BucketedEdgeSummaryWriter struct {
+	rows   []BucketedEdgeSummaryRow
+	writer *parquet.GenericWriter[BucketedEdgeSummaryRow]
 }
 
 type HistogramSummaryWriter struct {
@@ -69,6 +96,33 @@ func CreateUISummaryEdges(path string, manifest model.UISummaryManifest) (*EdgeS
 
 	outputWriter := &EdgeSummaryWriter{
 		rows:   make([]EdgeSummaryRow, 0, writerBufferRowCount),
+		writer: writer,
+	}
+
+	finalize := func() error {
+		return finalizeSummaryWriter(path, tempPath, file, outputWriter.flush, outputWriter.writer.Close)
+	}
+
+	return outputWriter, finalize, nil
+}
+
+func CreateUISummaryBucketedEdges(path string, manifest model.UISummaryManifest) (*BucketedEdgeSummaryWriter, func() error, error) {
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal UI summary manifest: %w", err)
+	}
+
+	tempPath := path + ".tmp"
+	file, err := os.Create(tempPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create %q: %w", tempPath, err)
+	}
+
+	writer := parquet.NewGenericWriter[BucketedEdgeSummaryRow](file, parquet.Compression(&snappy.Codec{}))
+	writer.SetKeyValueMetadata(uiSummaryManifestMetadataKey, string(manifestBytes))
+
+	outputWriter := &BucketedEdgeSummaryWriter{
+		rows:   make([]BucketedEdgeSummaryRow, 0, writerBufferRowCount),
 		writer: writer,
 	}
 
@@ -119,6 +173,19 @@ func (w *EdgeSummaryWriter) WriteBatch(rows []EdgeSummaryRow) error {
 	return nil
 }
 
+func (w *BucketedEdgeSummaryWriter) WriteBatch(rows []BucketedEdgeSummaryRow) error {
+	for _, row := range rows {
+		w.rows = append(w.rows, row)
+		if len(w.rows) < writerBufferRowCount {
+			continue
+		}
+		if err := w.flush(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (w *HistogramSummaryWriter) WriteBatch(rows []HistogramSummaryRow) error {
 	for _, row := range rows {
 		w.rows = append(w.rows, row)
@@ -138,6 +205,17 @@ func (w *EdgeSummaryWriter) flush() error {
 	}
 	if _, err := w.writer.Write(w.rows); err != nil {
 		return fmt.Errorf("write UI edge summary rows: %w", err)
+	}
+	w.rows = w.rows[:0]
+	return nil
+}
+
+func (w *BucketedEdgeSummaryWriter) flush() error {
+	if len(w.rows) == 0 {
+		return nil
+	}
+	if _, err := w.writer.Write(w.rows); err != nil {
+		return fmt.Errorf("write UI bucketed edge summary rows: %w", err)
 	}
 	w.rows = w.rows[:0]
 	return nil

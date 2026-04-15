@@ -175,6 +175,26 @@ func TestQueryStateNormalizedClearsEntityActionsForLongRange(t *testing.T) {
 	assert.Equal(t, len(normalized.Exclude), 0)
 }
 
+func TestQueryStateNormalizedRestrictsLongRangeToSummaryCapabilities(t *testing.T) {
+	state := QueryState{
+		FromNs:      1,
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+		NodeLimit:   defaultNodeLimit(GranularityHostname),
+		Search:      "alpha",
+		ToNs:        1 + int64(8*24*time.Hour),
+	}
+
+	normalized := state.Normalized(TimeSpan{
+		StartNs: 1,
+		EndNs:   1 + int64(8*24*time.Hour),
+	})
+
+	assert.Equal(t, normalized.Granularity, Granularity2LD)
+	assert.Equal(t, normalized.NodeLimit, defaultNodeLimit(Granularity2LD))
+	assert.Equal(t, normalized.Search, "")
+}
+
 func TestQueryStateNormalizedKeepsEntityActionsAtWeekRange(t *testing.T) {
 	state := QueryState{
 		Exclude:        []string{"drop.lan"},

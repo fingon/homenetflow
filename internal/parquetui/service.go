@@ -25,6 +25,7 @@ import (
 const (
 	directionIngressParquetValue int32 = 0
 	directionEgressParquetValue  int32 = 1
+	dnsLookupAnswerExpression          = "COALESCE(answer, '')"
 	filteredCTEName                    = "filtered_flows"
 	graphRestSourceID                  = "Other Sources"
 	graphRestDestination               = "Other Destinations"
@@ -998,7 +999,7 @@ func (s *Service) filteredDNSLookupCTE(state QueryState) (string, []any) {
 	whereClause, args := filterClause(state, srcExpr, dstExpr)
 	answerExpr := quoteLiteral("")
 	if s.hasDNSLookupAnswer() {
-		answerExpr = "COALESCE(answer, '')"
+		answerExpr = dnsLookupAnswerExpression
 	}
 	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, 0 AS bytes, lookups, CASE WHEN %s = %s THEN lookups ELSE 0 END AS nxdomain_lookups, CASE WHEN %s != '' AND %s != %s THEN lookups ELSE 0 END AS successful_lookups, false AS dst_is_private, client_ip_version AS ip_version, client_is_private AS src_is_private, time_start_ns, time_start_ns AS time_end_ns FROM %s WHERE %s)",
 		filteredCTEName,

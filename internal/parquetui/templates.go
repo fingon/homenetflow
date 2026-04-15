@@ -514,6 +514,7 @@ func topBar(dashboard DashboardData) g.Node {
 	currentAddressFamily := normalizedAddressFamily(state.AddressFamily)
 	currentDirection := normalizedDirection(state.Direction)
 	directionDisabled := state.Metric == MetricDNSLookups
+	longRange := !state.EntityActionsEnabled()
 
 	return Header(
 		Class("top-bar"),
@@ -554,8 +555,8 @@ func topBar(dashboard DashboardData) g.Node {
 					Label(g.Text("By")),
 					toggleRadio("granularity", string(GranularityTLD), "TLD", state.Granularity == GranularityTLD),
 					toggleRadio("granularity", string(Granularity2LD), "2TLD", state.Granularity == Granularity2LD),
-					toggleRadio("granularity", string(GranularityHostname), "Hostname", state.Granularity == GranularityHostname),
-					toggleRadio("granularity", string(GranularityIP), "IP", state.Granularity == GranularityIP),
+					toggleRadioDisabled("granularity", string(GranularityHostname), "Hostname", state.Granularity == GranularityHostname, longRange),
+					toggleRadioDisabled("granularity", string(GranularityIP), "IP", state.Granularity == GranularityIP, longRange),
 				),
 				Div(
 					Class("group segmented"),
@@ -580,6 +581,7 @@ func topBar(dashboard DashboardData) g.Node {
 						Value(state.Search),
 						Placeholder("Search visible entities"),
 						Data("behavior", "search"),
+						disabledIf(longRange),
 					),
 				),
 				Div(

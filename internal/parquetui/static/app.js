@@ -7,6 +7,7 @@
   const histogramAxisTimestampSelector = ".histogram-axis-label[data-timestamp-ns][data-span-width-ns]";
   const histogramBarSelector = ".histogram-bar";
   const graphSceneSelector = ".graph-scene";
+  const granularity2LDValue = "2ld";
   const granularityName = "granularity";
   const histogramTooltipClassName = "histogram-tooltip";
   const histogramTooltipOffsetPx = 14;
@@ -432,6 +433,21 @@
   }
 
   function clearEntityActionFields(form) {
+    const searchInput = form.querySelector(`input[name="search"]`);
+    if (searchInput instanceof HTMLInputElement) {
+      searchInput.value = "";
+    }
+
+    const selectedGranularity = form.querySelector(`input[name="${granularityName}"]:checked`);
+    if (selectedGranularity instanceof HTMLInputElement &&
+      selectedGranularity.value !== granularity2LDValue &&
+      selectedGranularity.value !== "tld") {
+      const twoLDInput = form.querySelector(`input[name="${granularityName}"][value="${granularity2LDValue}"]`);
+      if (twoLDInput instanceof HTMLInputElement) {
+        twoLDInput.checked = true;
+      }
+    }
+
     for (const name of ["selected_entity", "selected_edge_src", "selected_edge_dst"]) {
       const input = form.querySelector(`input[name="${name}"]`);
       if (input instanceof HTMLInputElement) {

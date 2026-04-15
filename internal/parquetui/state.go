@@ -271,9 +271,16 @@ func (s QueryState) Normalized(span TimeSpan) QueryState {
 		state.NodeLimit = defaultNodeLimit(state.Granularity)
 	}
 	if !state.EntityActionsEnabled() {
+		if state.Granularity != GranularityTLD && state.Granularity != Granularity2LD {
+			state.Granularity = Granularity2LD
+			if state.NodeLimit == defaultNodeLimit(GranularityHostname) || state.NodeLimit == defaultNodeLimit(GranularityIP) {
+				state.NodeLimit = defaultNodeLimit(state.Granularity)
+			}
+		}
 		state = state.ResetSelection()
 		state.Include = nil
 		state.Exclude = nil
+		state.Search = ""
 	}
 	return state
 }
