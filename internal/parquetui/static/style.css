@@ -116,6 +116,12 @@ input[type="search"] {
   color: white;
 }
 
+.list-button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .action-button.danger {
   background: var(--danger-bg);
   border-color: var(--danger-border);
@@ -157,6 +163,11 @@ input[type="search"] {
 }
 
 .action-button.disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.list-button.disabled {
   opacity: 0.55;
   cursor: default;
 }
@@ -502,6 +513,14 @@ input[type="search"] {
 
 .flow-detail-filters {
   margin-bottom: 1rem;
+}
+
+.flow-detail-controls {
+  margin-bottom: 1rem;
+}
+
+.flow-detail-sort-note {
+  margin: 0 0 0.5rem;
 }
 
 .raw-flows-table {
