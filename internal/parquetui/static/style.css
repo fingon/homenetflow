@@ -421,6 +421,46 @@ input[type="search"] {
   font-weight: 700;
 }
 
+.flow-detail-column {
+  width: 2.5rem;
+  text-align: right;
+}
+
+.flow-detail-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.flow-detail-link:hover,
+.flow-detail-link:focus-visible {
+  border-color: rgba(31, 39, 51, 0.28);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.flow-detail-page .panel-heading {
+  align-items: flex-start;
+}
+
+.flow-detail-filters {
+  margin-bottom: 1rem;
+}
+
+.raw-flows-table {
+  margin-top: 0.5rem;
+}
+
+.flow-endpoint {
+  display: grid;
+  gap: 0.15rem;
+}
+
 .graph-svg,
 svg.histogram-svg {
   width: 100%;

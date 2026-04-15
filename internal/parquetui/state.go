@@ -1,6 +1,7 @@
 package parquetui
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -68,6 +69,13 @@ const (
 	DirectionIngress DirectionFilter = "ingress"
 )
 
+type FlowScope string
+
+const (
+	FlowScopeEdge   FlowScope = "edge"
+	FlowScopeEntity FlowScope = "entity"
+)
+
 type QueryState struct {
 	AddressFamily   AddressFamily
 	Direction       DirectionFilter
@@ -87,6 +95,14 @@ type QueryState struct {
 	ToNs            int64
 	Metric          Metric
 	Preset          string
+}
+
+type FlowQuery struct {
+	Destination string
+	Entity      string
+	Scope       FlowScope
+	Source      string
+	State       QueryState
 }
 
 //nolint:tagliatelle
@@ -176,6 +192,31 @@ func ParseQueryState(r *http.Request) QueryState {
 	}
 
 	return state
+}
+
+func ParseFlowQuery(r *http.Request) (FlowQuery, error) {
+	query := r.URL.Query()
+	flowQuery := FlowQuery{
+		Destination: strings.TrimSpace(query.Get("flow_destination")),
+		Entity:      strings.TrimSpace(query.Get("flow_entity")),
+		Scope:       FlowScope(strings.TrimSpace(query.Get("flow_scope"))),
+		Source:      strings.TrimSpace(query.Get("flow_source")),
+		State:       ParseQueryState(r),
+	}
+	if !flowQuery.Scope.valid() {
+		return FlowQuery{}, fmt.Errorf("invalid flow scope %q", flowQuery.Scope)
+	}
+	switch flowQuery.Scope {
+	case FlowScopeEntity:
+		if flowQuery.Entity == "" {
+			return FlowQuery{}, errors.New("flow entity is required")
+		}
+	case FlowScopeEdge:
+		if flowQuery.Source == "" || flowQuery.Destination == "" {
+			return FlowQuery{}, errors.New("flow source and destination are required")
+		}
+	}
+	return flowQuery, nil
 }
 
 func (s QueryState) Normalized(span TimeSpan) QueryState {
@@ -279,6 +320,19 @@ func (s QueryState) Values() url.Values {
 	return values
 }
 
+func (q FlowQuery) Values() url.Values {
+	values := q.State.Values()
+	values.Set("flow_scope", string(q.Scope))
+	switch q.Scope {
+	case FlowScopeEntity:
+		values.Set("flow_entity", q.Entity)
+	case FlowScopeEdge:
+		values.Set("flow_source", q.Source)
+		values.Set("flow_destination", q.Destination)
+	}
+	return values
+}
+
 func (s QueryState) Clone() QueryState {
 	clone := s
 	clone.Include = append([]string(nil), s.Include...)
@@ -339,6 +393,10 @@ func (s QueryState) ResetSelection() QueryState {
 	state.SelectedEdgeSrc = ""
 	state.SelectedEdgeDst = ""
 	return state
+}
+
+func (s FlowScope) valid() bool {
+	return s == FlowScopeEntity || s == FlowScopeEdge
 }
 
 func (s QueryState) layoutCacheState() QueryState {

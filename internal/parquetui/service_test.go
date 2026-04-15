@@ -172,6 +172,31 @@ func TestAppIndexRendersAppShellForHTMXRequests(t *testing.T) {
 	assert.Assert(t, !strings.Contains(recorder.Body.String(), "<!DOCTYPE html>"))
 }
 
+func TestAppFlowsRendersSelectedFlowShellForHTMXRequests(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	app := &App{service: service}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/flows?metric=bytes&granularity=hostname&flow_scope=edge&flow_source=alpha.lan&flow_destination=dns.google", nil)
+	request.Header.Set("HX-Request", "true")
+
+	app.routes().ServeHTTP(recorder, request)
+
+	assert.Equal(t, recorder.Code, http.StatusOK)
+	body := recorder.Body.String()
+	assert.Assert(t, strings.Contains(body, `id="app-shell"`))
+	assert.Assert(t, strings.Contains(body, "Flows from alpha.lan to dns.google"))
+	assert.Assert(t, strings.Contains(body, "192.168.1.10:0"))
+	assert.Assert(t, !strings.Contains(body, "<!DOCTYPE html>"))
+}
+
 func TestAppVersionReturnsSessionToken(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
@@ -240,6 +265,67 @@ func TestServiceTableDefaultsSortToMetric(t *testing.T) {
 	assert.Equal(t, table.Sort, SortConnections)
 	assert.Equal(t, table.VisibleRows[0].Destination, "dst-one")
 	assert.Equal(t, table.VisibleRows[0].Connections, int64(2))
+}
+
+func TestServiceFlowDetailsEntityIncludesSourceAndDestinationMatches(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+		sampleRecord("8.8.8.8", "192.168.1.10", "dns.google", "google.com", "com", "alpha.lan", "lan", "lan", 200, 30, 40),
+		sampleRecord("192.168.1.11", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 300, 50, 60),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	flows, err := service.FlowDetails(context.Background(), FlowQuery{
+		Entity: "alpha.lan",
+		Scope:  FlowScopeEntity,
+		State: QueryState{
+			Granularity: GranularityHostname,
+			Metric:      MetricBytes,
+		},
+	})
+	assert.NilError(t, err)
+
+	assert.Equal(t, flows.TotalCount, 2)
+	assert.Equal(t, len(flows.VisibleRows), 2)
+	assert.Equal(t, flows.VisibleRows[0].Bytes, int64(200))
+	assert.Equal(t, flows.VisibleRows[0].Source, "dns.google")
+	assert.Equal(t, flows.VisibleRows[1].Bytes, int64(100))
+	assert.Equal(t, flows.VisibleRows[1].Destination, "dns.google")
+}
+
+func TestServiceFlowDetailsEdgeMatchesExactDirectionAndFilters(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 200, 30, 40),
+		sampleRecord("8.8.8.8", "192.168.1.10", "dns.google", "google.com", "com", "alpha.lan", "lan", "lan", 300, 50, 60),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	flows, err := service.FlowDetails(context.Background(), FlowQuery{
+		Destination: "dns.google",
+		Scope:       FlowScopeEdge,
+		Source:      "alpha.lan",
+		State: QueryState{
+			Granularity: GranularityHostname,
+			Metric:      MetricBytes,
+			FromNs:      25,
+			ToNs:        45,
+		},
+	})
+	assert.NilError(t, err)
+
+	assert.Equal(t, flows.TotalCount, 1)
+	assert.Equal(t, flows.VisibleRows[0].Bytes, int64(200))
+	assert.Equal(t, flows.VisibleRows[0].Source, "alpha.lan")
+	assert.Equal(t, flows.VisibleRows[0].Destination, "dns.google")
 }
 
 func TestServiceGraphPresetRangeDiffersAcrossFiles(t *testing.T) {
