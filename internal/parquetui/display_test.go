@@ -45,6 +45,37 @@ func TestFormatMetricValue(t *testing.T) {
 	}
 }
 
+func TestFormatTimestampAtUsesCompactHumanLabels(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)
+	helsinki := time.FixedZone("EEST", 3*60*60)
+	testCases := []struct {
+		now      time.Time
+		value    time.Time
+		name     string
+		expected string
+	}{
+		{name: "zero", value: time.Time{}, expected: "-"},
+		{name: "same day", value: time.Date(2026, time.April, 15, 1, 2, 3, 0, time.UTC), now: now, expected: "01:02:03"},
+		{name: "same iso week", value: time.Date(2026, time.April, 13, 1, 2, 3, 0, time.UTC), now: now, expected: "Mon 01:02:03"},
+		{name: "same year", value: time.Date(2026, time.January, 2, 1, 2, 3, 0, time.UTC), now: now, expected: "02.01 01:02:03"},
+		{name: "different year", value: time.Date(2025, time.December, 31, 1, 2, 3, 0, time.UTC), now: now, expected: "31.12.2025 01:02:03"},
+		{name: "non utc now", value: time.Date(2026, time.April, 14, 22, 30, 0, 0, time.UTC), now: time.Date(2026, time.April, 15, 1, 0, 0, 0, helsinki), expected: "22:30:00"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if testCase.value.IsZero() {
+				assert.Equal(t, formatTimestampAt(0, testCase.now), testCase.expected)
+				return
+			}
+			assert.Equal(t, formatTimestampAt(testCase.value.UnixNano(), testCase.now), testCase.expected)
+		})
+	}
+}
+
 func TestFormatTimelineYAxisMetricValue(t *testing.T) {
 	t.Parallel()
 
@@ -133,7 +164,7 @@ func TestHistogramSVGMarkupAddsAxisLabels(t *testing.T) {
 		{FromNs: start.Add(18 * time.Hour).UnixNano(), ToNs: start.Add(24*time.Hour).UnixNano() - 1, Value: 4000},
 	}
 
-	markup := histogramSVGMarkup(MetricBytes, bins)
+	markup := histogramSVGMarkupAt(MetricBytes, bins, time.Date(2026, time.January, 2, 12, 0, 0, 0, time.UTC))
 
 	assert.Assert(t, strings.Contains(markup, "histogram-axis-label"))
 	assert.Assert(t, strings.Contains(markup, "histogram-axis-label-y"))
@@ -146,8 +177,8 @@ func TestHistogramSVGMarkupAddsAxisLabels(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, ">23:59<"))
 	assert.Assert(t, strings.Contains(markup, "Value: 4000"))
 	assert.Assert(t, strings.Contains(markup, `tabindex="0"`))
-	assert.Assert(t, strings.Contains(markup, `data-from-label="2026-01-02T00:00:00Z"`))
-	assert.Assert(t, strings.Contains(markup, `data-to-label="2026-01-02T23:59:59Z"`))
+	assert.Assert(t, strings.Contains(markup, `data-from-label="00:00:00"`))
+	assert.Assert(t, strings.Contains(markup, `data-to-label="23:59:59"`))
 	assert.Assert(t, strings.Contains(markup, `data-value-label="4000"`))
 }
 
@@ -274,6 +305,50 @@ func TestPanelsDoNotRenderNestedPanelWrappers(t *testing.T) {
 
 	assert.Assert(t, !strings.Contains(summaryMarkup, `class="panel summary-panel"`))
 	assert.Assert(t, !strings.Contains(tableMarkup, `class="panel"`))
+}
+
+func TestTablePanelRendersCompactTimestampWithFullMetadata(t *testing.T) {
+	t.Parallel()
+
+	firstSeen := time.Date(2026, time.April, 15, 1, 2, 3, 0, time.UTC)
+	lastSeen := time.Date(2026, time.January, 2, 4, 5, 6, 0, time.UTC)
+	markup := renderNodeString(t, tablePanelAt(QueryState{}, TableData{
+		Page:       1,
+		TotalPages: 1,
+		VisibleRows: []TableRow{
+			{
+				Source:      "alpha.lan",
+				Destination: "dns.google",
+				FirstSeenNs: firstSeen.UnixNano(),
+				LastSeenNs:  lastSeen.UnixNano(),
+			},
+		},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	assert.Assert(t, strings.Contains(markup, `datetime="2026-04-15T01:02:03Z"`))
+	assert.Assert(t, strings.Contains(markup, `title="2026-04-15T01:02:03Z"`))
+	assert.Assert(t, strings.Contains(markup, `>01:02:03</time>`))
+	assert.Assert(t, strings.Contains(markup, `datetime="2026-01-02T04:05:06Z"`))
+	assert.Assert(t, strings.Contains(markup, `>02.01 04:05:06</time>`))
+}
+
+func TestSelectedPanelRendersCompactTimestampWithFullMetadata(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, selectedPanelAt(QueryState{}, GraphData{
+		ActiveMetric: MetricBytes,
+		SelectedEdge: &Edge{
+			Source:      "alpha.lan",
+			Destination: "dns.google",
+			FirstSeenNs: time.Date(2026, time.April, 13, 1, 2, 3, 0, time.UTC).UnixNano(),
+			LastSeenNs:  time.Date(2025, time.December, 31, 4, 5, 6, 0, time.UTC).UnixNano(),
+		},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	assert.Assert(t, strings.Contains(markup, `datetime="2026-04-13T01:02:03Z"`))
+	assert.Assert(t, strings.Contains(markup, `>Mon 01:02:03</time>`))
+	assert.Assert(t, strings.Contains(markup, `datetime="2025-12-31T04:05:06Z"`))
+	assert.Assert(t, strings.Contains(markup, `>31.12.2025 04:05:06</time>`))
 }
 
 func TestSummaryPanelDoesNotRenderRankings(t *testing.T) {
