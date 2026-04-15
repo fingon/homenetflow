@@ -219,7 +219,7 @@ func RankingsPanel(state QueryState, graph GraphData) g.Node {
 			Ul(
 				Class("rank-list"),
 				renderNodes(graph.TopEntities, func(node Node) g.Node {
-					return Li(navLink(selectEntityStateURL(state, node.ID), dnsResultClass("list-button", node.DNSResultState), fmt.Sprintf("%s (%s)", node.Label, formatMetricValue(graph.ActiveMetric, node.Total))))
+					return Li(rankingLink(selectEntityStateURL(state, node.ID), node.DNSResultState, node.Label, formatMetricValue(graph.ActiveMetric, node.Total)))
 				}),
 			),
 		),
@@ -229,7 +229,7 @@ func RankingsPanel(state QueryState, graph GraphData) g.Node {
 			Ul(
 				Class("rank-list"),
 				renderNodes(graph.TopEdges, func(edge Edge) g.Node {
-					return Li(navLink(selectEdgeStateURL(state, edge.Source, edge.Destination), dnsResultClass("list-button", edge.DNSResultState), fmt.Sprintf("%s -> %s (%s)", edge.Source, edge.Destination, formatMetricValue(graph.ActiveMetric, edge.MetricValue))))
+					return Li(rankingLink(selectEdgeStateURL(state, edge.Source, edge.Destination), edge.DNSResultState, fmt.Sprintf("%s -> %s", edge.Source, edge.Destination), formatMetricValue(graph.ActiveMetric, edge.MetricValue)))
 				}),
 			),
 		),
@@ -281,6 +281,10 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 			P(g.Text(connectionsTotalLabel(graph.ActiveMetric)+": "+formatMetricValue(connectionsDisplayMetric(graph.ActiveMetric), graph.SelectedEdge.Connections))),
 			P(g.Text("First seen: "), timestampNode(graph.SelectedEdge.FirstSeenNs, now)),
 			P(g.Text("Last seen: "), timestampNode(graph.SelectedEdge.LastSeenNs, now)),
+			Div(
+				Class("button-row"),
+				navLink(deselectStateURL(state), "action-button", "Deselect"),
+			),
 		)
 		return Div(nodes...)
 	}
@@ -313,12 +317,13 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 			navLink(entityURL, "action-button", "Filter to this entity"),
 			navLink(excludeURL, "action-button", "Exclude"),
 			navLink(drillURL, "action-button", "Drill down granularity"),
+			navLink(deselectStateURL(state), "action-button", "Deselect"),
 		),
 		sectionTitle("Peers"),
 		Ul(
 			Class("rank-list"),
 			renderNodes(graph.SelectedNodePeers, func(peer DetailPeer) g.Node {
-				return Li(g.Text(fmt.Sprintf("%s (%s)", peer.Entity, formatMetricValue(graph.ActiveMetric, peer.MetricValue))))
+				return Li(rankingLink(selectEntityStateURL(state, peer.Entity), dnsResultStateSuccess, peer.Entity, formatMetricValue(graph.ActiveMetric, peer.MetricValue)))
 			}),
 		),
 	)
@@ -357,8 +362,8 @@ func tablePanelAt(state QueryState, table TableData, now time.Time) g.Node {
 						rowClass = strings.TrimSpace(rowClass + " synthetic-row")
 					}
 					cells := []g.Node{
-						Td(g.Text(row.Source)),
-						Td(g.Text(row.Destination)),
+						Td(tableEntityLink(state, row.Source)),
+						Td(tableEntityLink(state, row.Destination)),
 					}
 					if state.Metric != MetricDNSLookups {
 						cells = append(cells, Td(g.Text(formatMetricValue(MetricBytes, row.Bytes))))
@@ -766,6 +771,24 @@ func navLink(href, className, label string) g.Node {
 	)
 }
 
+func tableEntityLink(state QueryState, entity string) g.Node {
+	return navLink(selectEntityStateURL(state, entity), "table-link", entity)
+}
+
+func rankingLink(href string, dnsState dnsResultState, label, value string) g.Node {
+	return A(
+		Href(href),
+		Class(dnsResultClass("table-link ranking-link", dnsState)),
+		g.Attr("hx-get", href),
+		g.Attr("hx-target", hxTargetAppShellValue),
+		g.Attr("hx-select", hxSelectAppShellValue),
+		g.Attr("hx-swap", hxSwapOuterHTMLValue),
+		g.Attr("hx-push-url", "true"),
+		Span(Class("ranking-label"), g.Text(label)),
+		Span(Class("ranking-value"), g.Text(value)),
+	)
+}
+
 func sortLink(state QueryState, label string, sortKey TableSort) g.Node {
 	nextState := state.Clone()
 	nextState.Sort = sortKey
@@ -827,6 +850,11 @@ func drillStateURL(state QueryState, entity string) string {
 	nextState.NodeLimit = 0
 	nextState.Page = defaultPage
 	nextState = nextState.ResetSelection()
+	return stateURL(nextState)
+}
+
+func deselectStateURL(state QueryState) string {
+	nextState := state.ResetSelection()
 	return stateURL(nextState)
 }
 

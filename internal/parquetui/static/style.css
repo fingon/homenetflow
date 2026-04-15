@@ -344,11 +344,44 @@ input[type="search"] {
   padding: 0;
   margin: 0;
   display: grid;
-  gap: 0.35rem;
 }
 
 .rank-list li {
   margin: 0;
+  border-top: 1px solid var(--line);
+}
+
+.rank-list li:first-child {
+  border-top: 0;
+}
+
+.ranking-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  min-height: 2.5rem;
+  padding: 0.45rem 0;
+}
+
+.ranking-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ranking-value {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  padding: 0.16rem 0.5rem;
+  font-weight: 700;
+}
+
+.ranking-link:hover .ranking-value,
+.ranking-link:focus-visible .ranking-value {
+  border-color: currentColor;
 }
 
 .list-button {
@@ -403,6 +436,19 @@ input[type="search"] {
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
+}
+
+.table-link {
+  color: inherit;
+  font-weight: 700;
+  text-decoration-color: transparent;
+  text-underline-offset: 0.18rem;
+}
+
+.table-link:hover,
+.table-link:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
 }
 
 .synthetic-row td {

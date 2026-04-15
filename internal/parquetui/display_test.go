@@ -423,6 +423,54 @@ func TestTablePanelRendersCompactTimestampWithFullMetadata(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `>02.01 04:05:06</time>`))
 }
 
+func TestTablePanelEndpointLinksSelectGraphEntity(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, tablePanelAt(QueryState{
+		Exclude:         []string{"drop.lan"},
+		FromNs:          10,
+		Granularity:     GranularityHostname,
+		Include:         []string{"keep.lan"},
+		Metric:          MetricConnections,
+		Page:            3,
+		Search:          "cloud",
+		SelectedEdgeDst: "old-destination",
+		SelectedEdgeSrc: "old-source",
+		Sort:            SortLastSeen,
+		ToNs:            20,
+	}, TableData{
+		Page:       3,
+		TotalPages: 5,
+		VisibleRows: []TableRow{
+			{Connections: 7, Destination: "dns.google", Source: "alpha.lan"},
+		},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	sourceAnchor := anchorMarkupForLabel(t, markup, "alpha.lan")
+	destinationAnchor := anchorMarkupForLabel(t, markup, "dns.google")
+
+	for _, anchor := range []string{sourceAnchor, destinationAnchor} {
+		assert.Assert(t, strings.Contains(anchor, `class="table-link"`))
+		assert.Assert(t, strings.Contains(anchor, `hx-target="#app-shell"`))
+		assert.Assert(t, strings.Contains(anchor, `hx-select="#app-shell"`))
+		assert.Assert(t, strings.Contains(anchor, `hx-push-url="true"`))
+		assert.Assert(t, strings.Contains(anchor, `from=10`))
+		assert.Assert(t, strings.Contains(anchor, `to=20`))
+		assert.Assert(t, strings.Contains(anchor, `metric=connections`))
+		assert.Assert(t, strings.Contains(anchor, `granularity=hostname`))
+		assert.Assert(t, strings.Contains(anchor, `sort=last_seen`))
+		assert.Assert(t, strings.Contains(anchor, `include=keep.lan`))
+		assert.Assert(t, strings.Contains(anchor, `exclude=drop.lan`))
+		assert.Assert(t, strings.Contains(anchor, `search=cloud`))
+		assert.Assert(t, !strings.Contains(anchor, `page=`))
+		assert.Assert(t, !strings.Contains(anchor, `selected_edge_src`))
+		assert.Assert(t, !strings.Contains(anchor, `selected_edge_dst`))
+	}
+
+	assert.Assert(t, strings.Contains(sourceAnchor, `selected_entity=alpha.lan`))
+	assert.Assert(t, strings.Contains(destinationAnchor, `selected_entity=dns.google`))
+}
+
 func TestSelectedPanelRendersCompactTimestampWithFullMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -442,6 +490,111 @@ func TestSelectedPanelRendersCompactTimestampWithFullMetadata(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `datetime="2025-12-31T04:05:06Z"`))
 	assert.Assert(t, strings.Contains(markup, fmt.Sprintf(`data-timestamp-ns="%d"`, time.Date(2025, time.December, 31, 4, 5, 6, 0, time.UTC).UnixNano())))
 	assert.Assert(t, strings.Contains(markup, `>31.12.2025 04:05:06</time>`))
+}
+
+func TestSelectedPanelRendersDeselectForSelectedEdge(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, selectedPanelAt(QueryState{
+		Exclude:         []string{"drop.lan"},
+		FromNs:          10,
+		Granularity:     GranularityHostname,
+		Include:         []string{"keep.lan"},
+		Metric:          MetricBytes,
+		SelectedEdgeDst: "dns.google",
+		SelectedEdgeSrc: "alpha.lan",
+		Sort:            SortBytes,
+		ToNs:            20,
+	}, GraphData{
+		ActiveMetric: MetricBytes,
+		SelectedEdge: &Edge{
+			Bytes:       100,
+			Connections: 2,
+			Destination: "dns.google",
+			Source:      "alpha.lan",
+		},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	deselectAnchor := anchorMarkupForLabel(t, markup, "Deselect")
+
+	assert.Assert(t, strings.Contains(deselectAnchor, `class="action-button"`))
+	assert.Assert(t, strings.Contains(deselectAnchor, `from=10`))
+	assert.Assert(t, strings.Contains(deselectAnchor, `to=20`))
+	assert.Assert(t, strings.Contains(deselectAnchor, `granularity=hostname`))
+	assert.Assert(t, strings.Contains(deselectAnchor, `include=keep.lan`))
+	assert.Assert(t, strings.Contains(deselectAnchor, `exclude=drop.lan`))
+	assert.Assert(t, !strings.Contains(deselectAnchor, `selected_entity`))
+	assert.Assert(t, !strings.Contains(deselectAnchor, `selected_edge_src`))
+	assert.Assert(t, !strings.Contains(deselectAnchor, `selected_edge_dst`))
+}
+
+func TestSelectedPanelRendersDeselectForSelectedEntity(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, selectedPanelAt(QueryState{
+		FromNs:         10,
+		Granularity:    GranularityHostname,
+		Metric:         MetricConnections,
+		Search:         "alpha",
+		SelectedEntity: "alpha.lan",
+		Sort:           SortConnections,
+		ToNs:           20,
+	}, GraphData{
+		ActiveMetric: MetricConnections,
+		SelectedNode: &Node{
+			Egress: 5,
+			ID:     "alpha.lan",
+			Label:  "alpha.lan",
+		},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	deselectAnchor := anchorMarkupForLabel(t, markup, "Deselect")
+
+	assert.Assert(t, strings.Contains(deselectAnchor, `class="action-button"`))
+	assert.Assert(t, strings.Contains(deselectAnchor, `from=10`))
+	assert.Assert(t, strings.Contains(deselectAnchor, `to=20`))
+	assert.Assert(t, strings.Contains(deselectAnchor, `metric=connections`))
+	assert.Assert(t, strings.Contains(deselectAnchor, `granularity=hostname`))
+	assert.Assert(t, strings.Contains(deselectAnchor, `search=alpha`))
+	assert.Assert(t, !strings.Contains(deselectAnchor, `selected_entity`))
+	assert.Assert(t, !strings.Contains(deselectAnchor, `selected_edge_src`))
+	assert.Assert(t, !strings.Contains(deselectAnchor, `selected_edge_dst`))
+}
+
+func TestSelectedPanelPeerLinksSelectPeerEntity(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, selectedPanelAt(QueryState{
+		FromNs:         10,
+		Granularity:    GranularityHostname,
+		Metric:         MetricConnections,
+		SelectedEntity: "alpha.lan",
+		Sort:           SortConnections,
+		ToNs:           20,
+	}, GraphData{
+		ActiveMetric: MetricConnections,
+		SelectedNode: &Node{
+			Egress: 5,
+			ID:     "alpha.lan",
+			Label:  "alpha.lan",
+		},
+		SelectedNodePeers: []DetailPeer{
+			{Entity: "dns.google", MetricValue: 7},
+		},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	peerAnchor := anchorMarkupForLabel(t, markup, "dns.google")
+
+	assert.Assert(t, strings.Contains(peerAnchor, `class="table-link ranking-link"`))
+	assert.Assert(t, strings.Contains(peerAnchor, `class="ranking-label"`))
+	assert.Assert(t, strings.Contains(peerAnchor, `class="ranking-value"`))
+	assert.Assert(t, strings.Contains(peerAnchor, `selected_entity=dns.google`))
+	assert.Assert(t, strings.Contains(peerAnchor, `metric=connections`))
+	assert.Assert(t, strings.Contains(peerAnchor, `granularity=hostname`))
+	assert.Assert(t, strings.Contains(peerAnchor, `>7</span>`))
+	assert.Assert(t, !strings.Contains(peerAnchor, `selected_entity=alpha.lan`))
+	assert.Assert(t, !strings.Contains(peerAnchor, `selected_edge_src`))
+	assert.Assert(t, !strings.Contains(peerAnchor, `selected_edge_dst`))
 }
 
 func TestSelectedEntityHidesZeroDirectionValues(t *testing.T) {
@@ -545,6 +698,44 @@ func TestSummaryPanelDoesNotRenderRankings(t *testing.T) {
 
 	assert.Assert(t, !strings.Contains(summaryMarkup, "Top Entities"))
 	assert.Assert(t, !strings.Contains(summaryMarkup, "Top Flows"))
+}
+
+func TestRankingsPanelUsesSelectionLinkStyling(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, RankingsPanel(QueryState{
+		FromNs:      10,
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+		Sort:        SortBytes,
+		ToNs:        20,
+	}, GraphData{
+		ActiveMetric: MetricBytes,
+		TopEntities: []Node{
+			{ID: "alpha.lan", Label: "alpha.lan", Total: 100},
+		},
+		TopEdges: []Edge{
+			{Destination: "dns.google", MetricValue: 200, Source: "alpha.lan"},
+		},
+	}))
+
+	entityAnchor := anchorMarkupForLabel(t, markup, "alpha.lan")
+	edgeAnchor := anchorMarkupForLabel(t, markup, "alpha.lan -&gt; dns.google")
+
+	for _, anchor := range []string{entityAnchor, edgeAnchor} {
+		assert.Assert(t, strings.Contains(anchor, `class="table-link ranking-link"`))
+		assert.Assert(t, strings.Contains(anchor, `class="ranking-label"`))
+		assert.Assert(t, strings.Contains(anchor, `class="ranking-value"`))
+		assert.Assert(t, strings.Contains(anchor, `hx-target="#app-shell"`))
+		assert.Assert(t, strings.Contains(anchor, `hx-select="#app-shell"`))
+		assert.Assert(t, strings.Contains(anchor, `hx-push-url="true"`))
+		assert.Assert(t, !strings.Contains(anchor, `list-button`))
+	}
+	assert.Assert(t, strings.Contains(entityAnchor, `selected_entity=alpha.lan`))
+	assert.Assert(t, strings.Contains(entityAnchor, `>100</span>`))
+	assert.Assert(t, strings.Contains(edgeAnchor, `selected_edge_src=alpha.lan`))
+	assert.Assert(t, strings.Contains(edgeAnchor, `selected_edge_dst=dns.google`))
+	assert.Assert(t, strings.Contains(edgeAnchor, `>200</span>`))
 }
 
 func TestSummaryPanelActiveFiltersOnlyRenderTimeAndEntityFilters(t *testing.T) {
@@ -723,6 +914,18 @@ func renderNodeString(t *testing.T, node interface{ Render(io.Writer) error }) s
 	var builder strings.Builder
 	assert.NilError(t, node.Render(&builder))
 	return builder.String()
+}
+
+func anchorMarkupForLabel(t *testing.T, markup, label string) string {
+	t.Helper()
+
+	labelIndex := strings.Index(markup, ">"+label)
+	assert.Assert(t, labelIndex >= 0, "anchor label %q not found", label)
+	startIndex := strings.LastIndex(markup[:labelIndex], "<a ")
+	assert.Assert(t, startIndex >= 0, "anchor start for %q not found", label)
+	endOffset := strings.Index(markup[labelIndex:], "</a>")
+	assert.Assert(t, endOffset >= 0, "anchor end for %q not found", label)
+	return markup[startIndex : labelIndex+endOffset+len("</a>")]
 }
 
 func TestBuildLayoutRings(t *testing.T) {
