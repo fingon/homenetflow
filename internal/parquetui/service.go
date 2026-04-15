@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/fingon/homenetflow/internal/model"
 	"github.com/fingon/homenetflow/internal/parquetout"
 	"github.com/fingon/homenetflow/internal/scan"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -34,6 +36,7 @@ const (
 	dnsLookupFilenamePrefix            = "dns_lookups_"
 	resultCacheLimit                   = 96
 	restTopEntityLimit                 = 10
+	rawQueryConcurrencyMax             = 4
 	srcEntityColumn                    = "src_entity"
 	summaryTopItemLimit                = 10
 	tableCacheKind                     = "table"
@@ -259,11 +262,15 @@ func NewService(ctx context.Context, srcParquetPath string, reloadInterval time.
 	globPath := filepath.ToSlash(filepath.Join(absPath, "nfcap_*.parquet"))
 	dnsLookupGlobPath := filepath.ToSlash(filepath.Join(absPath, dnsLookupFilenamePrefix+"*.parquet"))
 
-	connector, err := duckdb.NewConnector("", nil)
+	threadCount := rawQueryThreadsPerQuery()
+	connector, err := duckdb.NewConnector(fmt.Sprintf("?threads=%d", threadCount), nil)
 	if err != nil {
 		return nil, fmt.Errorf("create duckdb connector: %w", err)
 	}
 	db := sql.OpenDB(connector)
+	queryConcurrency := rawQueryConcurrency()
+	db.SetMaxOpenConns(queryConcurrency)
+	db.SetMaxIdleConns(queryConcurrency)
 
 	service := &Service{
 		bgCtx:             ctx,
@@ -285,6 +292,14 @@ func NewService(ctx context.Context, srcParquetPath string, reloadInterval time.
 	}
 
 	return service, nil
+}
+
+func rawQueryConcurrency() int {
+	return min(rawQueryConcurrencyMax, max(1, runtime.GOMAXPROCS(0)))
+}
+
+func rawQueryThreadsPerQuery() int {
+	return max(1, runtime.GOMAXPROCS(0)/rawQueryConcurrency())
 }
 
 func (s *Service) Close() error {
@@ -329,6 +344,10 @@ func (s *Service) Graph(ctx context.Context, state QueryState) (GraphData, error
 		return GraphData{}, err
 	}
 	state = state.Normalized(span)
+	return s.graphWithSpan(ctx, state, span)
+}
+
+func (s *Service) graphWithSpan(ctx context.Context, state QueryState, span TimeSpan) (GraphData, error) {
 	if state.Metric == MetricDNSLookups && !s.hasDNSLookupData() {
 		return GraphData{
 			ActiveGranularity: state.Granularity,
@@ -346,10 +365,12 @@ func (s *Service) Graph(ctx context.Context, state QueryState) (GraphData, error
 		return graph, nil
 	}
 
+	queryStart := time.Now()
 	nodeTotals, err := s.queryNodeTotals(ctx, state)
 	if err != nil {
 		return GraphData{}, err
 	}
+	nodeTotalsLoadedAt := time.Now()
 
 	keepEntities := chooseKeepEntities(nodeTotals, state)
 	keepLookup := make(map[string]struct{}, len(keepEntities))
@@ -357,10 +378,29 @@ func (s *Service) Graph(ctx context.Context, state QueryState) (GraphData, error
 		keepLookup[entity] = struct{}{}
 	}
 
-	edges, err := s.queryEdges(ctx, state, keepEntities)
-	if err != nil {
+	var edges []Edge
+	var restSourceNode *Node
+	var restDestinationNode *Node
+	group, groupContext := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		var queryErr error
+		edges, queryErr = s.queryEdges(groupContext, state, keepEntities)
+		return queryErr
+	})
+	group.Go(func() error {
+		var queryErr error
+		restSourceNode, queryErr = s.queryRestNode(groupContext, state, keepEntities, true)
+		return queryErr
+	})
+	group.Go(func() error {
+		var queryErr error
+		restDestinationNode, queryErr = s.queryRestNode(groupContext, state, keepEntities, false)
+		return queryErr
+	})
+	if err := group.Wait(); err != nil {
 		return GraphData{}, err
 	}
+	edgeDataLoadedAt := time.Now()
 
 	visibleEdges, hiddenEdgeCount := limitEdges(edges, state.EdgeLimit, state.SelectedEntity)
 	visibleNodeMap := make(map[string]Node, len(keepEntities)+2)
@@ -372,14 +412,6 @@ func (s *Service) Graph(ctx context.Context, state QueryState) (GraphData, error
 		visibleNodeMap[row.ID] = row
 	}
 
-	restSourceNode, err := s.queryRestNode(ctx, state, keepEntities, true)
-	if err != nil {
-		return GraphData{}, err
-	}
-	restDestinationNode, err := s.queryRestNode(ctx, state, keepEntities, false)
-	if err != nil {
-		return GraphData{}, err
-	}
 	if restSourceNode != nil {
 		visibleNodeMap[restSourceNode.ID] = *restSourceNode
 	}
@@ -412,22 +444,30 @@ func (s *Service) Graph(ctx context.Context, state QueryState) (GraphData, error
 		return 1
 	})
 
-	selectedNode, selectedEdge, peers, sparkline, err := s.selectionDetails(ctx, state, keepEntities, visibleNodeMap, visibleEdges)
-	if err != nil {
-		return GraphData{}, err
-	}
-
-	totals, err := s.queryTotals(ctx, state, len(nodeTotals), len(visibleEdges))
-	if err != nil {
-		return GraphData{}, err
-	}
-
+	totals := totalsFromEdges(edges, len(nodeTotals), len(visibleEdges))
 	topEntities := limitNodes(nodes, summaryTopItemLimit)
 	topEdges := limitTopEdges(visibleEdges, summaryTopItemLimit)
-	nodePositions, err := s.layoutPositions(ctx, state)
-	if err != nil {
+
+	var selectedNode *Node
+	var selectedEdge *Edge
+	var peers []DetailPeer
+	var sparkline []HistogramBin
+	var nodePositions map[string]LayoutPoint
+	group, groupContext = errgroup.WithContext(ctx)
+	group.Go(func() error {
+		var queryErr error
+		selectedNode, selectedEdge, peers, sparkline, queryErr = s.selectionDetails(groupContext, state, span, keepEntities, visibleNodeMap, visibleEdges)
+		return queryErr
+	})
+	group.Go(func() error {
+		var queryErr error
+		nodePositions, queryErr = s.layoutPositions(groupContext, state)
+		return queryErr
+	})
+	if err := group.Wait(); err != nil {
 		return GraphData{}, err
 	}
+	layoutAndSelectionLoadedAt := time.Now()
 
 	graph := GraphData{
 		ActiveGranularity: state.Granularity,
@@ -448,6 +488,15 @@ func (s *Service) Graph(ctx context.Context, state QueryState) (GraphData, error
 		TopEntities:       topEntities,
 	}
 	s.graphCache.Set(cacheKey, graph)
+	slog.Debug(
+		"UI raw graph query complete",
+		"granularity", state.Granularity,
+		"metric", state.Metric,
+		"node_totals_ms", nodeTotalsLoadedAt.Sub(queryStart).Milliseconds(),
+		"edge_data_ms", edgeDataLoadedAt.Sub(nodeTotalsLoadedAt).Milliseconds(),
+		"layout_selection_ms", layoutAndSelectionLoadedAt.Sub(edgeDataLoadedAt).Milliseconds(),
+		"duration_ms", time.Since(queryStart).Milliseconds(),
+	)
 	return graph, nil
 }
 
@@ -458,12 +507,20 @@ func (s *Service) Dashboard(ctx context.Context, state QueryState) (DashboardDat
 	}
 
 	state = state.Normalized(span)
-	graph, err := s.Graph(ctx, state)
-	if err != nil {
-		return DashboardData{}, err
-	}
-	histogram, err := s.Histogram(ctx, state)
-	if err != nil {
+	var graph GraphData
+	var histogram []HistogramBin
+	group, groupContext := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		var queryErr error
+		graph, queryErr = s.graphWithSpan(groupContext, state, span)
+		return queryErr
+	})
+	group.Go(func() error {
+		var queryErr error
+		histogram, queryErr = s.histogramWithSpan(groupContext, state, span)
+		return queryErr
+	})
+	if err := group.Wait(); err != nil {
 		return DashboardData{}, err
 	}
 	table := tableFromGraph(graph, state)
@@ -483,6 +540,10 @@ func (s *Service) Histogram(ctx context.Context, state QueryState) ([]HistogramB
 		return nil, err
 	}
 	state = state.Normalized(span)
+	return s.histogramWithSpan(ctx, state, span)
+}
+
+func (s *Service) histogramWithSpan(ctx context.Context, state QueryState, span TimeSpan) ([]HistogramBin, error) {
 	if state.Metric == MetricDNSLookups && !s.hasDNSLookupData() {
 		return nil, nil
 	}
@@ -1131,26 +1192,21 @@ ORDER BY %s DESC, source_bucket, destination_bucket
 	return edges, nil
 }
 
-func (s *Service) queryTotals(ctx context.Context, state QueryState, totalEntities, visibleEdges int) (Totals, error) {
-	cte, args := s.filteredCTE(state)
-	query := fmt.Sprintf(`%s
-SELECT COALESCE(SUM(bytes), 0), %s
-FROM %s
-`, cte, connectionTotalExpression(state.Metric), filteredCTEName)
-	row := s.db.QueryRowContext(ctx, query, args...)
-
+func totalsFromEdges(edges []Edge, totalEntities, visibleEdges int) Totals {
 	var totals Totals
-	if err := row.Scan(&totals.Bytes, &totals.Connections); err != nil {
-		return Totals{}, fmt.Errorf("scan totals: %w", err)
+	for _, edge := range edges {
+		totals.Bytes += edge.Bytes
+		totals.Connections += edge.Connections
 	}
 	totals.Entities = totalEntities
 	totals.Edges = visibleEdges
-	return totals, nil
+	return totals
 }
 
 func (s *Service) selectionDetails(
 	ctx context.Context,
 	state QueryState,
+	span TimeSpan,
 	keepEntities []string,
 	visibleNodeMap map[string]Node,
 	visibleEdges []Edge,
@@ -1193,12 +1249,20 @@ func (s *Service) selectionDetails(
 		return selectedNode, selectedEdge, peers, nil, nil
 	}
 
-	peers, err := s.queryNodePeers(ctx, state, selectedNode.ID)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	sparkline, err := s.nodeSparkline(ctx, state, selectedNode.ID)
-	if err != nil {
+	var peers []DetailPeer
+	var sparkline []HistogramBin
+	group, groupContext := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		var queryErr error
+		peers, queryErr = s.queryNodePeers(groupContext, state, selectedNode.ID)
+		return queryErr
+	})
+	group.Go(func() error {
+		var queryErr error
+		sparkline, queryErr = s.nodeSparklineWithSpan(groupContext, state, span, selectedNode.ID)
+		return queryErr
+	})
+	if err := group.Wait(); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	return selectedNode, selectedEdge, peers, sparkline, nil
@@ -1240,13 +1304,13 @@ LIMIT %d
 	return peers, nil
 }
 
-func (s *Service) nodeSparkline(ctx context.Context, state QueryState, entity string) ([]HistogramBin, error) {
+func (s *Service) nodeSparklineWithSpan(ctx context.Context, state QueryState, span TimeSpan, entity string) ([]HistogramBin, error) {
 	nodeState := state.Clone()
 	nodeState.Include = []string{entity}
 	nodeState.SelectedEntity = ""
 	nodeState.SelectedEdgeSrc = ""
 	nodeState.SelectedEdgeDst = ""
-	return s.Histogram(ctx, nodeState)
+	return s.histogramWithSpan(ctx, nodeState, span)
 }
 
 func (s *Service) queryRestTopEntities(ctx context.Context, state QueryState, keepEntities []string, sourceRole bool) ([]Node, error) {
@@ -1648,12 +1712,19 @@ func (s *Service) layoutPositions(ctx context.Context, state QueryState) (map[st
 			return nil, err
 		}
 		keepEntities := chooseKeepEntities(nodeTotals, cacheState)
-		nodeTotals, err = s.appendRestNodes(ctx, cacheState, keepEntities, nodeTotals)
-		if err != nil {
-			return nil, err
-		}
-		edges, err := s.queryEdges(ctx, cacheState, keepEntities)
-		if err != nil {
+		var edges []Edge
+		group, groupContext := errgroup.WithContext(ctx)
+		group.Go(func() error {
+			var queryErr error
+			nodeTotals, queryErr = s.appendRestNodes(groupContext, cacheState, keepEntities, nodeTotals)
+			return queryErr
+		})
+		group.Go(func() error {
+			var queryErr error
+			edges, queryErr = s.queryEdges(groupContext, cacheState, keepEntities)
+			return queryErr
+		})
+		if err := group.Wait(); err != nil {
 			return nil, err
 		}
 		visibleEdges, _ := limitEdges(edges, cacheState.EdgeLimit, cacheState.SelectedEntity)
@@ -1667,32 +1738,50 @@ func (s *Service) layoutPositions(ctx context.Context, state QueryState) (map[st
 	connectionState := cacheState.Clone()
 	connectionState.Metric = MetricConnections
 
-	bytesNodeTotals, err := s.queryNodeTotals(ctx, bytesState)
-	if err != nil {
-		return nil, err
-	}
-	connectionNodeTotals, err := s.queryNodeTotals(ctx, connectionState)
-	if err != nil {
+	var bytesNodeTotals []Node
+	var connectionNodeTotals []Node
+	group, groupContext := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		var queryErr error
+		bytesNodeTotals, queryErr = s.queryNodeTotals(groupContext, bytesState)
+		return queryErr
+	})
+	group.Go(func() error {
+		var queryErr error
+		connectionNodeTotals, queryErr = s.queryNodeTotals(groupContext, connectionState)
+		return queryErr
+	})
+	if err := group.Wait(); err != nil {
 		return nil, err
 	}
 
 	bytesKeepEntities := chooseKeepEntities(bytesNodeTotals, cacheState)
 	connectionKeepEntities := chooseKeepEntities(connectionNodeTotals, cacheState)
 	keepEntities := unionKeepEntities(bytesNodeTotals, connectionNodeTotals, cacheState)
-	bytesNodeTotals, err = s.appendRestNodes(ctx, bytesState, bytesKeepEntities, bytesNodeTotals)
-	if err != nil {
-		return nil, err
-	}
-	connectionNodeTotals, err = s.appendRestNodes(ctx, connectionState, connectionKeepEntities, connectionNodeTotals)
-	if err != nil {
-		return nil, err
-	}
-	bytesEdges, err := s.queryEdges(ctx, bytesState, keepEntities)
-	if err != nil {
-		return nil, err
-	}
-	connectionEdges, err := s.queryEdges(ctx, connectionState, keepEntities)
-	if err != nil {
+	var bytesEdges []Edge
+	var connectionEdges []Edge
+	group, groupContext = errgroup.WithContext(ctx)
+	group.Go(func() error {
+		var queryErr error
+		bytesNodeTotals, queryErr = s.appendRestNodes(groupContext, bytesState, bytesKeepEntities, bytesNodeTotals)
+		return queryErr
+	})
+	group.Go(func() error {
+		var queryErr error
+		connectionNodeTotals, queryErr = s.appendRestNodes(groupContext, connectionState, connectionKeepEntities, connectionNodeTotals)
+		return queryErr
+	})
+	group.Go(func() error {
+		var queryErr error
+		bytesEdges, queryErr = s.queryEdges(groupContext, bytesState, keepEntities)
+		return queryErr
+	})
+	group.Go(func() error {
+		var queryErr error
+		connectionEdges, queryErr = s.queryEdges(groupContext, connectionState, keepEntities)
+		return queryErr
+	})
+	if err := group.Wait(); err != nil {
 		return nil, err
 	}
 	bytesVisibleEdges, _ := limitEdges(bytesEdges, cacheState.EdgeLimit, cacheState.SelectedEntity)
@@ -1737,12 +1826,20 @@ func buildSingleMetricLayoutPositions(nodes []Node, edges []Edge) map[string]Lay
 }
 
 func (s *Service) appendRestNodes(ctx context.Context, state QueryState, keepEntities []string, nodes []Node) ([]Node, error) {
-	restSourceNode, err := s.queryRestNode(ctx, state, keepEntities, true)
-	if err != nil {
-		return nil, err
-	}
-	restDestinationNode, err := s.queryRestNode(ctx, state, keepEntities, false)
-	if err != nil {
+	var restSourceNode *Node
+	var restDestinationNode *Node
+	group, groupContext := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		var queryErr error
+		restSourceNode, queryErr = s.queryRestNode(groupContext, state, keepEntities, true)
+		return queryErr
+	})
+	group.Go(func() error {
+		var queryErr error
+		restDestinationNode, queryErr = s.queryRestNode(groupContext, state, keepEntities, false)
+		return queryErr
+	})
+	if err := group.Wait(); err != nil {
 		return nil, err
 	}
 	if restSourceNode != nil {

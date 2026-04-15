@@ -26,6 +26,18 @@ func TestDirectionParquetValuesMatchIPFIX(t *testing.T) {
 	assert.Equal(t, directionEgressParquetValue, int32(1))
 }
 
+func TestTotalsFromEdgesAggregatesRawEdgeData(t *testing.T) {
+	totals := totalsFromEdges([]Edge{
+		{Bytes: 100, Connections: 2},
+		{Bytes: 250, Connections: 3},
+	}, 4, 1)
+
+	assert.Equal(t, totals.Bytes, int64(350))
+	assert.Equal(t, totals.Connections, int64(5))
+	assert.Equal(t, totals.Entities, 4)
+	assert.Equal(t, totals.Edges, 1)
+}
+
 func TestNewServiceRejectsBaseParquet(t *testing.T) {
 	tempDir := t.TempDir()
 	writeBaseParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"))
