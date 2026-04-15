@@ -86,6 +86,7 @@ func TestRunWritesDNSLookupParquet(t *testing.T) {
 	}))
 
 	assert.Equal(t, len(records), 1)
+	assert.Equal(t, records[0].Answer, model.DNSAnswerNXDOMAIN)
 	assert.Equal(t, records[0].ClientIP, "192.168.1.10")
 	assert.Equal(t, records[0].QueryName, "missing.example")
 	assert.Equal(t, records[0].QueryType, "A")

@@ -352,6 +352,7 @@ func dnsLookupRecordForEvent(
 
 	queryNames := deriveNames(event.queryName)
 	record := model.DNSLookupRecord{
+		Answer:          event.answer,
 		ClientIP:        event.clientIP,
 		ClientIPVersion: ipVersionForAddress(event.clientIP),
 		ClientIsPrivate: isPrivateIPAddress(event.clientIP),

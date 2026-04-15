@@ -40,6 +40,14 @@ const (
 	dstEntityColumn                    = "dst_entity"
 )
 
+type dnsResultState string
+
+const (
+	dnsResultStateMixed    dnsResultState = "mixed"
+	dnsResultStateNXDOMAIN dnsResultState = "nxdomain"
+	dnsResultStateSuccess  dnsResultState = ""
+)
+
 var requiredColumns = []string{
 	"bytes",
 	"direction",
@@ -99,27 +107,33 @@ type Totals struct {
 type Node struct {
 	CollapsedEntityCount int              `json:"collapsedEntityCount"`
 	AddressClass         nodeAddressClass `json:"addressClass"`
-	ID                   string           `json:"id"`
-	Ingress              int64            `json:"ingress"`
-	Label                string           `json:"label"`
-	Egress               int64            `json:"egress"`
+	DNSResultState       dnsResultState
+	ID                   string `json:"id"`
+	Ingress              int64  `json:"ingress"`
+	Label                string `json:"label"`
+	Egress               int64  `json:"egress"`
+	NXDomainLookups      int64
 	PrivateMetric        int64
 	PublicMetric         int64
-	Selected             bool  `json:"selected"`
+	Selected             bool `json:"selected"`
+	SuccessfulLookups    int64
 	Synthetic            bool  `json:"synthetic"`
 	Total                int64 `json:"total"`
 }
 
 type Edge struct {
-	Bytes       int64  `json:"bytes"`
-	Connections int64  `json:"connections"`
-	Destination string `json:"destination"`
-	FirstSeenNs int64  `json:"firstSeenNs"`
-	LastSeenNs  int64  `json:"lastSeenNs"`
-	MetricValue int64  `json:"metricValue"`
-	Selected    bool   `json:"selected"`
-	Source      string `json:"source"`
-	Synthetic   bool   `json:"synthetic"`
+	Bytes             int64  `json:"bytes"`
+	Connections       int64  `json:"connections"`
+	Destination       string `json:"destination"`
+	DNSResultState    dnsResultState
+	FirstSeenNs       int64 `json:"firstSeenNs"`
+	LastSeenNs        int64 `json:"lastSeenNs"`
+	MetricValue       int64 `json:"metricValue"`
+	NXDomainLookups   int64
+	Selected          bool   `json:"selected"`
+	Source            string `json:"source"`
+	SuccessfulLookups int64
+	Synthetic         bool `json:"synthetic"`
 }
 
 type HistogramBin struct {
@@ -153,13 +167,16 @@ type GraphData struct {
 }
 
 type TableRow struct {
-	Bytes       int64
-	Connections int64
-	Destination string
-	FirstSeenNs int64
-	LastSeenNs  int64
-	Source      string
-	Synthetic   bool
+	Bytes             int64
+	Connections       int64
+	Destination       string
+	DNSResultState    dnsResultState
+	FirstSeenNs       int64
+	LastSeenNs        int64
+	NXDomainLookups   int64
+	Source            string
+	SuccessfulLookups int64
+	Synthetic         bool
 }
 
 type TableData struct {
@@ -185,6 +202,7 @@ type Service struct {
 	db                    *sql.DB
 	graphCache            *resultCache[GraphData]
 	dnsLookupGlobPath     string
+	dnsLookupHasAnswer    bool
 	globPath              string
 	histogramCache        *resultCache[[]HistogramBin]
 	layoutCache           *resultCache[map[string]LayoutPoint]
@@ -527,13 +545,16 @@ func tableFromGraph(graph GraphData, state QueryState) TableData {
 	rows := make([]TableRow, 0, len(graph.Edges))
 	for _, edge := range graph.Edges {
 		rows = append(rows, TableRow{
-			Bytes:       edge.Bytes,
-			Connections: edge.Connections,
-			Destination: edge.Destination,
-			FirstSeenNs: edge.FirstSeenNs,
-			LastSeenNs:  edge.LastSeenNs,
-			Source:      edge.Source,
-			Synthetic:   edge.Synthetic,
+			Bytes:             edge.Bytes,
+			Connections:       edge.Connections,
+			Destination:       edge.Destination,
+			DNSResultState:    edge.DNSResultState,
+			FirstSeenNs:       edge.FirstSeenNs,
+			LastSeenNs:        edge.LastSeenNs,
+			NXDomainLookups:   edge.NXDomainLookups,
+			Source:            edge.Source,
+			SuccessfulLookups: edge.SuccessfulLookups,
+			Synthetic:         edge.Synthetic,
 		})
 	}
 
@@ -629,6 +650,14 @@ func (s *Service) refreshMetadataWithOptions(ctx context.Context, options refres
 	if err := validateColumns(columns); err != nil {
 		return err
 	}
+	dnsLookupHasAnswer := false
+	if len(dnsModTimes) > 0 {
+		dnsColumns, err := s.queryParquetColumns(ctx, s.dnsLookupGlobPath, true)
+		if err != nil {
+			return err
+		}
+		dnsLookupHasAnswer = columnsContain(dnsColumns, "answer")
+	}
 
 	span := summaries.span
 	if !summaries.spanValid {
@@ -644,6 +673,7 @@ func (s *Service) refreshMetadataWithOptions(ctx context.Context, options refres
 	s.span = span
 	s.spanValid = true
 	s.dnsLookupValid = len(dnsModTimes) > 0
+	s.dnsLookupHasAnswer = dnsLookupHasAnswer
 	s.summaryRefreshPending = len(inspection.staleJobs) > 0
 	s.revision++
 	s.mu.Unlock()
@@ -692,7 +722,11 @@ func (s *Service) scheduleSummaryRefresh(jobs []summaryJob) {
 }
 
 func (s *Service) queryColumns(ctx context.Context) ([]string, error) {
-	query := fmt.Sprintf("SELECT * FROM read_parquet(%s) LIMIT 0", quoteLiteral(s.globPath))
+	return s.queryParquetColumns(ctx, s.globPath, false)
+}
+
+func (s *Service) queryParquetColumns(ctx context.Context, globPath string, unionByName bool) ([]string, error) {
+	query := fmt.Sprintf("SELECT * FROM %s LIMIT 0", readParquetExpression(globPath, unionByName))
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("query parquet schema: %w", err)
@@ -726,7 +760,7 @@ func (s *Service) filteredCTE(state QueryState) (string, []any) {
 
 	srcExpr, dstExpr := entityExpressions(state.Granularity)
 	whereClause, args := filterClause(state, srcExpr, dstExpr)
-	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, bytes, dst_is_private, ip_version, src_is_private, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
+	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, bytes, 0 AS nxdomain_lookups, 0 AS successful_lookups, dst_is_private, ip_version, src_is_private, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
 		filteredCTEName,
 		srcExpr,
 		dstExpr,
@@ -738,11 +772,20 @@ func (s *Service) filteredCTE(state QueryState) (string, []any) {
 func (s *Service) filteredDNSLookupCTE(state QueryState) (string, []any) {
 	srcExpr, dstExpr := dnsLookupEntityExpressions(state.Granularity)
 	whereClause, args := filterClause(state, srcExpr, dstExpr)
-	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, 0 AS bytes, lookups, false AS dst_is_private, client_ip_version AS ip_version, client_is_private AS src_is_private, time_start_ns, time_start_ns AS time_end_ns FROM read_parquet(%s) WHERE %s)",
+	answerExpr := quoteLiteral("")
+	if s.hasDNSLookupAnswer() {
+		answerExpr = "COALESCE(answer, '')"
+	}
+	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, 0 AS bytes, lookups, CASE WHEN %s = %s THEN lookups ELSE 0 END AS nxdomain_lookups, CASE WHEN %s != '' AND %s != %s THEN lookups ELSE 0 END AS successful_lookups, false AS dst_is_private, client_ip_version AS ip_version, client_is_private AS src_is_private, time_start_ns, time_start_ns AS time_end_ns FROM %s WHERE %s)",
 		filteredCTEName,
 		srcExpr,
 		dstExpr,
-		quoteLiteral(s.dnsLookupGlobPath),
+		answerExpr,
+		quoteLiteral(model.DNSAnswerNXDOMAIN),
+		answerExpr,
+		answerExpr,
+		quoteLiteral(model.DNSAnswerNXDOMAIN),
+		readParquetExpression(s.dnsLookupGlobPath, true),
 		whereClause,
 	), args
 }
@@ -763,14 +806,18 @@ SELECT entity,
   SUM(total_metric) AS total_metric,
   SUM(ingress_metric) AS ingress_metric,
   SUM(egress_metric) AS egress_metric,
+  SUM(nxdomain_metric) AS nxdomain_metric,
+  SUM(successful_metric) AS successful_metric,
   SUM(private_metric) AS private_metric,
   SUM(public_metric) AS public_metric
 FROM (
   SELECT src_entity AS entity, %s AS total_metric, 0 AS ingress_metric, %s AS egress_metric,
+    nxdomain_lookups AS nxdomain_metric, successful_lookups AS successful_metric,
     %s AS private_metric, %s AS public_metric
   FROM %s
   UNION ALL
   SELECT dst_entity AS entity, %s AS total_metric, %s AS ingress_metric, 0 AS egress_metric,
+    nxdomain_lookups AS nxdomain_metric, successful_lookups AS successful_metric,
     %s AS private_metric, %s AS public_metric
   FROM %s
 ) aggregate_nodes
@@ -798,11 +845,12 @@ ORDER BY total_metric DESC, entity
 	nodes := make([]Node, 0, 128)
 	for rows.Next() {
 		var node Node
-		if err := rows.Scan(&node.ID, &node.Total, &node.Ingress, &node.Egress, &node.PrivateMetric, &node.PublicMetric); err != nil {
+		if err := rows.Scan(&node.ID, &node.Total, &node.Ingress, &node.Egress, &node.NXDomainLookups, &node.SuccessfulLookups, &node.PrivateMetric, &node.PublicMetric); err != nil {
 			return nil, fmt.Errorf("scan node total row: %w", err)
 		}
 		node.Label = node.ID
 		node.AddressClass = classifyNodeAddress(node.PrivateMetric, node.PublicMetric)
+		node.DNSResultState = dnsResultStateForCounts(node.NXDomainLookups, node.SuccessfulLookups)
 		nodes = append(nodes, node)
 	}
 	if err := rows.Err(); err != nil {
@@ -827,9 +875,9 @@ func (s *Service) queryRestNode(ctx context.Context, state QueryState, keepEntit
 	metricExpr := metricValueExpression(state.Metric)
 	inPlaceholders := placeholders(len(keepEntities))
 	query := fmt.Sprintf(`%s
-SELECT COUNT(*), COALESCE(SUM(total_metric), 0)
+SELECT COUNT(*), COALESCE(SUM(total_metric), 0), COALESCE(SUM(nxdomain_metric), 0), COALESCE(SUM(successful_metric), 0)
 FROM (
-  SELECT %s AS entity, SUM(%s) AS total_metric
+  SELECT %s AS entity, SUM(%s) AS total_metric, SUM(nxdomain_lookups) AS nxdomain_metric, SUM(successful_lookups) AS successful_metric
   FROM %s
   WHERE %s NOT IN (%s)
   GROUP BY %s
@@ -840,7 +888,9 @@ FROM (
 	row := s.db.QueryRowContext(ctx, query, queryArgs...)
 	var entityCount int
 	var total int64
-	if err := row.Scan(&entityCount, &total); err != nil {
+	var nxdomainLookups int64
+	var successfulLookups int64
+	if err := row.Scan(&entityCount, &total, &nxdomainLookups, &successfulLookups); err != nil {
 		return nil, fmt.Errorf("scan rest node %q: %w", nodeID, err)
 	}
 	if total == 0 {
@@ -851,9 +901,12 @@ FROM (
 		CollapsedEntityCount: entityCount,
 		ID:                   nodeID,
 		Label:                nodeID,
+		NXDomainLookups:      nxdomainLookups,
 		Synthetic:            true,
+		SuccessfulLookups:    successfulLookups,
 		Total:                total,
 	}
+	node.DNSResultState = dnsResultStateForCounts(node.NXDomainLookups, node.SuccessfulLookups)
 	if sourceRole {
 		node.Egress = total
 	} else {
@@ -882,6 +935,8 @@ func (s *Service) queryEdges(ctx context.Context, state QueryState, keepEntities
 SELECT %s AS source_bucket, %s AS destination_bucket,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   %s AS connection_total,
+  COALESCE(SUM(nxdomain_lookups), 0) AS nxdomain_lookup_total,
+  COALESCE(SUM(successful_lookups), 0) AS successful_lookup_total,
   COALESCE(MIN(time_start_ns), 0) AS first_seen_ns,
   COALESCE(MAX(time_end_ns), 0) AS last_seen_ns
 FROM %s
@@ -898,10 +953,11 @@ ORDER BY %s DESC, source_bucket, destination_bucket
 	edges := make([]Edge, 0, 128)
 	for rows.Next() {
 		var edge Edge
-		if err := rows.Scan(&edge.Source, &edge.Destination, &edge.Bytes, &edge.Connections, &edge.FirstSeenNs, &edge.LastSeenNs); err != nil {
+		if err := rows.Scan(&edge.Source, &edge.Destination, &edge.Bytes, &edge.Connections, &edge.NXDomainLookups, &edge.SuccessfulLookups, &edge.FirstSeenNs, &edge.LastSeenNs); err != nil {
 			return nil, fmt.Errorf("scan edge row: %w", err)
 		}
 		edge.MetricValue = edgeMetricValue(edge, state.Metric)
+		edge.DNSResultState = dnsResultStateForCounts(edge.NXDomainLookups, edge.SuccessfulLookups)
 		edge.Synthetic = edge.Source == graphRestSourceID || edge.Destination == graphRestDestination
 		edge.Selected = state.SelectedEdgeSrc == edge.Source && state.SelectedEdgeDst == edge.Destination
 		edges = append(edges, edge)
@@ -1323,6 +1379,16 @@ func edgeMetricValue(edge Edge, metric Metric) int64 {
 	return edge.Bytes
 }
 
+func dnsResultStateForCounts(nxdomainLookups, successfulLookups int64) dnsResultState {
+	if nxdomainLookups <= 0 {
+		return dnsResultStateSuccess
+	}
+	if successfulLookups > 0 {
+		return dnsResultStateMixed
+	}
+	return dnsResultStateNXDOMAIN
+}
+
 func countNonSynthetic(nodeTotals []Node, keepLookup map[string]struct{}) int {
 	total := 0
 	for _, node := range nodeTotals {
@@ -1381,6 +1447,13 @@ func quoteLiteral(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
+func readParquetExpression(path string, unionByName bool) string {
+	if unionByName {
+		return fmt.Sprintf("read_parquet(%s, union_by_name=true)", quoteLiteral(path))
+	}
+	return fmt.Sprintf("read_parquet(%s)", quoteLiteral(path))
+}
+
 func (s *Service) currentRevision() uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1391,6 +1464,12 @@ func (s *Service) hasDNSLookupData() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.dnsLookupValid
+}
+
+func (s *Service) hasDNSLookupAnswer() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.dnsLookupHasAnswer
 }
 
 func (s *Service) layoutPositions(ctx context.Context, state QueryState) (map[string]LayoutPoint, error) {
@@ -1761,6 +1840,15 @@ func validateColumns(columns []string) error {
 		}
 	}
 	return nil
+}
+
+func columnsContain(columns []string, expected string) bool {
+	for _, column := range columns {
+		if column == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func validateEnrichmentManifests(paths []string) error {

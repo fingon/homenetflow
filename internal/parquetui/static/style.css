@@ -10,6 +10,9 @@
   --danger: #8d2f20;
   --danger-bg: rgba(141, 47, 32, 0.12);
   --danger-border: rgba(141, 47, 32, 0.34);
+  --warning: #8a6b00;
+  --warning-bg: rgba(196, 162, 55, 0.18);
+  --warning-border: rgba(138, 107, 0, 0.36);
   --external: #587ea3;
   --synthetic: #a69b84;
 }
@@ -125,6 +128,26 @@ input[type="search"] {
   background: var(--danger);
   border-color: var(--danger);
   color: white;
+}
+
+.dns-result-nxdomain {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.dns-result-mixed {
+  color: var(--warning);
+  font-weight: 700;
+}
+
+.list-button.dns-result-nxdomain {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+}
+
+.list-button.dns-result-mixed {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
 }
 
 .action-button input[type="radio"] {
@@ -384,6 +407,18 @@ input[type="search"] {
 
 .synthetic-row td {
   color: var(--muted);
+}
+
+.flows-table tr.dns-result-nxdomain td {
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.flows-table tr.dns-result-mixed td {
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-weight: 700;
 }
 
 .graph-svg,

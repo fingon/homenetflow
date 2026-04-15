@@ -31,6 +31,10 @@ const (
 	hxSelectAppShellValue   = "#app-shell"
 	hxSwapOuterHTMLValue    = "outerHTML"
 	hxTargetAppShellValue   = "#app-shell"
+	nxdomainEdgeStroke      = "#8d2f20"
+	nxdomainNodeFill        = "#8d2f20"
+	mixedDNSEdgeStroke      = "#c4a237"
+	mixedDNSNodeFill        = "#c4a237"
 	mixedEntityNodeFill     = "#c4a237"
 	nodeBaseRadiusPx        = 10
 	nodeRadiusScalePx       = 24
@@ -199,7 +203,7 @@ func RankingsPanel(state QueryState, graph GraphData) g.Node {
 			Ul(
 				Class("rank-list"),
 				renderNodes(graph.TopEntities, func(node Node) g.Node {
-					return Li(navLink(selectEntityStateURL(state, node.ID), "list-button", fmt.Sprintf("%s (%s)", node.Label, formatMetricValue(graph.ActiveMetric, node.Total))))
+					return Li(navLink(selectEntityStateURL(state, node.ID), dnsResultClass("list-button", node.DNSResultState), fmt.Sprintf("%s (%s)", node.Label, formatMetricValue(graph.ActiveMetric, node.Total))))
 				}),
 			),
 		),
@@ -209,7 +213,7 @@ func RankingsPanel(state QueryState, graph GraphData) g.Node {
 			Ul(
 				Class("rank-list"),
 				renderNodes(graph.TopEdges, func(edge Edge) g.Node {
-					return Li(navLink(selectEdgeStateURL(state, edge.Source, edge.Destination), "list-button", fmt.Sprintf("%s -> %s (%s)", edge.Source, edge.Destination, formatMetricValue(graph.ActiveMetric, edge.MetricValue))))
+					return Li(navLink(selectEdgeStateURL(state, edge.Source, edge.Destination), dnsResultClass("list-button", edge.DNSResultState), fmt.Sprintf("%s -> %s (%s)", edge.Source, edge.Destination, formatMetricValue(graph.ActiveMetric, edge.MetricValue))))
 				}),
 			),
 		),
@@ -248,7 +252,7 @@ func selectedPanel(state QueryState, graph GraphData) g.Node {
 	if graph.SelectedEdge != nil {
 		return Div(
 			sectionTitle("Selected Edge"),
-			P(g.Text(fmt.Sprintf("%s -> %s", graph.SelectedEdge.Source, graph.SelectedEdge.Destination))),
+			P(Class(dnsResultClass("", graph.SelectedEdge.DNSResultState)), g.Text(fmt.Sprintf("%s -> %s", graph.SelectedEdge.Source, graph.SelectedEdge.Destination))),
 			P(g.Text("Bytes: "+formatMetricValue(MetricBytes, graph.SelectedEdge.Bytes))),
 			P(g.Text(connectionsTotalLabel(graph.ActiveMetric)+": "+formatMetricValue(connectionsDisplayMetric(graph.ActiveMetric), graph.SelectedEdge.Connections))),
 			P(g.Text("First seen: "+formatTimestamp(graph.SelectedEdge.FirstSeenNs))),
@@ -270,7 +274,7 @@ func selectedPanel(state QueryState, graph GraphData) g.Node {
 
 	return Div(
 		sectionTitle("Selected Entity"),
-		P(g.Text(selectedNode.Label)),
+		P(Class(dnsResultClass("", selectedNode.DNSResultState)), g.Text(selectedNode.Label)),
 		P(g.Text("Ingress: "+formatMetricValue(graph.ActiveMetric, selectedNode.Ingress))),
 		P(g.Text("Egress: "+formatMetricValue(graph.ActiveMetric, selectedNode.Egress))),
 		Div(
@@ -306,9 +310,9 @@ func TablePanel(state QueryState, table TableData) g.Node {
 			),
 			TBody(
 				renderNodes(table.VisibleRows, func(row TableRow) g.Node {
-					rowClass := ""
+					rowClass := dnsResultClass("", row.DNSResultState)
 					if row.Synthetic {
-						rowClass = "synthetic-row"
+						rowClass = strings.TrimSpace(rowClass + " synthetic-row")
 					}
 					return Tr(
 						Class(rowClass),
@@ -521,7 +525,7 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 		builder.WriteString(`<a ` + navAttrString(selectEdgeStateURL(state, edge.Source, edge.Destination)) + `>`)
 		fmt.Fprintf(&builder, `<path d="%s" stroke="%s" stroke-width="%0.2f" fill="none"%s>`,
 			edgePathMarkup(source, destination),
-			edgeStroke(edge.Selected),
+			edgeStroke(edge),
 			math.Max(1.5, 1+math.Log10(math.Max(float64(edge.MetricValue), 1))),
 			dashArrayAttr(edge.Synthetic))
 		builder.WriteString(titleMarkup(fmt.Sprintf("%s -> %s\nBytes: %s\n%s: %s",
@@ -920,11 +924,18 @@ func graphNodeClass(node Node) string {
 	if node.Synthetic {
 		className += " is-synthetic"
 	}
+	className = dnsResultClass(className, node.DNSResultState)
 	return className
 }
 
-func edgeStroke(selected bool) string {
-	if selected {
+func edgeStroke(edge Edge) string {
+	switch edge.DNSResultState {
+	case dnsResultStateNXDOMAIN:
+		return nxdomainEdgeStroke
+	case dnsResultStateMixed:
+		return mixedDNSEdgeStroke
+	}
+	if edge.Selected {
 		return selectedEdgeStroke
 	}
 	return unselectedEdgeStroke
@@ -952,6 +963,12 @@ func dashArrayAttr(synthetic bool) string {
 }
 
 func nodeFill(node Node) string {
+	switch node.DNSResultState {
+	case dnsResultStateNXDOMAIN:
+		return nxdomainNodeFill
+	case dnsResultStateMixed:
+		return mixedDNSNodeFill
+	}
 	if node.Synthetic {
 		return syntheticNodeFill
 	}
@@ -965,6 +982,17 @@ func nodeFill(node Node) string {
 		return mixedEntityNodeFill
 	}
 	return unselectedNodeFill
+}
+
+func dnsResultClass(baseClass string, state dnsResultState) string {
+	switch state {
+	case dnsResultStateNXDOMAIN:
+		return strings.TrimSpace(baseClass + " dns-result-nxdomain")
+	case dnsResultStateMixed:
+		return strings.TrimSpace(baseClass + " dns-result-mixed")
+	default:
+		return baseClass
+	}
 }
 
 func edgePathMarkup(source, destination LayoutPoint) string {

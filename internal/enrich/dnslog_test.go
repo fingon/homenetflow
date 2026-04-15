@@ -50,6 +50,7 @@ func TestDNSLogLoaderParsesStructuredLookupEvents(t *testing.T) {
 	assert.NilError(t, err)
 
 	assert.Equal(t, len(index.lookupEvents), 1)
+	assert.Equal(t, index.lookupEvents[0].answer, model.DNSAnswerNXDOMAIN)
 	assert.Equal(t, index.lookupEvents[0].clientIP, "2001:db8::10")
 	assert.Equal(t, index.lookupEvents[0].queryName, "example.com")
 	assert.Equal(t, index.lookupEvents[0].queryType, "AAAA")

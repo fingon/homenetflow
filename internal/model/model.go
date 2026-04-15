@@ -8,7 +8,8 @@ import (
 )
 
 const (
-	EnrichmentLogicVersion          = 4
+	DNSAnswerNXDOMAIN               = "NXDOMAIN"
+	EnrichmentLogicVersion          = 5
 	EnrichmentManifestVersion       = 1
 	IPVersionUnknown          int32 = 0
 	IPVersion4                int32 = 4
@@ -17,7 +18,7 @@ const (
 	PeriodHour                      = "hour"
 	PeriodMonth                     = "month"
 	RefreshManifestVersion          = 2
-	UISummaryLogicVersion           = 6
+	UISummaryLogicVersion           = 7
 	UISummaryManifestVersion        = 1
 )
 
@@ -197,6 +198,7 @@ type FlowRecord struct {
 }
 
 type DNSLookupRecord struct {
+	Answer          string
 	TimeStartNs     int64
 	ClientIP        string
 	ClientHost      *string

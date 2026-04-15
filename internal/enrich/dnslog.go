@@ -25,6 +25,7 @@ type dnsObservation struct {
 }
 
 type dnsLookupEvent struct {
+	answer    string
 	clientIP  string
 	queryName string
 	queryType string
@@ -169,7 +170,7 @@ func (i *dnsIndex) parseLine(lineBytes []byte) error {
 			return err
 		}
 
-		i.addLookupEvent(nestedEntry.ClientIP, nestedEntry.QueryName, nestedEntry.QueryType, entryTime)
+		i.addLookupEvent(nestedEntry.ClientIP, nestedEntry.QueryName, nestedEntry.QueryType, normalizedDNSAnswer(nestedEntry.Answers), entryTime)
 
 		for _, answer := range nestedEntry.Answers {
 			ipAddress := net.ParseIP(answer)
@@ -226,7 +227,7 @@ func (i *dnsIndex) addObservation(ipAddress, host string, entryTime time.Time) {
 	})
 }
 
-func (i *dnsIndex) addLookupEvent(clientIP, queryName, queryType string, entryTime time.Time) {
+func (i *dnsIndex) addLookupEvent(clientIP, queryName, queryType, answer string, entryTime time.Time) {
 	ipAddress := net.ParseIP(clientIP)
 	if ipAddress == nil {
 		return
@@ -238,11 +239,27 @@ func (i *dnsIndex) addLookupEvent(clientIP, queryName, queryType string, entryTi
 	}
 
 	i.lookupEvents = append(i.lookupEvents, dnsLookupEvent{
+		answer:    answer,
 		clientIP:  ipAddress.String(),
 		queryName: normalizedQueryName,
 		queryType: strings.ToUpper(strings.TrimSpace(queryType)),
 		time:      entryTime.UTC(),
 	})
+}
+
+func normalizedDNSAnswer(answers []string) string {
+	normalizedAnswers := make([]string, 0, len(answers))
+	for _, answer := range answers {
+		normalizedAnswer := strings.TrimSpace(answer)
+		if normalizedAnswer == "" {
+			continue
+		}
+		if strings.EqualFold(normalizedAnswer, model.DNSAnswerNXDOMAIN) {
+			normalizedAnswer = model.DNSAnswerNXDOMAIN
+		}
+		normalizedAnswers = append(normalizedAnswers, normalizedAnswer)
+	}
+	return strings.Join(normalizedAnswers, ", ")
 }
 
 func (i *dnsIndex) Lookup(ipAddress string, flowStart time.Time) *derivedNames {

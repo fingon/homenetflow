@@ -524,6 +524,55 @@ func TestServiceGraphShowsDNSLookups(t *testing.T) {
 	assert.Equal(t, graph.Edges[0].MetricValue, int64(2))
 }
 
+func TestServiceGraphClassifiesDNSLookupResultStates(t *testing.T) {
+	const dnsLookupTestLAN = "lan"
+
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour)),
+	})
+	clientHost := "alpha.lan"
+	client2LD := dnsLookupTestLAN
+	clientTLD := dnsLookupTestLAN
+	query2LD := dnsLookupTestQuery2LD
+	queryTLD := dnsLookupTestQueryTLD
+	missing2LD := "missing.example"
+	writeDNSLookupParquet(t, filepath.Join(tempDir, "dns_lookups_202604.parquet"), []model.DNSLookupRecord{
+		{Answer: model.DNSAnswerNXDOMAIN, Client2LD: &client2LD, ClientHost: &clientHost, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 1, Query2LD: &query2LD, QueryName: "www.example.com", QueryTLD: &queryTLD, QueryType: "A", TimeStartNs: int64(time.Hour)},
+		{Answer: "192.0.2.10", Client2LD: &client2LD, ClientHost: &clientHost, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 1, Query2LD: &query2LD, QueryName: "www.example.com", QueryTLD: &queryTLD, QueryType: "A", TimeStartNs: int64(time.Hour) + 1},
+		{Answer: model.DNSAnswerNXDOMAIN, Client2LD: &client2LD, ClientHost: &clientHost, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 1, Query2LD: &missing2LD, QueryName: "missing.example", QueryTLD: &queryTLD, QueryType: "A", TimeStartNs: int64(time.Hour) + 2},
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	span, err := service.Span(context.Background())
+	assert.NilError(t, err)
+	state := QueryState{
+		Granularity: GranularityHostname,
+		Metric:      MetricDNSLookups,
+	}.Normalized(span)
+	graph, err := service.Graph(context.Background(), state)
+	assert.NilError(t, err)
+
+	mixedEdge := findEdge(t, graph.Edges, "alpha.lan", "www.example.com")
+	assert.Equal(t, mixedEdge.DNSResultState, dnsResultStateMixed)
+	assert.Equal(t, mixedEdge.NXDomainLookups, int64(1))
+	assert.Equal(t, mixedEdge.SuccessfulLookups, int64(1))
+	nxdomainEdge := findEdge(t, graph.Edges, "alpha.lan", "missing.example")
+	assert.Equal(t, nxdomainEdge.DNSResultState, dnsResultStateNXDOMAIN)
+	assert.Equal(t, nxdomainEdge.NXDomainLookups, int64(1))
+	assert.Equal(t, nxdomainEdge.SuccessfulLookups, int64(0))
+
+	table, err := service.Table(context.Background(), state)
+	assert.NilError(t, err)
+	mixedRow := findTableRow(t, table.Rows, "alpha.lan", "www.example.com")
+	assert.Equal(t, mixedRow.DNSResultState, dnsResultStateMixed)
+	nxdomainRow := findTableRow(t, table.Rows, "alpha.lan", "missing.example")
+	assert.Equal(t, nxdomainRow.DNSResultState, dnsResultStateNXDOMAIN)
+}
+
 func TestServiceDNSLookupSummaryFastPath(t *testing.T) {
 	const dnsLookupTestLAN = "lan"
 
@@ -868,6 +917,30 @@ func containsNodeLabel(nodes []Node, label string) bool {
 		}
 	}
 	return false
+}
+
+func findEdge(t *testing.T, edges []Edge, source, destination string) Edge {
+	t.Helper()
+
+	for _, edge := range edges {
+		if edge.Source == source && edge.Destination == destination {
+			return edge
+		}
+	}
+	t.Fatalf("edge %q -> %q not found", source, destination)
+	return Edge{}
+}
+
+func findTableRow(t *testing.T, rows []TableRow, source, destination string) TableRow {
+	t.Helper()
+
+	for _, row := range rows {
+		if row.Source == source && row.Destination == destination {
+			return row
+		}
+	}
+	t.Fatalf("table row %q -> %q not found", source, destination)
+	return TableRow{}
 }
 
 func nodeAddressClassForID(nodes []Node, nodeID string) nodeAddressClass {

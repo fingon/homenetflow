@@ -25,11 +25,13 @@ type EdgeSummaryRow struct {
 	FirstSeenNs           int64  `parquet:"first_seen_ns"`
 	IPVersion             int32  `parquet:"ip_version"`
 	LastSeenNs            int64  `parquet:"last_seen_ns"`
+	NXDomainLookups       int64  `parquet:"nxdomain_lookups"`
 	Source                string `parquet:"src_entity"`
 	SrcPrivateBytes       int64  `parquet:"src_private_bytes"`
 	SrcPrivateConnections int64  `parquet:"src_private_connections"`
 	SrcPublicBytes        int64  `parquet:"src_public_bytes"`
 	SrcPublicConnections  int64  `parquet:"src_public_connections"`
+	SuccessfulLookups     int64  `parquet:"successful_lookups"`
 }
 
 type HistogramSummaryRow struct {

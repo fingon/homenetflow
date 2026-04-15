@@ -276,6 +276,45 @@ func TestPanelsDoNotRenderNestedPanelWrappers(t *testing.T) {
 	assert.Assert(t, !strings.Contains(tableMarkup, `class="panel"`))
 }
 
+func TestDNSLookupResultClassesRender(t *testing.T) {
+	t.Parallel()
+
+	tableMarkup := renderNodeString(t, TablePanel(QueryState{Metric: MetricDNSLookups}, TableData{
+		TotalCount: 2,
+		TotalPages: 1,
+		VisibleRows: []TableRow{
+			{Connections: 1, Destination: "missing.example", DNSResultState: dnsResultStateNXDOMAIN, Source: "alpha.lan"},
+			{Connections: 2, Destination: "www.example.com", DNSResultState: dnsResultStateMixed, Source: "alpha.lan"},
+		},
+	}))
+
+	assert.Assert(t, strings.Contains(tableMarkup, `dns-result-nxdomain`))
+	assert.Assert(t, strings.Contains(tableMarkup, `dns-result-mixed`))
+
+	graphMarkup := graphSVGMarkup(QueryState{Metric: MetricDNSLookups}, GraphData{
+		ActiveMetric: MetricDNSLookups,
+		Edges: []Edge{
+			{Connections: 1, Destination: "missing.example", DNSResultState: dnsResultStateNXDOMAIN, MetricValue: 1, Source: "alpha.lan"},
+			{Connections: 2, Destination: "www.example.com", DNSResultState: dnsResultStateMixed, MetricValue: 2, Source: "alpha.lan"},
+		},
+		Nodes: []Node{
+			{DNSResultState: dnsResultStateNXDOMAIN, ID: "missing.example", Label: "missing.example", Total: 1},
+			{DNSResultState: dnsResultStateMixed, ID: "www.example.com", Label: "www.example.com", Total: 2},
+			{ID: "alpha.lan", Label: "alpha.lan", Total: 3},
+		},
+		NodePositions: map[string]LayoutPoint{
+			"alpha.lan":       {X: 100, Y: 100},
+			"missing.example": {X: 200, Y: 100},
+			"www.example.com": {X: 200, Y: 180},
+		},
+	})
+
+	assert.Assert(t, strings.Contains(graphMarkup, `dns-result-nxdomain`))
+	assert.Assert(t, strings.Contains(graphMarkup, `dns-result-mixed`))
+	assert.Assert(t, strings.Contains(graphMarkup, fmt.Sprintf(`stroke="%s"`, nxdomainEdgeStroke)))
+	assert.Assert(t, strings.Contains(graphMarkup, fmt.Sprintf(`stroke="%s"`, mixedDNSEdgeStroke)))
+}
+
 func TestSummaryPanelDoesNotRenderRankings(t *testing.T) {
 	t.Parallel()
 

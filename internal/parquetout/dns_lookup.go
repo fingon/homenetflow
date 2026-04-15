@@ -16,6 +16,7 @@ import (
 const dnsLookupManifestMetadataKey = "homenetflow.dnslookups.manifest"
 
 type DNSLookupRow struct {
+	Answer          string  `parquet:"answer"`
 	Client2LD       *string `parquet:"client_2ld,optional"`
 	ClientHost      *string `parquet:"client_host,optional"`
 	ClientIP        string  `parquet:"client_ip"`
@@ -86,6 +87,7 @@ func (w *DNSLookupWriter) Write(record model.DNSLookupRecord) error {
 func (w *DNSLookupWriter) WriteBatch(records []model.DNSLookupRecord) error {
 	for _, record := range records {
 		w.rows = append(w.rows, DNSLookupRow{
+			Answer:          record.Answer,
 			Client2LD:       record.Client2LD,
 			ClientHost:      record.ClientHost,
 			ClientIP:        record.ClientIP,
@@ -155,6 +157,7 @@ func ReadDNSLookupFile(path string, emit func(model.DNSLookupRecord) error) erro
 
 func (r DNSLookupRow) toDNSLookupRecord() model.DNSLookupRecord {
 	return model.DNSLookupRecord{
+		Answer:          r.Answer,
 		Client2LD:       r.Client2LD,
 		ClientHost:      r.ClientHost,
 		ClientIP:        r.ClientIP,

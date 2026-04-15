@@ -115,6 +115,7 @@ func TestDNSLookupManifestRoundTripIncludesSkipDNSLookups(t *testing.T) {
 	writer, finalize, err := CreateDNSLookups(path, manifest)
 	assert.NilError(t, err)
 	assert.NilError(t, writer.Write(model.DNSLookupRecord{
+		Answer:          model.DNSAnswerNXDOMAIN,
 		ClientIP:        "192.0.2.1",
 		ClientIPVersion: model.IPVersion4,
 		Lookups:         1,
@@ -127,6 +128,14 @@ func TestDNSLookupManifestRoundTripIncludesSkipDNSLookups(t *testing.T) {
 	readManifest, err := ReadDNSLookupManifest(path)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, readManifest, manifest)
+
+	var records []model.DNSLookupRecord
+	assert.NilError(t, ReadDNSLookupFile(path, func(record model.DNSLookupRecord) error {
+		records = append(records, record)
+		return nil
+	}))
+	assert.Equal(t, len(records), 1)
+	assert.Equal(t, records[0].Answer, model.DNSAnswerNXDOMAIN)
 }
 
 func TestReadFileRoundTripPreservesDirection(t *testing.T) {

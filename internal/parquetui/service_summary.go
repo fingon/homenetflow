@@ -30,11 +30,13 @@ type summaryEdgeAggregate struct {
 	FirstSeenNs           int64
 	IPVersion             int32
 	LastSeenNs            int64
+	NXDomainLookups       int64
 	Source                string
 	SrcPrivateBytes       int64
 	SrcPrivateConnections int64
 	SrcPublicBytes        int64
 	SrcPublicConnections  int64
+	SuccessfulLookups     int64
 }
 
 type summaryMetricView struct {
@@ -283,7 +285,9 @@ SELECT src_entity, dst_entity,
   COALESCE(SUM(dst_public_connections), 0) AS dst_public_connections,
   COALESCE(MIN(first_seen_ns), 0) AS first_seen_ns,
   ip_version,
-  COALESCE(MAX(last_seen_ns), 0) AS last_seen_ns
+  COALESCE(MAX(last_seen_ns), 0) AS last_seen_ns,
+  COALESCE(SUM(nxdomain_lookups), 0) AS nxdomain_lookup_total,
+  COALESCE(SUM(successful_lookups), 0) AS successful_lookup_total
 FROM read_parquet(%s)
 %s
 GROUP BY src_entity, dst_entity, direction, ip_version
@@ -319,6 +323,8 @@ GROUP BY src_entity, dst_entity, direction, ip_version
 			&edge.FirstSeenNs,
 			&edge.IPVersion,
 			&edge.LastSeenNs,
+			&edge.NXDomainLookups,
+			&edge.SuccessfulLookups,
 		); err != nil {
 			return nil, fmt.Errorf("scan summary graph snapshot row: %w", err)
 		}
@@ -341,14 +347,17 @@ func buildSummaryMetricView(snapshot *summaryGraphSnapshotData, metric Metric) s
 	edges := make([]Edge, 0, len(snapshot.edges))
 	for _, aggregate := range snapshot.edges {
 		edge := Edge{
-			Bytes:       aggregate.Bytes,
-			Connections: aggregate.Connections,
-			Destination: aggregate.Destination,
-			FirstSeenNs: aggregate.FirstSeenNs,
-			LastSeenNs:  aggregate.LastSeenNs,
-			MetricValue: edgeMetricValue(Edge{Bytes: aggregate.Bytes, Connections: aggregate.Connections}, metric),
-			Source:      aggregate.Source,
+			Bytes:             aggregate.Bytes,
+			Connections:       aggregate.Connections,
+			Destination:       aggregate.Destination,
+			FirstSeenNs:       aggregate.FirstSeenNs,
+			LastSeenNs:        aggregate.LastSeenNs,
+			MetricValue:       edgeMetricValue(Edge{Bytes: aggregate.Bytes, Connections: aggregate.Connections}, metric),
+			NXDomainLookups:   aggregate.NXDomainLookups,
+			Source:            aggregate.Source,
+			SuccessfulLookups: aggregate.SuccessfulLookups,
 		}
+		edge.DNSResultState = dnsResultStateForCounts(edge.NXDomainLookups, edge.SuccessfulLookups)
 		edges = append(edges, edge)
 
 		sourceNode := nodeTotalsByID[aggregate.Source]
@@ -357,8 +366,11 @@ func buildSummaryMetricView(snapshot *summaryGraphSnapshotData, metric Metric) s
 		sourceNode.PrivateMetric += summaryMetricValue(metric, aggregate.SrcPrivateBytes, aggregate.SrcPrivateConnections)
 		sourceNode.PublicMetric += summaryMetricValue(metric, aggregate.SrcPublicBytes, aggregate.SrcPublicConnections)
 		sourceNode.Egress += edge.MetricValue
+		sourceNode.NXDomainLookups += aggregate.NXDomainLookups
+		sourceNode.SuccessfulLookups += aggregate.SuccessfulLookups
 		sourceNode.Total += edge.MetricValue
 		sourceNode.AddressClass = classifyNodeAddress(sourceNode.PrivateMetric, sourceNode.PublicMetric)
+		sourceNode.DNSResultState = dnsResultStateForCounts(sourceNode.NXDomainLookups, sourceNode.SuccessfulLookups)
 		nodeTotalsByID[aggregate.Source] = sourceNode
 
 		destinationNode := nodeTotalsByID[aggregate.Destination]
@@ -367,8 +379,11 @@ func buildSummaryMetricView(snapshot *summaryGraphSnapshotData, metric Metric) s
 		destinationNode.PrivateMetric += summaryMetricValue(metric, aggregate.DstPrivateBytes, aggregate.DstPrivateConnections)
 		destinationNode.PublicMetric += summaryMetricValue(metric, aggregate.DstPublicBytes, aggregate.DstPublicConnections)
 		destinationNode.Ingress += edge.MetricValue
+		destinationNode.NXDomainLookups += aggregate.NXDomainLookups
+		destinationNode.SuccessfulLookups += aggregate.SuccessfulLookups
 		destinationNode.Total += edge.MetricValue
 		destinationNode.AddressClass = classifyNodeAddress(destinationNode.PrivateMetric, destinationNode.PublicMetric)
+		destinationNode.DNSResultState = dnsResultStateForCounts(destinationNode.NXDomainLookups, destinationNode.SuccessfulLookups)
 		nodeTotalsByID[aggregate.Destination] = destinationNode
 	}
 
@@ -462,6 +477,8 @@ func buildSummaryVisibleGraph(view summaryMetricView, keepEntities []string, sta
 		}
 		aggregatedEdge.Bytes += edge.Bytes
 		aggregatedEdge.Connections += edge.Connections
+		aggregatedEdge.NXDomainLookups += edge.NXDomainLookups
+		aggregatedEdge.SuccessfulLookups += edge.SuccessfulLookups
 		if aggregatedEdge.FirstSeenNs == 0 || (edge.FirstSeenNs != 0 && edge.FirstSeenNs < aggregatedEdge.FirstSeenNs) {
 			aggregatedEdge.FirstSeenNs = edge.FirstSeenNs
 		}
@@ -469,6 +486,7 @@ func buildSummaryVisibleGraph(view summaryMetricView, keepEntities []string, sta
 			aggregatedEdge.LastSeenNs = edge.LastSeenNs
 		}
 		aggregatedEdge.MetricValue = edgeMetricValue(aggregatedEdge, state.Metric)
+		aggregatedEdge.DNSResultState = dnsResultStateForCounts(aggregatedEdge.NXDomainLookups, aggregatedEdge.SuccessfulLookups)
 		edgesByKey[key] = aggregatedEdge
 	}
 
@@ -499,6 +517,8 @@ func summaryRestNode(nodeTotals []Node, keepLookup map[string]struct{}, sourceRo
 	}
 
 	var collapsedEntityCount int
+	var nxdomainLookups int64
+	var successfulLookups int64
 	var total int64
 	for _, node := range nodeTotals {
 		if _, ok := keepLookup[node.ID]; ok {
@@ -512,6 +532,8 @@ func summaryRestNode(nodeTotals []Node, keepLookup map[string]struct{}, sourceRo
 			continue
 		}
 		collapsedEntityCount++
+		nxdomainLookups += node.NXDomainLookups
+		successfulLookups += node.SuccessfulLookups
 		total += metricValue
 	}
 	if total == 0 {
@@ -522,9 +544,12 @@ func summaryRestNode(nodeTotals []Node, keepLookup map[string]struct{}, sourceRo
 		CollapsedEntityCount: collapsedEntityCount,
 		ID:                   nodeID,
 		Label:                nodeID,
+		NXDomainLookups:      nxdomainLookups,
 		Synthetic:            true,
+		SuccessfulLookups:    successfulLookups,
 		Total:                total,
 	}
+	node.DNSResultState = dnsResultStateForCounts(node.NXDomainLookups, node.SuccessfulLookups)
 	if sourceRole {
 		node.Egress = total
 	} else {

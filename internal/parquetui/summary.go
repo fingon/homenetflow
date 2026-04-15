@@ -562,10 +562,20 @@ func rebuildDNSEdgeSummary(
 	spanEndNs int64,
 ) error {
 	srcExpr, dstExpr := dnsLookupEntityExpressions(granularity)
+	dnsSourceHasAnswer, err := parquetPathHasColumn(ctx, db, paths.dnsSource, "answer")
+	if err != nil {
+		return err
+	}
+	answerExpr := quoteLiteral("")
+	if dnsSourceHasAnswer {
+		answerExpr = "COALESCE(answer, '')"
+	}
 	query := fmt.Sprintf(`
 SELECT %s AS src_entity, %s AS dst_entity,
   0 AS bytes_total,
   COALESCE(SUM(lookups), 0) AS lookup_total,
+  COALESCE(SUM(CASE WHEN %s = %s THEN lookups ELSE 0 END), 0) AS nxdomain_lookup_total,
+  COALESCE(SUM(CASE WHEN %s != '' AND %s != %s THEN lookups ELSE 0 END), 0) AS successful_lookup_total,
   COALESCE(SUM(CASE WHEN client_is_private THEN lookups ELSE 0 END), 0) AS src_private_connections,
   COALESCE(SUM(CASE WHEN client_is_private THEN 0 ELSE lookups END), 0) AS src_public_connections,
   0 AS dst_private_connections,
@@ -576,7 +586,7 @@ SELECT %s AS src_entity, %s AS dst_entity,
 FROM read_parquet(%s)
 GROUP BY src_entity, dst_entity, client_ip_version
 ORDER BY src_entity, dst_entity, client_ip_version
-`, srcExpr, dstExpr, quoteLiteral(paths.dnsSource))
+`, srcExpr, dstExpr, answerExpr, quoteLiteral(model.DNSAnswerNXDOMAIN), answerExpr, answerExpr, quoteLiteral(model.DNSAnswerNXDOMAIN), quoteLiteral(paths.dnsSource))
 
 	sourceManifest, err := dnsSummarySourceManifest(paths.dnsSource)
 	if err != nil {
@@ -610,6 +620,8 @@ ORDER BY src_entity, dst_entity, client_ip_version
 			&row.Destination,
 			&row.Bytes,
 			&row.Connections,
+			&row.NXDomainLookups,
+			&row.SuccessfulLookups,
 			&row.SrcPrivateConnections,
 			&row.SrcPublicConnections,
 			&row.DstPrivateConnections,
@@ -785,6 +797,26 @@ func directionValue(value sql.NullInt32) *int32 {
 	}
 	direction := value.Int32
 	return &direction
+}
+
+func parquetPathHasColumn(ctx context.Context, db *sql.DB, path, columnName string) (bool, error) {
+	query := fmt.Sprintf("SELECT * FROM read_parquet(%s) LIMIT 0", quoteLiteral(path))
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return false, fmt.Errorf("query parquet schema for %q: %w", path, err)
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return false, fmt.Errorf("read parquet schema columns for %q: %w", path, err)
+	}
+	for _, column := range columns {
+		if column == columnName {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func fileExists(path string) (bool, error) {
