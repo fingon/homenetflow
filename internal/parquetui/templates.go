@@ -18,6 +18,7 @@ const (
 	graphDenseNodeCount     = 36
 	graphPrimaryRingCount   = 12
 	graphWidthPx            = 960
+	fullTimestampFormat     = time.RFC3339
 	histogramAxisTickCount  = 5
 	histogramBottomPadPx    = 28
 	histogramHeightPx       = 132
@@ -35,6 +36,11 @@ const (
 	nxdomainNodeFill        = "#8d2f20"
 	mixedDNSEdgeStroke      = "#c4a237"
 	mixedDNSNodeFill        = "#c4a237"
+	spanWidthNsDataAttr     = "data-span-width-ns"
+	sameDayTimestampFormat  = "15:04:05"
+	sameWeekTimestampFormat = "Mon 15:04:05"
+	sameYearTimestampFormat = "02.01 15:04:05"
+	timestampNsDataAttr     = "data-timestamp-ns"
 	mixedEntityNodeFill     = "#c4a237"
 	nodeBaseRadiusPx        = 10
 	nodeRadiusScalePx       = 24
@@ -46,6 +52,7 @@ const (
 	unselectedEdgeStroke    = "rgba(55, 68, 87, 0.28)"
 	unselectedNodeFill      = "#587ea3"
 	unselectedNodeStroke    = "rgba(31, 39, 51, 0.24)"
+	yearTimestampFormat     = "02.01.2006 15:04:05"
 )
 
 func Index(dashboard DashboardData, devMode bool, devSessionToken string) g.Node {
@@ -173,7 +180,7 @@ func SummaryPanel(state QueryState, graph GraphData) g.Node {
 		sectionTitle("Active Filters"),
 		Div(
 			Class("filter-list"),
-			Span(Class("chip"), g.Text("Time: "+formatNsRange(state.FromNs, state.ToNs))),
+			Span(Class("chip"), g.Text("Time: "), timestampRangeNode(state.FromNs, state.ToNs)),
 			addressFamilyChip,
 			directionChip,
 			renderNodes(state.Include, func(item string) g.Node {
@@ -249,14 +256,18 @@ func connectionsSortKey(metric Metric) TableSort {
 }
 
 func selectedPanel(state QueryState, graph GraphData) g.Node {
+	return selectedPanelAt(state, graph, time.Now().UTC())
+}
+
+func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 	if graph.SelectedEdge != nil {
 		return Div(
 			sectionTitle("Selected Edge"),
 			P(Class(dnsResultClass("", graph.SelectedEdge.DNSResultState)), g.Text(fmt.Sprintf("%s -> %s", graph.SelectedEdge.Source, graph.SelectedEdge.Destination))),
 			P(g.Text("Bytes: "+formatMetricValue(MetricBytes, graph.SelectedEdge.Bytes))),
 			P(g.Text(connectionsTotalLabel(graph.ActiveMetric)+": "+formatMetricValue(connectionsDisplayMetric(graph.ActiveMetric), graph.SelectedEdge.Connections))),
-			P(g.Text("First seen: "+formatTimestamp(graph.SelectedEdge.FirstSeenNs))),
-			P(g.Text("Last seen: "+formatTimestamp(graph.SelectedEdge.LastSeenNs))),
+			P(g.Text("First seen: "), timestampNode(graph.SelectedEdge.FirstSeenNs, now)),
+			P(g.Text("Last seen: "), timestampNode(graph.SelectedEdge.LastSeenNs, now)),
 		)
 	}
 
@@ -294,6 +305,10 @@ func selectedPanel(state QueryState, graph GraphData) g.Node {
 }
 
 func TablePanel(state QueryState, table TableData) g.Node {
+	return tablePanelAt(state, table, time.Now().UTC())
+}
+
+func tablePanelAt(state QueryState, table TableData, now time.Time) g.Node {
 	return Div(
 		Div(Class("table-meta"), Span(Class("panel-subtle"), g.Text(fmt.Sprintf("%d rows", table.TotalCount)))),
 		Table(
@@ -320,8 +335,8 @@ func TablePanel(state QueryState, table TableData) g.Node {
 						Td(g.Text(row.Destination)),
 						Td(g.Text(formatMetricValue(MetricBytes, row.Bytes))),
 						Td(g.Text(formatMetricValue(connectionsDisplayMetric(state.Metric), row.Connections))),
-						Td(g.Text(formatTimestamp(row.FirstSeenNs))),
-						Td(g.Text(formatTimestamp(row.LastSeenNs))),
+						Td(timestampNode(row.FirstSeenNs, now)),
+						Td(timestampNode(row.LastSeenNs, now)),
 					)
 				}),
 			),
@@ -578,6 +593,10 @@ func renderHistogramSVG(metric Metric, bins []HistogramBin) g.Node {
 }
 
 func histogramSVGMarkup(metric Metric, bins []HistogramBin) string {
+	return histogramSVGMarkupAt(metric, bins, time.Now().UTC())
+}
+
+func histogramSVGMarkupAt(metric Metric, bins []HistogramBin, now time.Time) string {
 	var builder strings.Builder
 
 	fmt.Fprintf(&builder, `<svg class="histogram-svg" viewBox="0 0 %d %d" role="img" aria-label="Traffic timeline">`, histogramWidthPx, histogramHeightPx)
@@ -601,8 +620,8 @@ func histogramSVGMarkup(metric Metric, bins []HistogramBin) string {
 		x := float64(index) * barWidth
 		y := histogramTopPadPx + plotHeightPx - barHeight
 		formattedValue := formatMetricValue(metric, bin.Value)
-		fromLabel := formatTimestamp(bin.FromNs)
-		toLabel := formatTimestamp(bin.ToNs)
+		fromLabel := formatTimestampAt(bin.FromNs, now)
+		toLabel := formatTimestampAt(bin.ToNs, now)
 		fmt.Fprintf(&builder, `<rect class="histogram-bar" x="%0.2f" y="%0.2f" width="%0.2f" height="%0.2f" rx="2" fill="rgba(177, 77, 36, 0.62)" tabindex="0" data-bin-index="%d" data-from-ns="%d" data-to-ns="%d" data-from-label="%s" data-to-label="%s" data-value-label="%s">`,
 			x,
 			y,
@@ -834,15 +853,64 @@ func disabledIf(disabled bool) g.Node {
 	return nil
 }
 
-func formatTimestamp(ns int64) string {
+func formatTimestampAt(ns int64, now time.Time) string {
 	if ns == 0 {
 		return "-"
 	}
-	return time.Unix(0, ns).UTC().Format(time.RFC3339)
+
+	timestamp := time.Unix(0, ns).UTC()
+	now = now.UTC()
+	if sameUTCDate(timestamp, now) {
+		return timestamp.Format(sameDayTimestampFormat)
+	}
+
+	timestampYear, timestampWeek := timestamp.ISOWeek()
+	nowYear, nowWeek := now.ISOWeek()
+	if timestampYear == nowYear && timestampWeek == nowWeek {
+		return timestamp.Format(sameWeekTimestampFormat)
+	}
+
+	if timestamp.Year() == now.Year() {
+		return timestamp.Format(sameYearTimestampFormat)
+	}
+
+	return timestamp.Format(yearTimestampFormat)
 }
 
-func formatNsRange(fromNs, toNs int64) string {
-	return formatTimestamp(fromNs) + " - " + formatTimestamp(toNs)
+func fullTimestamp(ns int64) string {
+	if ns == 0 {
+		return "-"
+	}
+	return time.Unix(0, ns).UTC().Format(fullTimestampFormat)
+}
+
+func timestampNode(ns int64, now time.Time) g.Node {
+	if ns == 0 {
+		return g.Text("-")
+	}
+
+	fullLabel := fullTimestamp(ns)
+	return Time(
+		g.Attr("datetime", fullLabel),
+		g.Attr("title", fullLabel),
+		g.Attr(timestampNsDataAttr, strconv.FormatInt(ns, 10)),
+		g.Text(formatTimestampAt(ns, now)),
+	)
+}
+
+func sameUTCDate(left, right time.Time) bool {
+	left = left.UTC()
+	right = right.UTC()
+	return left.Year() == right.Year() && left.YearDay() == right.YearDay()
+}
+
+func timestampRangeNode(fromNs, toNs int64) g.Node {
+	now := time.Now().UTC()
+	return g.Group([]g.Node{
+		timestampNode(fromNs, now),
+		g.Text(" - "),
+		timestampNode(toNs, now),
+	})
 }
 
 func renderNodes[T any](items []T, render func(T) g.Node) g.Node {
@@ -1038,10 +1106,14 @@ func histogramAxisMarkup(metric Metric, bins []HistogramBin, yAxisMaxValue, yAxi
 			x,
 			baselineY+6,
 		)
-		fmt.Fprintf(&builder, `<text class="histogram-axis-label" x="%0.2f" y="%0.2f" text-anchor="%s">%s</text>`,
+		fmt.Fprintf(&builder, `<text class="histogram-axis-label" x="%0.2f" y="%0.2f" text-anchor="%s" %s="%d" %s="%d">%s</text>`,
 			x,
 			labelY,
 			histogramTickAnchor(tickIndex),
+			timestampNsDataAttr,
+			labelNs,
+			spanWidthNsDataAttr,
+			spanWidthNs,
 			html.EscapeString(formatTimelineTickLabel(labelNs, spanWidthNs)),
 		)
 	}
