@@ -348,6 +348,54 @@ func TestDNSLookupResultClassesRender(t *testing.T) {
 	assert.Assert(t, strings.Contains(graphMarkup, fmt.Sprintf(`stroke="%s"`, mixedDNSEdgeStroke)))
 }
 
+func TestDNSLookupPanelsHideBytes(t *testing.T) {
+	t.Parallel()
+
+	tableMarkup := renderNodeString(t, TablePanel(QueryState{Metric: MetricDNSLookups}, TableData{
+		TotalCount: 1,
+		TotalPages: 1,
+		VisibleRows: []TableRow{
+			{Bytes: 0, Connections: 7, Destination: "www.example.com", Source: "alpha.lan"},
+		},
+	}))
+
+	assert.Assert(t, !strings.Contains(tableMarkup, ">Bytes<"))
+	assert.Assert(t, !strings.Contains(tableMarkup, ">0</td>"))
+	assert.Assert(t, strings.Contains(tableMarkup, ">DNS Lookups<"))
+	assert.Assert(t, strings.Contains(tableMarkup, ">7</td>"))
+
+	graphMarkup := graphSVGMarkup(QueryState{Metric: MetricDNSLookups}, GraphData{
+		ActiveMetric: MetricDNSLookups,
+		Edges: []Edge{
+			{Bytes: 0, Connections: 7, Destination: "www.example.com", MetricValue: 7, Source: "alpha.lan"},
+		},
+		Nodes: []Node{
+			{ID: "alpha.lan", Label: "alpha.lan", Total: 7},
+			{ID: "www.example.com", Label: "www.example.com", Total: 7},
+		},
+		NodePositions: map[string]LayoutPoint{
+			"alpha.lan":       {X: 100, Y: 100},
+			"www.example.com": {X: 200, Y: 100},
+		},
+	})
+
+	assert.Assert(t, !strings.Contains(graphMarkup, "Bytes:"))
+	assert.Assert(t, strings.Contains(graphMarkup, "DNS Lookups: 7"))
+
+	selectedEdgeMarkup := renderNodeString(t, selectedPanelAt(QueryState{Metric: MetricDNSLookups}, GraphData{
+		ActiveMetric: MetricDNSLookups,
+		SelectedEdge: &Edge{
+			Bytes:       0,
+			Connections: 7,
+			Destination: "www.example.com",
+			Source:      "alpha.lan",
+		},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	assert.Assert(t, !strings.Contains(selectedEdgeMarkup, "Bytes:"))
+	assert.Assert(t, strings.Contains(selectedEdgeMarkup, "DNS Lookups: 7"))
+}
+
 func TestTablePanelRendersCompactTimestampWithFullMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -394,6 +442,87 @@ func TestSelectedPanelRendersCompactTimestampWithFullMetadata(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `datetime="2025-12-31T04:05:06Z"`))
 	assert.Assert(t, strings.Contains(markup, fmt.Sprintf(`data-timestamp-ns="%d"`, time.Date(2025, time.December, 31, 4, 5, 6, 0, time.UTC).UnixNano())))
 	assert.Assert(t, strings.Contains(markup, `>31.12.2025 04:05:06</time>`))
+}
+
+func TestSelectedEntityHidesZeroDirectionValues(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name       string
+		node       Node
+		hiddenRow  string
+		visibleRow string
+	}{
+		{
+			name:       "zero ingress",
+			node:       Node{ID: "alpha.lan", Label: "alpha.lan", Egress: 5},
+			hiddenRow:  "Ingress:",
+			visibleRow: "Egress: 5",
+		},
+		{
+			name:       "zero egress",
+			node:       Node{ID: "alpha.lan", Label: "alpha.lan", Ingress: 6},
+			hiddenRow:  "Egress:",
+			visibleRow: "Ingress: 6",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			markup := renderNodeString(t, selectedPanelAt(QueryState{}, GraphData{
+				ActiveMetric: MetricConnections,
+				SelectedNode: &testCase.node,
+			}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+			assert.Assert(t, !strings.Contains(markup, testCase.hiddenRow))
+			assert.Assert(t, strings.Contains(markup, testCase.visibleRow))
+		})
+	}
+}
+
+func TestSummaryPanelDNSLookupTotalsHideEntityAndEdgeCountsForTreeShape(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, SummaryPanel(QueryState{
+		FromNs: 10,
+		Metric: MetricDNSLookups,
+		ToNs:   20,
+	}, GraphData{
+		Totals: Totals{
+			Connections: 8,
+			Edges:       5,
+			Entities:    4,
+		},
+	}))
+
+	assert.Assert(t, !strings.Contains(markup, ">Entities<"))
+	assert.Assert(t, !strings.Contains(markup, ">Edges<"))
+	assert.Assert(t, !strings.Contains(markup, ">Bytes<"))
+	assert.Assert(t, strings.Contains(markup, ">DNS Lookups<"))
+	assert.Assert(t, strings.Contains(markup, ">8<"))
+}
+
+func TestSummaryPanelDNSLookupTotalsKeepEntityAndEdgeCountsForNonTreeShape(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, SummaryPanel(QueryState{
+		FromNs: 10,
+		Metric: MetricDNSLookups,
+		ToNs:   20,
+	}, GraphData{
+		Totals: Totals{
+			Connections: 8,
+			Edges:       5,
+			Entities:    5,
+		},
+	}))
+
+	assert.Assert(t, strings.Contains(markup, ">Entities<"))
+	assert.Assert(t, strings.Contains(markup, ">Edges<"))
+	assert.Assert(t, !strings.Contains(markup, ">Bytes<"))
+	assert.Assert(t, strings.Contains(markup, ">DNS Lookups<"))
 }
 
 func TestSummaryPanelDoesNotRenderRankings(t *testing.T) {
