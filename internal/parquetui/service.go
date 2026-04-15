@@ -195,6 +195,12 @@ type FlowDetailRow struct {
 	StartNs     int64
 }
 
+type FlowPresetCount struct {
+	Count  int
+	Label  string
+	Preset string
+}
+
 type TableData struct {
 	Page        int
 	PageSize    int
@@ -206,14 +212,15 @@ type TableData struct {
 }
 
 type FlowDetailData struct {
-	Page        int
-	PageSize    int
-	Query       FlowQuery
-	Rows        []FlowDetailRow
-	Span        TimeSpan
-	TotalCount  int
-	TotalPages  int
-	VisibleRows []FlowDetailRow
+	Page         int
+	PageSize     int
+	PresetCounts []FlowPresetCount
+	Query        FlowQuery
+	Rows         []FlowDetailRow
+	Span         TimeSpan
+	TotalCount   int
+	TotalPages   int
+	VisibleRows  []FlowDetailRow
 }
 
 type DashboardData struct {
@@ -573,13 +580,16 @@ func (s *Service) FlowDetails(ctx context.Context, query FlowQuery) (FlowDetailD
 	if err != nil {
 		return FlowDetailData{}, err
 	}
-	state := query.State.Normalized(span)
+	state := query.State.NormalizedForFlowDetails(span)
 	query.State = state
+	if !query.Match.valid() {
+		query.Match = FlowMatchBoth
+	}
+	if !query.Sort.valid() || (!state.EntityActionsEnabled() && !query.Sort.timeSort()) {
+		query.Sort = FlowSortStart
+	}
 	if state.Metric == MetricDNSLookups {
 		return FlowDetailData{}, errors.New("raw flow details are not available for DNS lookup metrics")
-	}
-	if !state.EntityActionsEnabled() {
-		return FlowDetailData{}, errEntityActionsDisabled
 	}
 	if !query.Scope.valid() {
 		return FlowDetailData{}, fmt.Errorf("invalid flow scope %q", query.Scope)
@@ -606,16 +616,15 @@ func (s *Service) FlowDetails(ctx context.Context, query FlowQuery) (FlowDetailD
 
 	cte, args := s.filteredRawFlowsCTE(state)
 	scopeClause, scopeArgs := flowScopeClause(query)
-	countQuery := fmt.Sprintf(`%s
-SELECT COUNT(*)
-FROM %s
-WHERE %s
-`, cte, filteredCTEName, scopeClause)
 	countArgs := append(append([]any(nil), args...), scopeArgs...)
 
-	var totalCount int
-	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&totalCount); err != nil {
-		return FlowDetailData{}, fmt.Errorf("count selected flows: %w", err)
+	totalCount, err := s.countRawFlows(ctx, cte, scopeClause, countArgs)
+	if err != nil {
+		return FlowDetailData{}, err
+	}
+	presetCounts, err := s.flowPresetCounts(ctx, query, span)
+	if err != nil {
+		return FlowDetailData{}, err
 	}
 	totalPages := max(1, (totalCount+pageSize-1)/pageSize)
 	if page > totalPages {
@@ -628,9 +637,9 @@ WHERE %s
 SELECT time_start_ns, time_end_ns, src_entity, dst_entity, src_ip, dst_ip, src_port, dst_port, protocol, packets, bytes, direction, ip_version
 FROM %s
 WHERE %s
-ORDER BY time_start_ns DESC, time_end_ns DESC, src_entity, dst_entity, src_ip, dst_ip, src_port, dst_port, protocol
+ORDER BY %s
 LIMIT ? OFFSET ?
-`, cte, filteredCTEName, scopeClause)
+`, cte, filteredCTEName, scopeClause, flowSortOrderBy(query.Sort))
 	rowArgs := append(append([]any(nil), countArgs...), pageSize, offset)
 	rows, err := s.db.QueryContext(ctx, rowsQuery, rowArgs...)
 	if err != nil {
@@ -670,15 +679,71 @@ LIMIT ? OFFSET ?
 	}
 
 	return FlowDetailData{
-		Page:        page,
-		PageSize:    pageSize,
-		Query:       query,
-		Rows:        visibleRows,
-		Span:        span,
-		TotalCount:  totalCount,
-		TotalPages:  totalPages,
-		VisibleRows: visibleRows,
+		Page:         page,
+		PageSize:     pageSize,
+		PresetCounts: presetCounts,
+		Query:        query,
+		Rows:         visibleRows,
+		Span:         span,
+		TotalCount:   totalCount,
+		TotalPages:   totalPages,
+		VisibleRows:  visibleRows,
 	}, nil
+}
+
+func (s *Service) flowPresetCounts(ctx context.Context, query FlowQuery, span TimeSpan) ([]FlowPresetCount, error) {
+	presets := []struct {
+		label  string
+		preset string
+	}{
+		{label: "All", preset: presetAllValue},
+		{label: presetHourValue, preset: presetHourValue},
+		{label: presetDayValue, preset: presetDayValue},
+		{label: presetWeekValue, preset: presetWeekValue},
+		{label: presetMonthValue, preset: presetMonthValue},
+	}
+	counts := make([]FlowPresetCount, 0, len(presets))
+	for _, preset := range presets {
+		fromNs, toNs, ok := presetRange(preset.preset, span)
+		if !ok {
+			counts = append(counts, FlowPresetCount{Label: preset.label, Preset: preset.preset})
+			continue
+		}
+		state := query.State.Clone()
+		state.Preset = preset.preset
+		state.FromNs = fromNs
+		state.ToNs = toNs
+		state.Page = defaultPage
+		state = state.NormalizedForFlowDetails(span)
+		presetQuery := query
+		presetQuery.State = state
+		cte, args := s.filteredRawFlowsCTE(state)
+		scopeClause, scopeArgs := flowScopeClause(presetQuery)
+		count, err := s.countRawFlows(ctx, cte, scopeClause, append(append([]any(nil), args...), scopeArgs...))
+		if err != nil {
+			return nil, err
+		}
+		counts = append(counts, FlowPresetCount{
+			Count:  count,
+			Label:  preset.label,
+			Preset: preset.preset,
+		})
+	}
+	return counts, nil
+}
+
+func (s *Service) countRawFlows(ctx context.Context, cte, scopeClause string, args []any) (int, error) {
+	countQuery := fmt.Sprintf(`%s
+SELECT COUNT(*)
+FROM %s
+WHERE %s
+`, cte, filteredCTEName, scopeClause)
+
+	var totalCount int
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&totalCount); err != nil {
+		return 0, fmt.Errorf("count selected flows: %w", err)
+	}
+	return totalCount, nil
 }
 
 func tableFromGraph(graph GraphData, state QueryState) TableData {
@@ -926,9 +991,34 @@ func flowScopeClause(query FlowQuery) (string, []any) {
 	case FlowScopeEntity:
 		return "(src_entity = ? OR dst_entity = ?)", []any{query.Entity, query.Entity}
 	case FlowScopeEdge:
+		if query.Match != FlowMatchForward {
+			return "((src_entity = ? AND dst_entity = ?) OR (src_entity = ? AND dst_entity = ?))", []any{query.Source, query.Destination, query.Destination, query.Source}
+		}
 		return "(src_entity = ? AND dst_entity = ?)", []any{query.Source, query.Destination}
 	default:
 		return "false", nil
+	}
+}
+
+func flowSortOrderBy(sortKey FlowSort) string {
+	tieBreakers := "time_start_ns DESC, time_end_ns DESC, src_entity, dst_entity, src_ip, dst_ip, src_port, dst_port, protocol"
+	switch sortKey {
+	case FlowSortEnd:
+		return "time_end_ns DESC, " + tieBreakers
+	case FlowSortSource:
+		return "src_entity, " + tieBreakers
+	case FlowSortDestination:
+		return "dst_entity, " + tieBreakers
+	case FlowSortProtocol:
+		return "protocol DESC, " + tieBreakers
+	case FlowSortPackets:
+		return "packets DESC, " + tieBreakers
+	case FlowSortBytes:
+		return "bytes DESC, " + tieBreakers
+	case FlowSortDirection:
+		return "direction DESC NULLS LAST, " + tieBreakers
+	default:
+		return tieBreakers
 	}
 }
 

@@ -56,6 +56,19 @@ const (
 	SortDestination TableSort = "destination"
 )
 
+type FlowSort string
+
+const (
+	FlowSortStart       FlowSort = "start"
+	FlowSortEnd         FlowSort = "end"
+	FlowSortSource      FlowSort = "source"
+	FlowSortDestination FlowSort = "destination"
+	FlowSortProtocol    FlowSort = "protocol"
+	FlowSortPackets     FlowSort = "packets"
+	FlowSortBytes       FlowSort = "bytes"
+	FlowSortDirection   FlowSort = "direction"
+)
+
 type AddressFamily string
 
 const (
@@ -77,6 +90,13 @@ type FlowScope string
 const (
 	FlowScopeEdge   FlowScope = "edge"
 	FlowScopeEntity FlowScope = "entity"
+)
+
+type FlowMatch string
+
+const (
+	FlowMatchBoth    FlowMatch = "both"
+	FlowMatchForward FlowMatch = "forward"
 )
 
 type QueryState struct {
@@ -103,9 +123,11 @@ type QueryState struct {
 type FlowQuery struct {
 	Destination string
 	Entity      string
+	Match       FlowMatch
 	Scope       FlowScope
 	Source      string
 	State       QueryState
+	Sort        FlowSort
 }
 
 //nolint:tagliatelle
@@ -202,9 +224,17 @@ func ParseFlowQuery(r *http.Request) (FlowQuery, error) {
 	flowQuery := FlowQuery{
 		Destination: strings.TrimSpace(query.Get("flow_destination")),
 		Entity:      strings.TrimSpace(query.Get("flow_entity")),
+		Match:       FlowMatch(strings.TrimSpace(query.Get("flow_match"))),
 		Scope:       FlowScope(strings.TrimSpace(query.Get("flow_scope"))),
 		Source:      strings.TrimSpace(query.Get("flow_source")),
 		State:       ParseQueryState(r),
+		Sort:        FlowSort(strings.TrimSpace(query.Get("flow_sort"))),
+	}
+	if !flowQuery.Match.valid() {
+		flowQuery.Match = FlowMatchBoth
+	}
+	if !flowQuery.Sort.valid() {
+		flowQuery.Sort = FlowSortStart
 	}
 	if !flowQuery.Scope.valid() {
 		return FlowQuery{}, fmt.Errorf("invalid flow scope %q", flowQuery.Scope)
@@ -223,6 +253,14 @@ func ParseFlowQuery(r *http.Request) (FlowQuery, error) {
 }
 
 func (s QueryState) Normalized(span TimeSpan) QueryState {
+	return s.normalized(span, true)
+}
+
+func (s QueryState) NormalizedForFlowDetails(span TimeSpan) QueryState {
+	return s.normalized(span, false)
+}
+
+func (s QueryState) normalized(span TimeSpan, pruneEntityActions bool) QueryState {
 	state := s
 	if !state.Granularity.valid() {
 		state.Granularity = Granularity2LD
@@ -270,7 +308,7 @@ func (s QueryState) Normalized(span TimeSpan) QueryState {
 	if state.NodeLimit == 0 {
 		state.NodeLimit = defaultNodeLimit(state.Granularity)
 	}
-	if !state.EntityActionsEnabled() {
+	if pruneEntityActions && !state.EntityActionsEnabled() {
 		state = state.ResetSelection()
 		state.Include = nil
 		state.Exclude = nil
@@ -331,12 +369,18 @@ func (s QueryState) Values() url.Values {
 func (q FlowQuery) Values() url.Values {
 	values := q.State.Values()
 	values.Set("flow_scope", string(q.Scope))
+	if q.Sort != "" && q.Sort != FlowSortStart {
+		values.Set("flow_sort", string(q.Sort))
+	}
 	switch q.Scope {
 	case FlowScopeEntity:
 		values.Set("flow_entity", q.Entity)
 	case FlowScopeEdge:
 		values.Set("flow_source", q.Source)
 		values.Set("flow_destination", q.Destination)
+		if q.Match != "" && q.Match != FlowMatchBoth {
+			values.Set("flow_match", string(q.Match))
+		}
 	}
 	return values
 }
@@ -412,6 +456,18 @@ func (s QueryState) EntityActionsEnabled() bool {
 
 func (s FlowScope) valid() bool {
 	return s == FlowScopeEntity || s == FlowScopeEdge
+}
+
+func (m FlowMatch) valid() bool {
+	return m == FlowMatchBoth || m == FlowMatchForward
+}
+
+func (s FlowSort) valid() bool {
+	return s == FlowSortStart || s == FlowSortEnd || s == FlowSortSource || s == FlowSortDestination || s == FlowSortProtocol || s == FlowSortPackets || s == FlowSortBytes || s == FlowSortDirection
+}
+
+func (s FlowSort) timeSort() bool {
+	return s == FlowSortStart || s == FlowSortEnd
 }
 
 func (s QueryState) layoutCacheState() QueryState {

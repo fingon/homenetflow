@@ -211,6 +211,7 @@ func FlowDetailShell(flows FlowDetailData) g.Node {
 			Div(
 				Class("section-content"),
 				flowDetailFilters(flows.Query.State),
+				flowDetailControls(flows),
 				FlowDetailTable(flows),
 			),
 		),
@@ -363,8 +364,13 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 	}
 	if !state.EntityActionsEnabled() {
 		return Div(
-			sectionTitle("Selected Item"),
+			sectionTitle("Selected Entity"),
+			P(Class(dnsResultClass("", graph.SelectedNode.DNSResultState)), g.Text(graph.SelectedNode.Label)),
 			P(Class("panel-subtle"), g.Text(entityActionsUnavailableMessage)),
+			Div(
+				Class("button-row"),
+				flowDetailEntityLink(state, graph.SelectedNode),
+			),
 		)
 	}
 
@@ -470,19 +476,22 @@ func FlowDetailTable(flows FlowDetailData) g.Node {
 }
 
 func flowDetailTableAt(flows FlowDetailData, now time.Time) g.Node {
+	state := flows.Query.State
+	sortAllColumns := state.EntityActionsEnabled()
 	return Div(
+		flowDetailSortNotice(sortAllColumns),
 		Table(
 			Class("flows-table raw-flows-table"),
 			THead(
 				Tr(
-					Th(g.Text("Start")),
-					Th(g.Text("End")),
-					Th(g.Text("Source")),
-					Th(g.Text("Destination")),
-					Th(g.Text("Protocol")),
-					Th(g.Text("Packets")),
-					Th(g.Text("Bytes")),
-					Th(g.Text("Direction")),
+					Th(flowDetailSortLink(flows.Query, "Start", FlowSortStart, true)),
+					Th(flowDetailSortLink(flows.Query, "End", FlowSortEnd, true)),
+					Th(flowDetailSortLink(flows.Query, "Source", FlowSortSource, sortAllColumns)),
+					Th(flowDetailSortLink(flows.Query, "Destination", FlowSortDestination, sortAllColumns)),
+					Th(flowDetailSortLink(flows.Query, "Protocol", FlowSortProtocol, sortAllColumns)),
+					Th(flowDetailSortLink(flows.Query, "Packets", FlowSortPackets, sortAllColumns)),
+					Th(flowDetailSortLink(flows.Query, "Bytes", FlowSortBytes, sortAllColumns)),
+					Th(flowDetailSortLink(flows.Query, "Direction", FlowSortDirection, sortAllColumns)),
 				),
 			),
 			TBody(
@@ -967,11 +976,11 @@ func flowDetailURL(query FlowQuery) string {
 }
 
 func flowDetailLinksEnabled(state QueryState, synthetic bool) bool {
-	return state.EntityActionsEnabled() && state.Metric != MetricDNSLookups && !synthetic
+	return state.Metric != MetricDNSLookups && !synthetic
 }
 
 func flowDetailTableLinksEnabled(state QueryState) bool {
-	return state.EntityActionsEnabled() && state.Metric != MetricDNSLookups
+	return state.Metric != MetricDNSLookups
 }
 
 func flowDetailEntityLink(state QueryState, node *Node) g.Node {
@@ -1009,6 +1018,27 @@ func flowDetailPaginationLink(flows FlowDetailData, label string, page int, disa
 	nextQuery := flows.Query
 	nextQuery.State.Page = page
 	return navLink(flowDetailURL(nextQuery), className, label)
+}
+
+func flowDetailSortLink(query FlowQuery, label string, sortKey FlowSort, enabled bool) g.Node {
+	if !enabled {
+		return Span(Class("list-button disabled"), g.Text(label))
+	}
+	nextQuery := query
+	nextQuery.Sort = sortKey
+	nextQuery.State.Page = defaultPage
+	className := "list-button"
+	if query.Sort == sortKey {
+		className += " active"
+	}
+	return navLink(flowDetailURL(nextQuery), className, label)
+}
+
+func flowDetailSortNotice(sortAllColumns bool) g.Node {
+	if sortAllColumns {
+		return nil
+	}
+	return P(Class("panel-subtle flow-detail-sort-note"), g.Text("Long ranges sort by time only. Choose a range up to 7 days to sort by other fields."))
 }
 
 func sortLink(state QueryState, label string, sortKey TableSort) g.Node {
@@ -1126,6 +1156,83 @@ func flowDetailFilters(state QueryState) g.Node {
 		chips = append(chips, Span(Class("chip"), g.Text("Search: "+state.Search)))
 	}
 	return Div(append([]g.Node{Class("filter-list flow-detail-filters")}, chips...)...)
+}
+
+func flowDetailControls(flows FlowDetailData) g.Node {
+	query := flows.Query
+	state := query.State
+	nodes := []g.Node{
+		flowDetailHiddenFields(query),
+		Div(
+			Class("group"),
+			Div(
+				Class("button-row"),
+				renderNodes(flows.PresetCounts, func(count FlowPresetCount) g.Node {
+					label := fmt.Sprintf("%s (%d)", count.Label, count.Count)
+					return toggleRadio("preset", count.Preset, label, selectedPreset(state) == count.Preset)
+				}),
+			),
+		),
+	}
+	if query.Scope == FlowScopeEdge {
+		nodes = append(nodes,
+			Div(
+				Class("group segmented"),
+				Label(g.Text("Direction")),
+				toggleRadio("flow_match", string(FlowMatchBoth), "Both directions", query.Match != FlowMatchForward),
+				toggleRadio("flow_match", string(FlowMatchForward), "Forward only", query.Match == FlowMatchForward),
+			),
+		)
+	}
+	return Form(
+		Method("get"),
+		Action("/flows"),
+		ID("filters-form"),
+		Class("flow-detail-controls"),
+		g.Attr("hx-get", "/flows"),
+		g.Attr("hx-target", hxTargetAppShellValue),
+		g.Attr("hx-select", hxSelectAppShellValue),
+		g.Attr("hx-swap", hxSwapOuterHTMLValue),
+		g.Attr("hx-push-url", "true"),
+		g.Attr("hx-indicator", "#loading-indicator"),
+		g.Attr("hx-sync", "this:replace"),
+		Div(append([]g.Node{Class("top-bar-row")}, nodes...)...),
+	)
+}
+
+func flowDetailHiddenFields(query FlowQuery) g.Node {
+	state := query.State
+	nodes := []g.Node{
+		Input(Type("hidden"), ID("filter-from-ns"), Name("from"), Value(strconv.FormatInt(state.FromNs, 10))),
+		Input(Type("hidden"), ID("filter-to-ns"), Name("to"), Value(strconv.FormatInt(state.ToNs, 10))),
+		Input(Type("hidden"), Name("metric"), Value(string(state.Metric))),
+		Input(Type("hidden"), Name("granularity"), Value(string(state.Granularity))),
+		Input(Type("hidden"), Name("sort"), Value(string(state.Sort))),
+		Input(Type("hidden"), Name("page"), Value(strconv.Itoa(defaultPage))),
+		Input(Type("hidden"), Name("page_size"), Value(strconv.Itoa(state.PageSize))),
+		Input(Type("hidden"), Name("flow_scope"), Value(string(query.Scope))),
+		Input(Type("hidden"), Name("flow_sort"), Value(string(query.Sort))),
+	}
+	if state.AddressFamily != "" && state.AddressFamily != AddressFamilyAll {
+		nodes = append(nodes, Input(Type("hidden"), Name("family"), Value(string(state.AddressFamily))))
+	}
+	if state.Direction != "" && state.Direction != DirectionBoth {
+		nodes = append(nodes, Input(Type("hidden"), Name("direction"), Value(string(state.Direction))))
+	}
+	if state.Search != "" {
+		nodes = append(nodes, Input(Type("hidden"), Name("search"), Value(state.Search)))
+	}
+	switch query.Scope {
+	case FlowScopeEntity:
+		nodes = append(nodes, Input(Type("hidden"), Name("flow_entity"), Value(query.Entity)))
+	case FlowScopeEdge:
+		nodes = append(nodes,
+			Input(Type("hidden"), Name("flow_source"), Value(query.Source)),
+			Input(Type("hidden"), Name("flow_destination"), Value(query.Destination)),
+		)
+	}
+	nodes = append(nodes, renderHiddenValues("include", state.Include), renderHiddenValues("exclude", state.Exclude))
+	return g.Group(nodes)
 }
 
 func flowEndpointNode(entity, ip string, port int32) g.Node {
