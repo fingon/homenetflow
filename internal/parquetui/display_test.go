@@ -168,6 +168,8 @@ func TestHistogramSVGMarkupAddsAxisLabels(t *testing.T) {
 
 	assert.Assert(t, strings.Contains(markup, "histogram-axis-label"))
 	assert.Assert(t, strings.Contains(markup, "histogram-axis-label-y"))
+	assert.Assert(t, strings.Contains(markup, fmt.Sprintf(`data-timestamp-ns="%d"`, start.UnixNano())))
+	assert.Assert(t, strings.Contains(markup, `data-span-width-ns="86399999999999"`))
 	assert.Assert(t, strings.Contains(markup, ">0<"))
 	assert.Assert(t, strings.Contains(markup, ">4kb<"))
 	assert.Assert(t, strings.Contains(markup, ">3kb<"))
@@ -327,8 +329,10 @@ func TestTablePanelRendersCompactTimestampWithFullMetadata(t *testing.T) {
 
 	assert.Assert(t, strings.Contains(markup, `datetime="2026-04-15T01:02:03Z"`))
 	assert.Assert(t, strings.Contains(markup, `title="2026-04-15T01:02:03Z"`))
+	assert.Assert(t, strings.Contains(markup, fmt.Sprintf(`data-timestamp-ns="%d"`, firstSeen.UnixNano())))
 	assert.Assert(t, strings.Contains(markup, `>01:02:03</time>`))
 	assert.Assert(t, strings.Contains(markup, `datetime="2026-01-02T04:05:06Z"`))
+	assert.Assert(t, strings.Contains(markup, fmt.Sprintf(`data-timestamp-ns="%d"`, lastSeen.UnixNano())))
 	assert.Assert(t, strings.Contains(markup, `>02.01 04:05:06</time>`))
 }
 
@@ -346,8 +350,10 @@ func TestSelectedPanelRendersCompactTimestampWithFullMetadata(t *testing.T) {
 	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
 
 	assert.Assert(t, strings.Contains(markup, `datetime="2026-04-13T01:02:03Z"`))
+	assert.Assert(t, strings.Contains(markup, fmt.Sprintf(`data-timestamp-ns="%d"`, time.Date(2026, time.April, 13, 1, 2, 3, 0, time.UTC).UnixNano())))
 	assert.Assert(t, strings.Contains(markup, `>Mon 01:02:03</time>`))
 	assert.Assert(t, strings.Contains(markup, `datetime="2025-12-31T04:05:06Z"`))
+	assert.Assert(t, strings.Contains(markup, fmt.Sprintf(`data-timestamp-ns="%d"`, time.Date(2025, time.December, 31, 4, 5, 6, 0, time.UTC).UnixNano())))
 	assert.Assert(t, strings.Contains(markup, `>31.12.2025 04:05:06</time>`))
 }
 
@@ -386,6 +392,8 @@ func TestSummaryPanelActiveFiltersOnlyRenderTimeAndEntityFilters(t *testing.T) {
 	}, GraphData{}))
 
 	assert.Assert(t, strings.Contains(summaryMarkup, "Time:"))
+	assert.Assert(t, strings.Contains(summaryMarkup, `data-timestamp-ns="10"`))
+	assert.Assert(t, strings.Contains(summaryMarkup, `data-timestamp-ns="20"`))
 	assert.Assert(t, strings.Contains(summaryMarkup, "Entity: alpha.lan"))
 	assert.Assert(t, strings.Contains(summaryMarkup, "Exclude: dns.google"))
 	assert.Assert(t, !strings.Contains(summaryMarkup, "Metric:"))

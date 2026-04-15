@@ -4,6 +4,8 @@
   const collapsibleToggleSelector = "[data-collapsible-toggle]";
   const directionBothValue = "both";
   const directionName = "direction";
+  const histogramAxisTimestampSelector = ".histogram-axis-label[data-timestamp-ns][data-span-width-ns]";
+  const histogramBarSelector = ".histogram-bar";
   const graphSceneSelector = ".graph-scene";
   const granularityName = "granularity";
   const histogramTooltipClassName = "histogram-tooltip";
@@ -27,7 +29,12 @@
   const searchBehavior = "search";
   const statusErrorMessage = "Request failed.";
   const statusSelector = "#loading-indicator";
+  const timestampSelector = "time[data-timestamp-ns]";
   const metricDNSLookupsValue = "dns_lookups";
+  const millisecondsPerDay = 86400000;
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const nanosecondsPerMillisecond = 1000000n;
+  const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const versionPath = "/version";
 
   let hotReloadInitialized = false;
@@ -53,6 +60,112 @@
     }
 
     bindSectionToggles(root);
+    localizeTimestamps(root);
+  }
+
+  function localizeTimestamps(root) {
+    const now = new Date();
+    for (const timestamp of root.querySelectorAll(timestampSelector)) {
+      const label = formatTimestampNs(timestamp.dataset.timestampNs, now);
+      timestamp.textContent = label;
+      timestamp.setAttribute("title", label);
+    }
+
+    for (const bar of root.querySelectorAll(histogramBarSelector)) {
+      const fromLabel = formatTimestampNs(bar.dataset.fromNs, now);
+      const toLabel = formatTimestampNs(bar.dataset.toNs, now);
+      const valueLabel = bar.dataset.valueLabel || "";
+      bar.dataset.fromLabel = fromLabel;
+      bar.dataset.toLabel = toLabel;
+
+      const title = bar.querySelector("title");
+      if (title) {
+        title.textContent = `${fromLabel} - ${toLabel}\nValue: ${valueLabel}`;
+      }
+    }
+
+    for (const label of root.querySelectorAll(histogramAxisTimestampSelector)) {
+      label.textContent = formatTimelineTickLabelNs(label.dataset.timestampNs, label.dataset.spanWidthNs);
+    }
+  }
+
+  function formatTimestampNs(nsValue, now) {
+    const timestamp = dateFromNs(nsValue);
+    if (!timestamp) {
+      return "-";
+    }
+
+    if (sameLocalDate(timestamp, now)) {
+      return formatTime(timestamp, true);
+    }
+
+    const timestampWeek = localISOWeek(timestamp);
+    const nowWeek = localISOWeek(now);
+    if (timestampWeek.year === nowWeek.year && timestampWeek.week === nowWeek.week) {
+      return `${weekdayNames[timestamp.getDay()]} ${formatTime(timestamp, true)}`;
+    }
+
+    if (timestamp.getFullYear() === now.getFullYear()) {
+      return `${pad2(timestamp.getDate())}.${pad2(timestamp.getMonth() + 1)} ${formatTime(timestamp, true)}`;
+    }
+
+    return `${pad2(timestamp.getDate())}.${pad2(timestamp.getMonth() + 1)}.${timestamp.getFullYear()} ${formatTime(timestamp, true)}`;
+  }
+
+  function formatTimelineTickLabelNs(nsValue, spanWidthNsValue) {
+    const timestamp = dateFromNs(nsValue);
+    const spanWidthNs = parseBigIntValue(spanWidthNsValue);
+    if (!timestamp || spanWidthNs === null) {
+      return "-";
+    }
+
+    switch (true) {
+      case spanWidthNs <= oneDayNs:
+        return formatTime(timestamp, false);
+      case spanWidthNs <= 7n * oneDayNs:
+        return `${pad2(timestamp.getDate())} ${monthNames[timestamp.getMonth()]} ${formatTime(timestamp, false)}`;
+      case spanWidthNs <= 90n * oneDayNs:
+        return `${pad2(timestamp.getDate())} ${monthNames[timestamp.getMonth()]}`;
+      default:
+        return `${timestamp.getFullYear()}-${pad2(timestamp.getMonth() + 1)}-${pad2(timestamp.getDate())}`;
+    }
+  }
+
+  function dateFromNs(nsValue) {
+    const ns = parseBigIntValue(nsValue);
+    if (ns === null || ns === 0n) {
+      return null;
+    }
+    return new Date(Number(ns / nanosecondsPerMillisecond));
+  }
+
+  function sameLocalDate(leftDate, rightDate) {
+    return leftDate.getFullYear() === rightDate.getFullYear() &&
+      leftDate.getMonth() === rightDate.getMonth() &&
+      leftDate.getDate() === rightDate.getDate();
+  }
+
+  function localISOWeek(date) {
+    const localDateUTC = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const day = localDateUTC.getUTCDay() || 7;
+    localDateUTC.setUTCDate(localDateUTC.getUTCDate() + 4 - day);
+    const yearStart = new Date(Date.UTC(localDateUTC.getUTCFullYear(), 0, 1));
+    return {
+      week: Math.ceil((((localDateUTC - yearStart) / millisecondsPerDay) + 1) / 7),
+      year: localDateUTC.getUTCFullYear()
+    };
+  }
+
+  function formatTime(date, includeSeconds) {
+    const parts = [pad2(date.getHours()), pad2(date.getMinutes())];
+    if (includeSeconds) {
+      parts.push(pad2(date.getSeconds()));
+    }
+    return parts.join(":");
+  }
+
+  function pad2(value) {
+    return String(value).padStart(2, "0");
   }
 
   function bindForm(form) {
@@ -104,7 +217,7 @@
   function bindHistogram(histogram) {
     const svg = histogram.querySelector("svg");
     const form = document.querySelector("#filters-form");
-    const bars = Array.from(histogram.querySelectorAll(".histogram-bar"));
+    const bars = Array.from(histogram.querySelectorAll(histogramBarSelector));
     if (!svg || !form || bars.length === 0) {
       return;
     }

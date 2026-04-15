@@ -32,9 +32,11 @@ const (
 	hxSelectAppShellValue   = "#app-shell"
 	hxSwapOuterHTMLValue    = "outerHTML"
 	hxTargetAppShellValue   = "#app-shell"
+	spanWidthNsDataAttr     = "data-span-width-ns"
 	sameDayTimestampFormat  = "15:04:05"
 	sameWeekTimestampFormat = "Mon 15:04:05"
 	sameYearTimestampFormat = "02.01 15:04:05"
+	timestampNsDataAttr     = "data-timestamp-ns"
 	mixedEntityNodeFill     = "#c4a237"
 	nodeBaseRadiusPx        = 10
 	nodeRadiusScalePx       = 24
@@ -174,7 +176,7 @@ func SummaryPanel(state QueryState, graph GraphData) g.Node {
 		sectionTitle("Active Filters"),
 		Div(
 			Class("filter-list"),
-			Span(Class("chip"), g.Text("Time: "+formatNsRange(state.FromNs, state.ToNs))),
+			Span(Class("chip"), g.Text("Time: "), timestampRangeNode(state.FromNs, state.ToNs)),
 			addressFamilyChip,
 			directionChip,
 			renderNodes(state.Include, func(item string) g.Node {
@@ -887,6 +889,7 @@ func timestampNode(ns int64, now time.Time) g.Node {
 	return Time(
 		g.Attr("datetime", fullLabel),
 		g.Attr("title", fullLabel),
+		g.Attr(timestampNsDataAttr, strconv.FormatInt(ns, 10)),
 		g.Text(formatTimestampAt(ns, now)),
 	)
 }
@@ -897,9 +900,13 @@ func sameUTCDate(left, right time.Time) bool {
 	return left.Year() == right.Year() && left.YearDay() == right.YearDay()
 }
 
-func formatNsRange(fromNs, toNs int64) string {
+func timestampRangeNode(fromNs, toNs int64) g.Node {
 	now := time.Now().UTC()
-	return formatTimestampAt(fromNs, now) + " - " + formatTimestampAt(toNs, now)
+	return g.Group([]g.Node{
+		timestampNode(fromNs, now),
+		g.Text(" - "),
+		timestampNode(toNs, now),
+	})
 }
 
 func renderNodes[T any](items []T, render func(T) g.Node) g.Node {
@@ -1071,10 +1078,14 @@ func histogramAxisMarkup(metric Metric, bins []HistogramBin, yAxisMaxValue, yAxi
 			x,
 			baselineY+6,
 		)
-		fmt.Fprintf(&builder, `<text class="histogram-axis-label" x="%0.2f" y="%0.2f" text-anchor="%s">%s</text>`,
+		fmt.Fprintf(&builder, `<text class="histogram-axis-label" x="%0.2f" y="%0.2f" text-anchor="%s" %s="%d" %s="%d">%s</text>`,
 			x,
 			labelY,
 			histogramTickAnchor(tickIndex),
+			timestampNsDataAttr,
+			labelNs,
+			spanWidthNsDataAttr,
+			spanWidthNs,
 			html.EscapeString(formatTimelineTickLabel(labelNs, spanWidthNs)),
 		)
 	}
