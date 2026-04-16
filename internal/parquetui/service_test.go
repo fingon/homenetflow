@@ -2,6 +2,7 @@ package parquetui
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -443,23 +444,26 @@ func TestServiceFlowDetailsSortsRawRows(t *testing.T) {
 	testCases := []struct {
 		name          string
 		sort          FlowSort
+		sortDir       FlowSortDir
 		expectedBytes int64
 	}{
-		{name: "start", sort: FlowSortStart, expectedBytes: 300},
-		{name: "end", sort: FlowSortEnd, expectedBytes: 300},
+		{name: "start descending", sort: FlowSortStart, sortDir: FlowSortDesc, expectedBytes: 300},
+		{name: "start ascending", sort: FlowSortStart, sortDir: FlowSortAsc, expectedBytes: 100},
+		{name: "end descending", sort: FlowSortEnd, sortDir: FlowSortDesc, expectedBytes: 300},
+		{name: "end ascending", sort: FlowSortEnd, sortDir: FlowSortAsc, expectedBytes: 100},
 		{name: "source", sort: FlowSortSource, expectedBytes: 100},
 		{name: "destination", sort: FlowSortDestination, expectedBytes: 100},
 		{name: "protocol", sort: FlowSortProtocol, expectedBytes: 300},
 		{name: "packets", sort: FlowSortPackets, expectedBytes: 100},
 		{name: "bytes", sort: FlowSortBytes, expectedBytes: 300},
-		{name: "direction", sort: FlowSortDirection, expectedBytes: 300},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			flows, err := service.FlowDetails(context.Background(), FlowQuery{
-				Entity: "common.lan",
-				Scope:  FlowScopeEntity,
-				Sort:   testCase.sort,
+				Entity:  "common.lan",
+				Scope:   FlowScopeEntity,
+				Sort:    testCase.sort,
+				SortDir: testCase.sortDir,
 				State: QueryState{
 					Granularity: GranularityHostname,
 					Metric:      MetricBytes,
@@ -471,7 +475,34 @@ func TestServiceFlowDetailsSortsRawRows(t *testing.T) {
 	}
 }
 
-func TestServiceFlowDetailsLongRangesUseTimeSortOnly(t *testing.T) {
+func TestServiceFlowDetailsDisplaysHostnamesForCoarseGranularity(t *testing.T) {
+	tempDir := t.TempDir()
+	zeta := sampleRecord("192.168.1.20", "8.8.8.8", "zeta.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
+	alpha := sampleRecord("192.168.1.10", "9.9.9.9", "alpha.lan", "lan", "lan", "quad9.net", "quad9.net", "net", 200, 30, 40)
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{zeta, alpha})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	flows, err := service.FlowDetails(context.Background(), FlowQuery{
+		Entity: "lan",
+		Scope:  FlowScopeEntity,
+		Sort:   FlowSortSource,
+		State: QueryState{
+			Granularity: GranularityTLD,
+			Metric:      MetricBytes,
+		},
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, flows.TotalCount, 2)
+	assert.Equal(t, flows.VisibleRows[0].Source, "alpha.lan")
+	assert.Equal(t, flows.VisibleRows[0].Destination, "quad9.net")
+	assert.Equal(t, flows.VisibleRows[1].Source, "zeta.lan")
+	assert.Equal(t, flows.VisibleRows[1].Destination, "dns.google")
+}
+
+func TestServiceFlowDetailsLongRangesAreDisabled(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
 		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 900, 10, 20),
@@ -491,10 +522,9 @@ func TestServiceFlowDetailsLongRangesUseTimeSortOnly(t *testing.T) {
 			Metric:      MetricBytes,
 		},
 	})
-	assert.NilError(t, err)
 
-	assert.Equal(t, flows.Query.Sort, FlowSortStart)
-	assert.Equal(t, flows.VisibleRows[0].Bytes, int64(100))
+	assert.Assert(t, errors.Is(err, errEntityActionsDisabled))
+	assert.Equal(t, len(flows.VisibleRows), 0)
 }
 
 func TestServiceFlowDetailsPresetCountsUseMatchingRows(t *testing.T) {
@@ -516,6 +546,7 @@ func TestServiceFlowDetailsPresetCountsUseMatchingRows(t *testing.T) {
 		State: QueryState{
 			Granularity: GranularityHostname,
 			Metric:      MetricBytes,
+			Preset:      presetWeekValue,
 		},
 	})
 	assert.NilError(t, err)
@@ -524,14 +555,18 @@ func TestServiceFlowDetailsPresetCountsUseMatchingRows(t *testing.T) {
 	for _, count := range flows.PresetCounts {
 		counts[count.Preset] = count.Count
 	}
-	assert.Equal(t, counts[presetAllValue], 3)
 	assert.Equal(t, counts[presetHourValue], 1)
 	assert.Equal(t, counts[presetDayValue], 2)
 	assert.Equal(t, counts[presetWeekValue], 2)
-	assert.Equal(t, counts[presetMonthValue], 2)
+	_, allFound := counts[presetAllValue]
+	_, monthFound := counts[presetMonthValue]
+	assert.Assert(t, !allFound)
+	assert.Assert(t, !monthFound)
+	assert.Equal(t, flows.TotalCount, 2)
+	assert.Equal(t, len(flows.VisibleRows), 2)
 }
 
-func TestServiceFlowDetailsAllowsLongRanges(t *testing.T) {
+func TestServiceFlowDetailsRejectsLongRanges(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
 		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 1, 20),
@@ -553,8 +588,8 @@ func TestServiceFlowDetailsAllowsLongRanges(t *testing.T) {
 		},
 	})
 
-	assert.NilError(t, err)
-	assert.Equal(t, flows.TotalCount, 1)
+	assert.Assert(t, errors.Is(err, errEntityActionsDisabled))
+	assert.Equal(t, len(flows.VisibleRows), 0)
 }
 
 func TestServiceGraphPresetRangeDiffersAcrossFiles(t *testing.T) {

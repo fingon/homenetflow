@@ -58,6 +58,17 @@ const (
 	disabledClassSuffix             = " disabled"
 )
 
+var ipProtocolNames = map[int32]string{
+	1:   "ICMP",
+	6:   "TCP",
+	17:  "UDP",
+	47:  "GRE",
+	50:  "ESP",
+	51:  "AH",
+	58:  "ICMPv6",
+	132: "SCTP",
+}
+
 func Index(dashboard DashboardData, devMode bool, devSessionToken string) g.Node {
 	bodyNodes := []g.Node{
 		AppShell(dashboard),
@@ -204,7 +215,7 @@ func FlowDetailShell(flows FlowDetailData) g.Node {
 				Class("panel-heading"),
 				Div(
 					H2(g.Text(flowDetailTitle(flows.Query))),
-					Span(Class("panel-subtle"), g.Text(fmt.Sprintf("%d rows", flows.TotalCount))),
+					Span(Class("panel-subtle"), g.Text(flowDetailRowCountLabel(flows))),
 				),
 				navLink(stateURL(flows.Query.State), actionButtonClass, "Back to graph"),
 			),
@@ -491,7 +502,7 @@ func flowDetailTableAt(flows FlowDetailData, now time.Time) g.Node {
 					Th(flowDetailSortLink(flows.Query, "Protocol", FlowSortProtocol, sortAllColumns)),
 					Th(flowDetailSortLink(flows.Query, "Packets", FlowSortPackets, sortAllColumns)),
 					Th(flowDetailSortLink(flows.Query, "Bytes", FlowSortBytes, sortAllColumns)),
-					Th(flowDetailSortLink(flows.Query, "Direction", FlowSortDirection, sortAllColumns)),
+					Th(Span(Class("list-button raw-flow-header-button disabled"), g.Text("Direction"))),
 				),
 			),
 			TBody(
@@ -501,7 +512,7 @@ func flowDetailTableAt(flows FlowDetailData, now time.Time) g.Node {
 						Td(timestampNode(row.EndNs, now)),
 						Td(flowEndpointNode(row.Source, row.SrcIP, row.SrcPort)),
 						Td(flowEndpointNode(row.Destination, row.DstIP, row.DstPort)),
-						Td(g.Text(strconv.FormatInt(int64(row.Protocol), 10))),
+						Td(g.Text(rawFlowProtocolLabel(row.Protocol))),
 						Td(g.Text(strconv.FormatInt(row.Packets, 10))),
 						Td(g.Text(formatMetricValue(MetricBytes, row.Bytes))),
 						Td(g.Text(rawFlowDirectionLabel(row.Direction))),
@@ -512,7 +523,7 @@ func flowDetailTableAt(flows FlowDetailData, now time.Time) g.Node {
 		Div(
 			Class("pagination-row"),
 			flowDetailPaginationLink(flows, "Previous", max(1, flows.Page-1), flows.Page <= 1),
-			Span(Class("panel-subtle"), g.Text(fmt.Sprintf("Page %d / %d", flows.Page, flows.TotalPages))),
+			Span(Class("panel-subtle"), g.Text(flowDetailPageLabel(flows))),
 			flowDetailPaginationLink(flows, "Next", min(flows.TotalPages, flows.Page+1), flows.Page >= flows.TotalPages),
 		),
 	)
@@ -978,11 +989,11 @@ func flowDetailURL(query FlowQuery) string {
 }
 
 func flowDetailLinksEnabled(state QueryState, synthetic bool) bool {
-	return state.Metric != MetricDNSLookups && !synthetic
+	return state.Metric != MetricDNSLookups && !synthetic && state.EntityActionsEnabled()
 }
 
 func flowDetailTableLinksEnabled(state QueryState) bool {
-	return state.Metric != MetricDNSLookups
+	return state.Metric != MetricDNSLookups && state.EntityActionsEnabled()
 }
 
 func flowDetailEntityLink(state QueryState, node *Node) g.Node {
@@ -1024,16 +1035,28 @@ func flowDetailPaginationLink(flows FlowDetailData, label string, page int, disa
 
 func flowDetailSortLink(query FlowQuery, label string, sortKey FlowSort, enabled bool) g.Node {
 	if !enabled {
-		return Span(Class("list-button disabled"), g.Text(label))
+		return Span(Class("list-button raw-flow-header-button disabled"), g.Text(label))
 	}
 	nextQuery := query
 	nextQuery.Sort = sortKey
+	nextQuery.SortDir = FlowSortDesc
+	if query.Sort == sortKey && sortKey.timeSort() {
+		if query.SortDir == FlowSortAsc {
+			nextQuery.SortDir = FlowSortDesc
+		} else {
+			nextQuery.SortDir = FlowSortAsc
+		}
+	}
 	nextQuery.State.Page = defaultPage
-	className := "list-button"
+	className := "list-button raw-flow-header-button"
+	linkLabel := label
 	if query.Sort == sortKey {
 		className += " active"
+		if sortKey.timeSort() {
+			linkLabel += " " + flowSortDirectionArrow(query.SortDir)
+		}
 	}
-	return navLink(flowDetailURL(nextQuery), className, label)
+	return navLink(flowDetailURL(nextQuery), className, linkLabel)
 }
 
 func flowDetailSortNotice(sortAllColumns bool) g.Node {
@@ -1135,6 +1158,14 @@ func flowDetailTitle(query FlowQuery) string {
 	}
 }
 
+func flowDetailRowCountLabel(flows FlowDetailData) string {
+	return fmt.Sprintf("%d rows", flows.TotalCount)
+}
+
+func flowDetailPageLabel(flows FlowDetailData) string {
+	return fmt.Sprintf("Page %d / %d", flows.Page, flows.TotalPages)
+}
+
 func flowDetailFilters(state QueryState) g.Node {
 	currentAddressFamily := normalizedAddressFamily(state.AddressFamily)
 	currentDirection := normalizedDirection(state.Direction)
@@ -1215,6 +1246,9 @@ func flowDetailHiddenFields(query FlowQuery) g.Node {
 		Input(Type("hidden"), Name("flow_scope"), Value(string(query.Scope))),
 		Input(Type("hidden"), Name("flow_sort"), Value(string(query.Sort))),
 	}
+	if query.Sort.timeSort() && query.SortDir == FlowSortAsc {
+		nodes = append(nodes, Input(Type("hidden"), Name(flowSortDirParam), Value(string(query.SortDir))))
+	}
 	if state.AddressFamily != "" && state.AddressFamily != AddressFamilyAll {
 		nodes = append(nodes, Input(Type("hidden"), Name("family"), Value(string(state.AddressFamily))))
 	}
@@ -1257,6 +1291,21 @@ func rawFlowDirectionLabel(direction *int32) string {
 	default:
 		return strconv.FormatInt(int64(*direction), 10)
 	}
+}
+
+func rawFlowProtocolLabel(protocol int32) string {
+	name, ok := ipProtocolNames[protocol]
+	if !ok {
+		return strconv.FormatInt(int64(protocol), 10)
+	}
+	return fmt.Sprintf("%d (%s)", protocol, name)
+}
+
+func flowSortDirectionArrow(sortDir FlowSortDir) string {
+	if sortDir == FlowSortAsc {
+		return "↑"
+	}
+	return "↓"
 }
 
 func statBlock(label, value string) g.Node {

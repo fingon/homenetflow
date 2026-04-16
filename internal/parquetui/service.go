@@ -37,6 +37,8 @@ const (
 	dnsLookupFilenamePrefix            = "dns_lookups_"
 	resultCacheLimit                   = 96
 	restTopEntityLimit                 = 10
+	srcScopeEntityColumn               = "src_scope_entity"
+	dstScopeEntityColumn               = "dst_scope_entity"
 	rawQueryConcurrencyMax             = 4
 	srcEntityColumn                    = "src_entity"
 	summaryTopItemLimit                = 10
@@ -650,8 +652,14 @@ func (s *Service) FlowDetails(ctx context.Context, query FlowQuery) (FlowDetailD
 	if !query.Sort.valid() || (!state.EntityActionsEnabled() && !query.Sort.timeSort()) {
 		query.Sort = FlowSortStart
 	}
+	if !query.SortDir.valid() || !query.Sort.timeSort() {
+		query.SortDir = FlowSortDesc
+	}
 	if state.Metric == MetricDNSLookups {
 		return FlowDetailData{}, errors.New("raw flow details are not available for DNS lookup metrics")
+	}
+	if !state.EntityActionsEnabled() {
+		return FlowDetailData{}, errEntityActionsDisabled
 	}
 	if !query.Scope.valid() {
 		return FlowDetailData{}, fmt.Errorf("invalid flow scope %q", query.Scope)
@@ -676,15 +684,16 @@ func (s *Service) FlowDetails(ctx context.Context, query FlowQuery) (FlowDetailD
 		pageSize = defaultPageSize
 	}
 
+	presetCounts, err := s.flowPresetCounts(ctx, query, span)
+	if err != nil {
+		return FlowDetailData{}, err
+	}
+
 	cte, args := s.filteredRawFlowsCTE(state)
 	scopeClause, scopeArgs := flowScopeClause(query)
 	countArgs := append(append([]any(nil), args...), scopeArgs...)
 
 	totalCount, err := s.countRawFlows(ctx, cte, scopeClause, countArgs)
-	if err != nil {
-		return FlowDetailData{}, err
-	}
-	presetCounts, err := s.flowPresetCounts(ctx, query, span)
 	if err != nil {
 		return FlowDetailData{}, err
 	}
@@ -701,7 +710,7 @@ FROM %s
 WHERE %s
 ORDER BY %s
 LIMIT ? OFFSET ?
-`, cte, filteredCTEName, scopeClause, flowSortOrderBy(query.Sort))
+`, cte, filteredCTEName, scopeClause, flowSortOrderBy(query.Sort, query.SortDir))
 	rowArgs := append(append([]any(nil), countArgs...), pageSize, offset)
 	rows, err := s.db.QueryContext(ctx, rowsQuery, rowArgs...)
 	if err != nil {
@@ -768,7 +777,6 @@ func (s *Service) flowPresetCounts(ctx context.Context, query FlowQuery, span Ti
 	for _, preset := range presets {
 		fromNs, toNs, ok := presetRange(preset.preset, span)
 		if !ok {
-			counts = append(counts, FlowPresetCount{Label: preset.label, Preset: preset.preset})
 			continue
 		}
 		state := query.State.Clone()
@@ -779,6 +787,9 @@ func (s *Service) flowPresetCounts(ctx context.Context, query FlowQuery, span Ti
 		state = state.NormalizedForFlowDetails(span)
 		presetQuery := query
 		presetQuery.State = state
+		if !state.EntityActionsEnabled() {
+			continue
+		}
 		cte, args := s.filteredRawFlowsCTE(state)
 		scopeClause, scopeArgs := flowScopeClause(presetQuery)
 		count, err := s.countRawFlows(ctx, cte, scopeClause, append(append([]any(nil), args...), scopeArgs...))
@@ -1037,12 +1048,17 @@ func (s *Service) filteredCTE(state QueryState) (string, []any) {
 }
 
 func (s *Service) filteredRawFlowsCTE(state QueryState) (string, []any) {
-	srcExpr, dstExpr := entityExpressions(state.Granularity)
-	whereClause, args := filterClause(state, srcExpr, dstExpr)
-	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, bytes, direction, dst_ip, dst_port, ip_version, packets, protocol, src_ip, src_port, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
+	srcScopeExpr, dstScopeExpr := entityExpressions(state.Granularity)
+	srcDisplayExpr, dstDisplayExpr := entityExpressions(GranularityHostname)
+	whereClause, args := filterClause(state, srcScopeExpr, dstScopeExpr)
+	return fmt.Sprintf("WITH %s AS (SELECT %s AS %s, %s AS %s, %s AS src_entity, %s AS dst_entity, bytes, direction, dst_ip, dst_port, ip_version, packets, protocol, src_ip, src_port, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
 		filteredCTEName,
-		srcExpr,
-		dstExpr,
+		srcScopeExpr,
+		srcScopeEntityColumn,
+		dstScopeExpr,
+		dstScopeEntityColumn,
+		srcDisplayExpr,
+		dstDisplayExpr,
 		quoteLiteral(s.globPath),
 		whereClause,
 	), args
@@ -1051,22 +1067,28 @@ func (s *Service) filteredRawFlowsCTE(state QueryState) (string, []any) {
 func flowScopeClause(query FlowQuery) (string, []any) {
 	switch query.Scope {
 	case FlowScopeEntity:
-		return "(src_entity = ? OR dst_entity = ?)", []any{query.Entity, query.Entity}
+		return fmt.Sprintf("(%s = ? OR %s = ?)", srcScopeEntityColumn, dstScopeEntityColumn), []any{query.Entity, query.Entity}
 	case FlowScopeEdge:
 		if query.Match != FlowMatchForward {
-			return "((src_entity = ? AND dst_entity = ?) OR (src_entity = ? AND dst_entity = ?))", []any{query.Source, query.Destination, query.Destination, query.Source}
+			return fmt.Sprintf("((%s = ? AND %s = ?) OR (%s = ? AND %s = ?))", srcScopeEntityColumn, dstScopeEntityColumn, srcScopeEntityColumn, dstScopeEntityColumn), []any{query.Source, query.Destination, query.Destination, query.Source}
 		}
-		return "(src_entity = ? AND dst_entity = ?)", []any{query.Source, query.Destination}
+		return fmt.Sprintf("(%s = ? AND %s = ?)", srcScopeEntityColumn, dstScopeEntityColumn), []any{query.Source, query.Destination}
 	default:
 		return "false", nil
 	}
 }
 
-func flowSortOrderBy(sortKey FlowSort) string {
+func flowSortOrderBy(sortKey FlowSort, sortDir FlowSortDir) string {
 	tieBreakers := "time_start_ns DESC, time_end_ns DESC, src_entity, dst_entity, src_ip, dst_ip, src_port, dst_port, protocol"
+	timeSortDirection := "DESC"
+	if sortDir == FlowSortAsc {
+		timeSortDirection = "ASC"
+	}
 	switch sortKey {
+	case FlowSortStart:
+		return "time_start_ns " + timeSortDirection + ", time_end_ns DESC, src_entity, dst_entity, src_ip, dst_ip, src_port, dst_port, protocol"
 	case FlowSortEnd:
-		return "time_end_ns DESC, " + tieBreakers
+		return "time_end_ns " + timeSortDirection + ", time_start_ns DESC, src_entity, dst_entity, src_ip, dst_ip, src_port, dst_port, protocol"
 	case FlowSortSource:
 		return "src_entity, " + tieBreakers
 	case FlowSortDestination:
@@ -1077,8 +1099,6 @@ func flowSortOrderBy(sortKey FlowSort) string {
 		return "packets DESC, " + tieBreakers
 	case FlowSortBytes:
 		return "bytes DESC, " + tieBreakers
-	case FlowSortDirection:
-		return "direction DESC NULLS LAST, " + tieBreakers
 	default:
 		return tieBreakers
 	}

@@ -23,6 +23,7 @@ const (
 	presetDayLegacy  = "24h"
 	presetWeekValue  = "7d"
 	presetMonthValue = "30d"
+	flowSortDirParam = "flow_sort_dir"
 )
 
 var errEntityActionsDisabled = errors.New("entity actions are available for ranges up to 7 days")
@@ -66,7 +67,13 @@ const (
 	FlowSortProtocol    FlowSort = "protocol"
 	FlowSortPackets     FlowSort = "packets"
 	FlowSortBytes       FlowSort = "bytes"
-	FlowSortDirection   FlowSort = "direction"
+)
+
+type FlowSortDir string
+
+const (
+	FlowSortAsc  FlowSortDir = "asc"
+	FlowSortDesc FlowSortDir = "desc"
 )
 
 type AddressFamily string
@@ -128,6 +135,7 @@ type FlowQuery struct {
 	Source      string
 	State       QueryState
 	Sort        FlowSort
+	SortDir     FlowSortDir
 }
 
 //nolint:tagliatelle
@@ -229,12 +237,16 @@ func ParseFlowQuery(r *http.Request) (FlowQuery, error) {
 		Source:      strings.TrimSpace(query.Get("flow_source")),
 		State:       ParseQueryState(r),
 		Sort:        FlowSort(strings.TrimSpace(query.Get("flow_sort"))),
+		SortDir:     FlowSortDir(strings.TrimSpace(query.Get(flowSortDirParam))),
 	}
 	if !flowQuery.Match.valid() {
 		flowQuery.Match = FlowMatchBoth
 	}
 	if !flowQuery.Sort.valid() {
 		flowQuery.Sort = FlowSortStart
+	}
+	if !flowQuery.SortDir.valid() || !flowQuery.Sort.timeSort() {
+		flowQuery.SortDir = FlowSortDesc
 	}
 	if !flowQuery.Scope.valid() {
 		return FlowQuery{}, fmt.Errorf("invalid flow scope %q", flowQuery.Scope)
@@ -379,6 +391,9 @@ func (q FlowQuery) Values() url.Values {
 	if q.Sort != "" && q.Sort != FlowSortStart {
 		values.Set("flow_sort", string(q.Sort))
 	}
+	if q.Sort.timeSort() && q.SortDir == FlowSortAsc {
+		values.Set(flowSortDirParam, string(q.SortDir))
+	}
 	switch q.Scope {
 	case FlowScopeEntity:
 		values.Set("flow_entity", q.Entity)
@@ -470,11 +485,15 @@ func (m FlowMatch) valid() bool {
 }
 
 func (s FlowSort) valid() bool {
-	return s == FlowSortStart || s == FlowSortEnd || s == FlowSortSource || s == FlowSortDestination || s == FlowSortProtocol || s == FlowSortPackets || s == FlowSortBytes || s == FlowSortDirection
+	return s == FlowSortStart || s == FlowSortEnd || s == FlowSortSource || s == FlowSortDestination || s == FlowSortProtocol || s == FlowSortPackets || s == FlowSortBytes
 }
 
 func (s FlowSort) timeSort() bool {
 	return s == FlowSortStart || s == FlowSortEnd
+}
+
+func (d FlowSortDir) valid() bool {
+	return d == FlowSortAsc || d == FlowSortDesc
 }
 
 func (s QueryState) layoutCacheState() QueryState {

@@ -34,6 +34,55 @@ func TestParseFlowQueryEdge(t *testing.T) {
 	assert.Equal(t, query.State.Metric, MetricBytes)
 }
 
+func TestParseFlowQuerySortDirection(t *testing.T) {
+	request := httptest.NewRequest("GET", "/flows?metric=bytes&flow_scope=edge&flow_source=alpha.lan&flow_destination=dns.google&flow_sort=end&flow_sort_dir=asc", nil)
+
+	query, err := ParseFlowQuery(request)
+
+	assert.NilError(t, err)
+	assert.Equal(t, query.Sort, FlowSortEnd)
+	assert.Equal(t, query.SortDir, FlowSortAsc)
+}
+
+func TestParseFlowQueryDefaultsInvalidSortDirection(t *testing.T) {
+	request := httptest.NewRequest("GET", "/flows?metric=bytes&flow_scope=edge&flow_source=alpha.lan&flow_destination=dns.google&flow_sort=start&flow_sort_dir=sideways", nil)
+
+	query, err := ParseFlowQuery(request)
+
+	assert.NilError(t, err)
+	assert.Equal(t, query.Sort, FlowSortStart)
+	assert.Equal(t, query.SortDir, FlowSortDesc)
+}
+
+func TestParseFlowQueryRejectsDirectionSort(t *testing.T) {
+	request := httptest.NewRequest("GET", "/flows?metric=bytes&flow_scope=edge&flow_source=alpha.lan&flow_destination=dns.google&flow_sort=direction", nil)
+
+	query, err := ParseFlowQuery(request)
+
+	assert.NilError(t, err)
+	assert.Equal(t, query.Sort, FlowSortStart)
+	assert.Equal(t, query.SortDir, FlowSortDesc)
+}
+
+func TestFlowQueryValuesIncludesAscendingSortDirection(t *testing.T) {
+	query := FlowQuery{
+		Entity:  "alpha.lan",
+		Scope:   FlowScopeEntity,
+		Sort:    FlowSortEnd,
+		SortDir: FlowSortAsc,
+		State: QueryState{
+			Granularity: Granularity2LD,
+			Metric:      MetricBytes,
+			Sort:        SortBytes,
+		},
+	}
+
+	values := query.Values()
+
+	assert.Equal(t, values.Get("flow_sort"), "end")
+	assert.Equal(t, values.Get("flow_sort_dir"), "asc")
+}
+
 func TestParseQueryStateAddressFamily(t *testing.T) {
 	request := httptest.NewRequest("GET", "/?family=ipv6", nil)
 

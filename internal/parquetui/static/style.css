@@ -527,6 +527,15 @@ input[type="search"] {
   margin-top: 0.5rem;
 }
 
+.raw-flows-table .raw-flow-header-button {
+  width: auto;
+  min-height: 0;
+  justify-content: flex-start;
+  border-radius: 8px;
+  padding: 0.25rem 0.55rem;
+  white-space: nowrap;
+}
+
 .flow-endpoint {
   display: grid;
   gap: 0.15rem;

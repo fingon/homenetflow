@@ -451,6 +451,23 @@ func TestSelectedPanelRendersRawFlowLinkForEligibleSelections(t *testing.T) {
 	assert.Assert(t, strings.Contains(edgeMarkup, "flow_destination=dns.google"))
 }
 
+func TestSelectedPanelHidesRawFlowLinkForLongRange(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, selectedPanelAt(QueryState{
+		FromNs:      1,
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+		ToNs:        1 + int64(8*24*time.Hour),
+	}, GraphData{
+		ActiveMetric: MetricBytes,
+		SelectedEdge: &Edge{Source: "alpha.lan", Destination: "dns.google"},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	assert.Assert(t, !strings.Contains(markup, "Show matching flows"))
+	assert.Assert(t, !strings.Contains(markup, "flow_scope=edge"))
+}
+
 func TestTablePanelRendersRawFlowChevronForEligibleRows(t *testing.T) {
 	t.Parallel()
 
@@ -491,6 +508,17 @@ func TestFlowDetailTableRendersRawRows(t *testing.T) {
 				SrcIP:       "192.168.1.10",
 				StartNs:     time.Date(2026, time.April, 15, 1, 2, 3, 0, time.UTC).UnixNano(),
 			},
+			{
+				Bytes:       500,
+				Destination: "other.lan",
+				DstIP:       "192.168.1.20",
+				EndNs:       time.Date(2026, time.April, 15, 1, 3, 4, 0, time.UTC).UnixNano(),
+				Packets:     2,
+				Protocol:    143,
+				Source:      "alpha.lan",
+				SrcIP:       "192.168.1.10",
+				StartNs:     time.Date(2026, time.April, 15, 1, 3, 3, 0, time.UTC).UnixNano(),
+			},
 		},
 	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
 
@@ -498,7 +526,8 @@ func TestFlowDetailTableRendersRawRows(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, "192.168.1.10:0"))
 	assert.Assert(t, strings.Contains(markup, "dns.google"))
 	assert.Assert(t, strings.Contains(markup, "8.8.8.8:0"))
-	assert.Assert(t, strings.Contains(markup, ">17</td>"))
+	assert.Assert(t, strings.Contains(markup, ">17 (UDP)</td>"))
+	assert.Assert(t, strings.Contains(markup, ">143</td>"))
 	assert.Assert(t, strings.Contains(markup, ">7</td>"))
 	assert.Assert(t, strings.Contains(markup, ">1200</td>"))
 	assert.Assert(t, strings.Contains(markup, ">Egress</td>"))
@@ -511,8 +540,10 @@ func TestFlowDetailTableRendersSortLinks(t *testing.T) {
 		Page:       1,
 		TotalPages: 1,
 		Query: FlowQuery{
-			Entity: "alpha.lan",
-			Scope:  FlowScopeEntity,
+			Entity:  "alpha.lan",
+			Scope:   FlowScopeEntity,
+			Sort:    FlowSortStart,
+			SortDir: FlowSortDesc,
 			State: QueryState{
 				FromNs:      1,
 				Granularity: GranularityHostname,
@@ -522,9 +553,36 @@ func TestFlowDetailTableRendersSortLinks(t *testing.T) {
 		},
 	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
 
+	assert.Assert(t, strings.Contains(markup, "Start ↓"))
+	assert.Assert(t, strings.Contains(markup, "flow_sort_dir=asc"))
 	assert.Assert(t, strings.Contains(markup, "flow_sort=bytes"))
-	assert.Assert(t, strings.Contains(markup, "flow_sort=direction"))
+	assert.Assert(t, !strings.Contains(markup, "flow_sort=direction"))
+	assert.Assert(t, strings.Contains(markup, `<span class="list-button raw-flow-header-button disabled">Direction</span>`))
 	assert.Assert(t, strings.Contains(markup, "flow_entity=alpha.lan"))
+}
+
+func TestFlowDetailTableRendersAscendingSortArrow(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, flowDetailTableAt(FlowDetailData{
+		Page:       1,
+		TotalPages: 1,
+		Query: FlowQuery{
+			Entity:  "alpha.lan",
+			Scope:   FlowScopeEntity,
+			Sort:    FlowSortEnd,
+			SortDir: FlowSortAsc,
+			State: QueryState{
+				FromNs:      1,
+				Granularity: GranularityHostname,
+				Metric:      MetricBytes,
+				ToNs:        20,
+			},
+		},
+	}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	assert.Assert(t, strings.Contains(markup, "End ↑"))
+	assert.Assert(t, !strings.Contains(markup, "flow_sort_dir=desc"))
 }
 
 func TestFlowDetailTableLimitsLongRangeSortLinksToTime(t *testing.T) {
@@ -570,9 +628,11 @@ func TestFlowDetailShellRendersPresetCountsAndReverseToggle(t *testing.T) {
 				ToNs:        20,
 			},
 		},
+		TotalCount: 12,
 		TotalPages: 1,
 	}))
 
+	assert.Assert(t, strings.Contains(markup, "12 rows"))
 	assert.Assert(t, strings.Contains(markup, "All (12)"))
 	assert.Assert(t, strings.Contains(markup, "1h (3)"))
 	assert.Assert(t, strings.Contains(markup, "Both directions"))
@@ -675,7 +735,8 @@ func TestTablePanelDisablesEntityActionsForLongRange(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `class="table-link disabled"`))
 	assert.Assert(t, !strings.Contains(markup, `selected_entity=alpha.lan`))
 	assert.Assert(t, !strings.Contains(markup, `selected_entity=dns.google`))
-	assert.Assert(t, strings.Contains(markup, `flow_scope=edge`))
+	assert.Assert(t, !strings.Contains(markup, `flow_scope=edge`))
+	assert.Assert(t, !strings.Contains(markup, `aria-label="Show flows from alpha.lan to dns.google"`))
 }
 
 func TestSelectedPanelRendersCompactTimestampWithFullMetadata(t *testing.T) {
@@ -783,7 +844,7 @@ func TestSelectedPanelDisablesEntityActionsForLongRange(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, "Entity actions are available for ranges up to 7 days."))
 	assert.Assert(t, !strings.Contains(markup, "Filter to this entity"))
 	assert.Assert(t, !strings.Contains(markup, "Exclude"))
-	assert.Assert(t, strings.Contains(markup, "Show matching flows"))
+	assert.Assert(t, !strings.Contains(markup, "Show matching flows"))
 }
 
 func TestSelectedPanelPeerLinksSelectPeerEntity(t *testing.T) {
