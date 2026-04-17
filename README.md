@@ -7,6 +7,8 @@
 - `parquethosts`: reads those flat parquet files plus dnsmasq `.jsonl` logs and writes enriched parquet files with host, `_2ld`, and `_tld` fields
 - `parquetflowui`: serves a web UI for browsing enriched parquet netflows with graph, timeline, and table views
 
+For a user-facing overview of what each tool and the UI can do, see [doc/features.md](doc/features.md). For the persisted data formats, parquet columns, JSONL shapes, and embedded manifests, see [doc/schema.md](doc/schema.md).
+
 The current parser targets nfdump v2 files produced by nfdump 1.7.x.
 
 ## Build, Lint, and Test
@@ -30,15 +32,7 @@ go install ./cmd/...
 
 `nfdump2parquet` converts a time-partitioned tree of `nfdump` files into a flat directory of parquet files without calling the external `nfdump` binary.
 
-### Input and Output Layout
-
-The input tree must look like `YYYY/MM/DD/HH/nfcapd.*`.
-
-The output directory contains files named by the coverage they represent:
-
-- previous months: `nfcap_YYYYMM.parquet`
-- previous days in the current month: `nfcap_YYYYMMDD.parquet`
-- hours in the current day: `nfcap_YYYYMMDDHH.parquet`
+Input/output filename layout is documented in [doc/schema.md](doc/schema.md).
 
 ### Usage
 
@@ -113,12 +107,7 @@ When enriched parquet files need rebuilding, the tool shows a stderr progress ba
 - `--src-log`: directory containing daily log files named `YYYY-MM-DD.jsonl`
 - `--dst`: flat output directory for enriched parquet files
 
-The log directory may contain dnsmasq entries and, starting from `2026-04-10.jsonl`, periodic `ip -j neighbour` table dumps.
-
-The dnsmasq entries may contain either:
-
-- structured nested JSON entries with `answers`, `query_name`, and `timestamp_end`
-- legacy `message` entries such as `reply ... is ...`, `cached ... is ...`, `config ... is ...`, or hosts-file lines ending in `... is <ip>`
+The log, cache, and parquet schemas used by enrichment are documented in [doc/schema.md](doc/schema.md).
 
 ### Usage
 
@@ -171,29 +160,7 @@ The tool does not rebuild a parquet file only because an overlapping log file di
 
 The tool also deletes destination `nfcap_*.parquet` files that no longer have a corresponding source parquet file.
 
-### Enriched Columns
-
-The enriched parquet output preserves all original columns and adds these optional fields:
-
-- `src_host`
-- `dst_host`
-- `src_2ld`
-- `dst_2ld`
-- `src_tld`
-- `dst_tld`
-- `src_is_private`
-- `dst_is_private`
-
-Field meaning:
-
-- `_host`: normalized hostname chosen for the IP
-- `_2ld`: one label above the `_tld`, such as `iki.fi` from `www.fingon.iki.fi`
-- `_tld`: top-level suffix value, such as `fi` from `www.fingon.iki.fi` or `co.uk` from `foo.bar.co.uk`
-- `_is_private`: whether the IP falls into the private/local ranges recognized by enrichment
-
-Private/local classification includes IPv4 RFC1918 space plus IPv6 ULA, site-local, and link-local ranges. IPv6 global unicast remains public.
-
-For local names, the tool falls back to label-based derivation. For example, `cer.lan` produces `_2ld=cer.lan` and `_tld=lan`.
+The enriched parquet columns and sidecar file formats are documented in [doc/schema.md](doc/schema.md).
 
 ## `parquetflowui`
 
@@ -215,8 +182,7 @@ The UI uses htmx for navigation and filter updates, with only a small amount of 
 
 - flat directory containing enriched parquet output from `parquethosts`
 
-The UI expects enriched parquet files and validates that they carry the enrichment manifest metadata.
-The UI also builds summary parquet files with an embedded summary `logicVersion`, and stale summaries are rebuilt automatically when summary logic changes.
+The UI expects enriched parquet files and validates that they carry the enrichment manifest metadata. It also builds summary parquet files; their schema and metadata are documented in [doc/schema.md](doc/schema.md).
 
 At `tld` and `2ld` granularities, unresolved entities are split into `Unknown private` and `Unknown public` instead of a single `Unknown` bucket.
 
@@ -288,31 +254,6 @@ plus the persistent cache file:
 
 - `/data/parquet-hosts/reverse_dns_cache.jsonl`
 
-## Base Output Schema
+## Data Schema
 
-Each base parquet row contains:
-
-- `time_start_ns`
-- `time_end_ns`
-- `duration_ns`
-- `ip_version`
-- `protocol`
-- `src_ip`
-- `dst_ip`
-- `src_port`
-- `dst_port`
-- `direction`
-- `packets`
-- `bytes`
-
-`ip_version` is `4` for IPv4 flows, `6` for IPv6 flows, and `0` when the source record does not expose an IP version.
-
-When present in the source record, these optional columns are also emitted:
-
-- `router_ip`
-- `next_hop_ip`
-- `src_as`
-- `dst_as`
-- `src_mask`
-- `dst_mask`
-- `tcp_flags`
+For the base parquet schema, enriched parquet columns, JSONL log shapes, reverse DNS cache format, DNS lookup parquet, and UI summary parquet, see [doc/schema.md](doc/schema.md).
