@@ -592,6 +592,286 @@ func TestServiceFlowDetailsRejectsLongRanges(t *testing.T) {
 	assert.Equal(t, len(flows.VisibleRows), 0)
 }
 
+func TestServiceGraphSelectionBreakdownUsesSelectedEntity(t *testing.T) {
+	tempDir := t.TempDir()
+	tcpRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 400, 10, 20)
+	tcpRecord.Protocol = 6
+	tcpRecord.DstPort = 443
+	udpRecord := sampleRecord("fd00::1", "2001:db8::1", "alpha.lan", "lan", "lan", "resolver.example", "example", "example", 200, 30, 40)
+	udpRecord.Protocol = 17
+	udpRecord.SrcPort = 55000
+	udpRecord.DstPort = 53
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{tcpRecord, udpRecord})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	graph, err := service.Graph(context.Background(), QueryState{
+		Granularity:    GranularityHostname,
+		Metric:         MetricBytes,
+		SelectedEntity: "alpha.lan",
+	})
+	assert.NilError(t, err)
+
+	assert.Assert(t, graph.Breakdown.Protocols != nil)
+	assert.Assert(t, graph.Breakdown.Family != nil)
+	assert.Assert(t, graph.Breakdown.Ports != nil)
+	assert.DeepEqual(t, graph.Breakdown.Protocols.Slices, []BreakdownSlice{
+		{FilterParam: "protocol", FilterValue: "6", Label: "6 (TCP)", Value: 400},
+		{FilterParam: "protocol", FilterValue: "17", Label: "17 (UDP)", Value: 200},
+	})
+	assert.DeepEqual(t, graph.Breakdown.Family.Slices, []BreakdownSlice{
+		{FilterParam: "family", FilterValue: "ipv4", Label: "IPv4", Value: 400},
+		{FilterParam: "family", FilterValue: "ipv6", Label: "IPv6", Value: 200},
+	})
+	assert.DeepEqual(t, graph.Breakdown.Ports.Slices, []BreakdownSlice{
+		{FilterParam: "port", FilterValue: "443", Label: "443", Value: 400},
+		{FilterParam: "port", FilterValue: "53", Label: "53", Value: 200},
+	})
+}
+
+func TestServiceGraphSelectionBreakdownUsesSelectedEdgeDirectionOnly(t *testing.T) {
+	tempDir := t.TempDir()
+	forwardRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 300, 10, 20)
+	forwardRecord.Protocol = 6
+	forwardRecord.DstPort = 443
+	secondForwardRecord := sampleRecord("fd00::1", "2001:db8::1", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 200, 21, 29)
+	secondForwardRecord.Protocol = 17
+	secondForwardRecord.SrcPort = 53000
+	secondForwardRecord.DstPort = 53
+	reverseRecord := sampleRecord("8.8.8.8", "192.168.1.10", "dns.google", "google.com", "com", "alpha.lan", "lan", "lan", 900, 30, 40)
+	reverseRecord.Protocol = 17
+	reverseRecord.SrcPort = 53
+	reverseRecord.DstPort = 55000
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{forwardRecord, secondForwardRecord, reverseRecord})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	graph, err := service.Graph(context.Background(), QueryState{
+		Granularity:     GranularityHostname,
+		Metric:          MetricBytes,
+		SelectedEdgeSrc: "alpha.lan",
+		SelectedEdgeDst: "dns.google",
+	})
+	assert.NilError(t, err)
+
+	assert.Assert(t, graph.Breakdown.Protocols != nil)
+	assert.Assert(t, graph.Breakdown.Family != nil)
+	assert.Assert(t, graph.Breakdown.Ports != nil)
+	assert.DeepEqual(t, graph.Breakdown.Protocols.Slices, []BreakdownSlice{
+		{FilterParam: "protocol", FilterValue: "6", Label: "6 (TCP)", Value: 300},
+		{FilterParam: "protocol", FilterValue: "17", Label: "17 (UDP)", Value: 200},
+	})
+	assert.DeepEqual(t, graph.Breakdown.Family.Slices, []BreakdownSlice{
+		{FilterParam: "family", FilterValue: "ipv4", Label: "IPv4", Value: 300},
+		{FilterParam: "family", FilterValue: "ipv6", Label: "IPv6", Value: 200},
+	})
+	assert.DeepEqual(t, graph.Breakdown.Ports.Slices, []BreakdownSlice{
+		{FilterParam: "port", FilterValue: "443", Label: "443", Value: 300},
+		{FilterParam: "port", FilterValue: "53", Label: "53", Value: 200},
+	})
+}
+
+func TestServiceGraphSelectionBreakdownFallsBackToWholeView(t *testing.T) {
+	tempDir := t.TempDir()
+	tcpRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
+	tcpRecord.Protocol = 6
+	tcpRecord.DstPort = 443
+	udpRecord := sampleRecord("192.168.1.11", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 250, 30, 40)
+	udpRecord.Protocol = 17
+	udpRecord.SrcPort = 53000
+	udpRecord.DstPort = 53
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{tcpRecord, udpRecord})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	graph, err := service.Graph(context.Background(), QueryState{
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+	})
+	assert.NilError(t, err)
+
+	assert.Assert(t, graph.Breakdown.Protocols != nil)
+	assert.DeepEqual(t, graph.Breakdown.Protocols.Slices, []BreakdownSlice{
+		{FilterParam: "protocol", FilterValue: "17", Label: "17 (UDP)", Value: 250},
+		{FilterParam: "protocol", FilterValue: "6", Label: "6 (TCP)", Value: 100},
+	})
+}
+
+func TestServiceGraphSelectionBreakdownUsesConnectionWeighting(t *testing.T) {
+	tempDir := t.TempDir()
+	firstRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 500, 10, 20)
+	firstRecord.Protocol = 6
+	firstRecord.DstPort = 443
+	secondRecord := sampleRecord("192.168.1.10", "8.8.4.4", "alpha.lan", "lan", "lan", "dns-alt.google", "google.com", "com", 100, 30, 40)
+	secondRecord.Protocol = 17
+	secondRecord.SrcPort = 51000
+	secondRecord.DstPort = 53
+	thirdRecord := sampleRecord("192.168.1.10", "1.1.1.1", "alpha.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 50, 50, 60)
+	thirdRecord.Protocol = 17
+	thirdRecord.SrcPort = 52000
+	thirdRecord.DstPort = 53
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{firstRecord, secondRecord, thirdRecord})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	graph, err := service.Graph(context.Background(), QueryState{
+		Granularity:    GranularityHostname,
+		Metric:         MetricConnections,
+		SelectedEntity: "alpha.lan",
+	})
+	assert.NilError(t, err)
+
+	assert.DeepEqual(t, graph.Breakdown.Protocols.Slices, []BreakdownSlice{
+		{FilterParam: "protocol", FilterValue: "17", Label: "17 (UDP)", Value: 2},
+		{FilterParam: "protocol", FilterValue: "6", Label: "6 (TCP)", Value: 1},
+	})
+	assert.DeepEqual(t, graph.Breakdown.Ports.Slices, []BreakdownSlice{
+		{FilterParam: "port", FilterValue: "53", Label: "53", Value: 2},
+		{FilterParam: "port", FilterValue: "443", Label: "443", Value: 1},
+	})
+}
+
+func TestServiceGraphFiltersByProtocolAndPort(t *testing.T) {
+	tempDir := t.TempDir()
+	tcpRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
+	tcpRecord.Protocol = 6
+	tcpRecord.DstPort = 443
+	udpRecord := sampleRecord("192.168.1.11", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 200, 30, 40)
+	udpRecord.Protocol = 17
+	udpRecord.DstPort = 53
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{tcpRecord, udpRecord})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	protocolGraph, err := service.Graph(context.Background(), QueryState{
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+		Protocol:    17,
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, protocolGraph.Totals.Bytes, int64(200))
+	assert.Assert(t, containsNode(protocolGraph.Nodes, "one.one.one.one"))
+	assert.Assert(t, !containsNode(protocolGraph.Nodes, "dns.google"))
+
+	portGraph, err := service.Graph(context.Background(), QueryState{
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+		Port:        443,
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, portGraph.Totals.Bytes, int64(100))
+	assert.Assert(t, containsNode(portGraph.Nodes, "dns.google"))
+	assert.Assert(t, !containsNode(portGraph.Nodes, "one.one.one.one"))
+}
+
+func TestServiceFlowDetailsFiltersByPort(t *testing.T) {
+	tempDir := t.TempDir()
+	tcpRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
+	tcpRecord.Protocol = 6
+	tcpRecord.DstPort = 443
+	udpRecord := sampleRecord("192.168.1.10", "1.1.1.1", "alpha.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 200, 30, 40)
+	udpRecord.Protocol = 17
+	udpRecord.DstPort = 53
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{tcpRecord, udpRecord})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	flows, err := service.FlowDetails(context.Background(), FlowQuery{
+		Entity: "alpha.lan",
+		Scope:  FlowScopeEntity,
+		State: QueryState{
+			Granularity: GranularityHostname,
+			Metric:      MetricBytes,
+			Port:        53,
+		},
+	})
+	assert.NilError(t, err)
+
+	assert.Equal(t, flows.TotalCount, 1)
+	assert.Equal(t, flows.VisibleRows[0].DstPort, int32(53))
+}
+
+func TestFoldBreakdownSlicesUsesTopFiveAndRest(t *testing.T) {
+	slices := foldBreakdownSlices([]BreakdownSlice{
+		{Label: "a", Value: 50},
+		{Label: "b", Value: 20},
+		{Label: "c", Value: 10},
+		{Label: "d", Value: 8},
+		{Label: "e", Value: 6},
+		{Label: "f", Value: 4},
+		{Label: "g", Value: 2},
+	})
+
+	assert.DeepEqual(t, slices, []BreakdownSlice{
+		{Label: "a", Value: 50},
+		{Label: "b", Value: 20},
+		{Label: "c", Value: 10},
+		{Label: "d", Value: 8},
+		{Label: breakdownRestLabel, Value: 12},
+	})
+}
+
+func TestServiceGraphSelectionBreakdownOmitsUniformChartsAndTransientPorts(t *testing.T) {
+	tempDir := t.TempDir()
+	firstRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
+	firstRecord.Protocol = 6
+	firstRecord.SrcPort = 55001
+	firstRecord.DstPort = 443
+	secondRecord := sampleRecord("192.168.1.11", "8.8.4.4", "beta.lan", "lan", "lan", "dns-alt.google", "google.com", "com", 200, 30, 40)
+	secondRecord.Protocol = 6
+	secondRecord.SrcPort = 55002
+	secondRecord.DstPort = 443
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{firstRecord, secondRecord})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	graph, err := service.Graph(context.Background(), QueryState{
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+	})
+	assert.NilError(t, err)
+
+	assert.Assert(t, graph.Breakdown.Protocols == nil)
+	assert.Assert(t, graph.Breakdown.Family == nil)
+	assert.Assert(t, graph.Breakdown.Ports == nil)
+}
+
+func TestServiceGraphSelectionBreakdownUnavailableForDNSMetric(t *testing.T) {
+	tempDir := t.TempDir()
+	record := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
+	record.Protocol = 6
+	record.DstPort = 443
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{record})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	graph, err := service.Graph(context.Background(), QueryState{
+		Granularity: GranularityHostname,
+		Metric:      MetricDNSLookups,
+	})
+	assert.NilError(t, err)
+
+	assert.Assert(t, graph.Breakdown.Protocols == nil)
+	assert.Assert(t, graph.Breakdown.Family == nil)
+	assert.Assert(t, graph.Breakdown.Ports == nil)
+}
+
 func TestServiceGraphPresetRangeDiffersAcrossFiles(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_20260320.parquet"), []model.FlowRecord{
@@ -1155,6 +1435,69 @@ func TestNewServiceBuildsUISummariesWithDirection(t *testing.T) {
 	assert.Assert(t, containsHistogramSummaryDirection(histogramRows, directionIngressParquetValue))
 }
 
+func TestNewServiceBuildsUISummariesWithProtocolAndServicePort(t *testing.T) {
+	tempDir := t.TempDir()
+	record := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour))
+	record.Protocol = 6
+	record.DstPort = 443
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{record})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	var edgeRows []parquetout.EdgeSummaryRow
+	err = parquetout.ReadEdgeSummaryRows(filepath.Join(tempDir, "ui_summary_edges_2ld_202604.parquet"), func(rows []parquetout.EdgeSummaryRow) error {
+		edgeRows = append(edgeRows, rows...)
+		return nil
+	})
+	assert.NilError(t, err)
+
+	var histogramRows []parquetout.HistogramSummaryRow
+	err = parquetout.ReadHistogramSummaryRows(filepath.Join(tempDir, "ui_summary_histogram_202604.parquet"), func(rows []parquetout.HistogramSummaryRow) error {
+		histogramRows = append(histogramRows, rows...)
+		return nil
+	})
+	assert.NilError(t, err)
+
+	assert.Assert(t, containsEdgeSummaryProtocolAndPort(edgeRows, 6, 443))
+	assert.Assert(t, containsHistogramSummaryProtocolAndPort(histogramRows, 6, 443))
+}
+
+func TestServiceGraphPortFilterUsesSummaryFastPath(t *testing.T) {
+	tempDir := t.TempDir()
+	tcpRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour))
+	tcpRecord.Protocol = 6
+	tcpRecord.DstPort = 443
+	udpRecord := sampleRecord("192.168.1.11", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 200, int64(3*time.Hour), int64(4*time.Hour))
+	udpRecord.Protocol = 17
+	udpRecord.DstPort = 53
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{tcpRecord, udpRecord})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	span, err := service.Span(context.Background())
+	assert.NilError(t, err)
+	state := QueryState{
+		Granularity: Granularity2LD,
+		Metric:      MetricBytes,
+		Port:        443,
+	}.Normalized(span)
+
+	assert.Assert(t, service.canUseSummaryGraph(state, span))
+	graph, err := service.Graph(context.Background(), state)
+	assert.NilError(t, err)
+
+	assert.Equal(t, graph.Totals.Bytes, int64(100))
+	assert.Assert(t, containsNode(graph.Nodes, "google.com"))
+	assert.Assert(t, !containsNode(graph.Nodes, "one.one.one.one"))
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricBytes, service.currentRevision()) + ":protocol=0:port=443"
+	_, ok := service.summaryGraphCache.Get(cacheKey)
+	assert.Assert(t, ok)
+}
+
 func TestServiceRefreshMetadataRemovesStaleUISummaries(t *testing.T) {
 	tempDir := t.TempDir()
 	stalePath := filepath.Join(tempDir, "nfcap_202604.parquet")
@@ -1375,6 +1718,24 @@ func containsEdgeSummaryDirection(rows []parquetout.EdgeSummaryRow, direction in
 func containsHistogramSummaryDirection(rows []parquetout.HistogramSummaryRow, direction int32) bool {
 	for _, row := range rows {
 		if row.Direction != nil && *row.Direction == direction {
+			return true
+		}
+	}
+	return false
+}
+
+func containsEdgeSummaryProtocolAndPort(rows []parquetout.EdgeSummaryRow, protocol, port int32) bool {
+	for _, row := range rows {
+		if row.Protocol == protocol && row.ServicePort != nil && *row.ServicePort == port {
+			return true
+		}
+	}
+	return false
+}
+
+func containsHistogramSummaryProtocolAndPort(rows []parquetout.HistogramSummaryRow, protocol, port int32) bool {
+	for _, row := range rows {
+		if row.Protocol == protocol && row.ServicePort != nil && *row.ServicePort == port {
 			return true
 		}
 	}

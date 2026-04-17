@@ -26,6 +26,8 @@ const (
 	directionIngressParquetValue int32 = 0
 	directionEgressParquetValue  int32 = 1
 	dnsLookupAnswerExpression          = "COALESCE(answer, '')"
+	breakdownSliceLimit                = 5
+	breakdownRestLabel                 = "Rest"
 	filteredCTEName                    = "filtered_flows"
 	graphRestSourceID                  = "Other Sources"
 	graphRestDestination               = "Other Destinations"
@@ -61,8 +63,11 @@ var requiredColumns = []string{
 	"dst_host",
 	"dst_ip",
 	"dst_is_private",
+	"dst_port",
 	"dst_tld",
 	"ip_version",
+	"protocol",
+	"src_port",
 	"src_2ld",
 	"src_host",
 	"src_ip",
@@ -153,14 +158,33 @@ type DetailPeer struct {
 	MetricValue int64
 }
 
+type BreakdownChart struct {
+	Label  string
+	Slices []BreakdownSlice
+}
+
+type BreakdownSlice struct {
+	FilterParam string
+	FilterValue string
+	Label       string
+	Value       int64
+}
+
+type SelectionBreakdown struct {
+	Family    *BreakdownChart
+	Ports     *BreakdownChart
+	Protocols *BreakdownChart
+}
+
 type GraphData struct {
 	ActiveGranularity Granularity `json:"activeGranularity"`
 	ActiveMetric      Metric      `json:"activeMetric"`
 	Breadcrumbs       []string    `json:"breadcrumbs"`
-	Edges             []Edge      `json:"edges"`
-	HiddenEdgeCount   int         `json:"hiddenEdgeCount"`
-	HiddenNodeCount   int         `json:"hiddenNodeCount"`
-	Nodes             []Node      `json:"nodes"`
+	Breakdown         SelectionBreakdown
+	Edges             []Edge `json:"edges"`
+	HiddenEdgeCount   int    `json:"hiddenEdgeCount"`
+	HiddenNodeCount   int    `json:"hiddenNodeCount"`
+	Nodes             []Node `json:"nodes"`
 	NodePositions     map[string]LayoutPoint
 	SelectedEdge      *Edge          `json:"selectedEdge"`
 	SelectedNode      *Node          `json:"selectedNode"`
@@ -460,18 +484,25 @@ func (s *Service) graphWithSpan(ctx context.Context, state QueryState, span Time
 
 	var selectedNode *Node
 	var selectedEdge *Edge
+	var breakdown SelectionBreakdown
 	var peers []DetailPeer
 	var sparkline []HistogramBin
 	var nodePositions map[string]LayoutPoint
+	var selectionDuration time.Duration
+	var layoutDuration time.Duration
 	group, groupContext = errgroup.WithContext(ctx)
 	group.Go(func() error {
+		startTime := time.Now()
 		var queryErr error
-		selectedNode, selectedEdge, peers, sparkline, queryErr = s.selectionDetails(groupContext, state, span, keepEntities, visibleNodeMap, visibleEdges)
+		selectedNode, selectedEdge, peers, sparkline, breakdown, queryErr = s.selectionDetails(groupContext, state, span, keepEntities, visibleNodeMap, visibleEdges)
+		selectionDuration = time.Since(startTime)
 		return queryErr
 	})
 	group.Go(func() error {
+		startTime := time.Now()
 		var queryErr error
 		nodePositions, queryErr = s.layoutPositions(groupContext, state)
+		layoutDuration = time.Since(startTime)
 		return queryErr
 	})
 	if err := group.Wait(); err != nil {
@@ -483,6 +514,7 @@ func (s *Service) graphWithSpan(ctx context.Context, state QueryState, span Time
 		ActiveGranularity: state.Granularity,
 		ActiveMetric:      state.Metric,
 		Breadcrumbs:       buildBreadcrumbs(state),
+		Breakdown:         breakdown,
 		Edges:             visibleEdges,
 		HiddenEdgeCount:   hiddenEdgeCount,
 		HiddenNodeCount:   max(0, len(nodeTotals)-countNonSynthetic(nodeTotals, keepLookup)),
@@ -504,6 +536,8 @@ func (s *Service) graphWithSpan(ctx context.Context, state QueryState, span Time
 		"metric", state.Metric,
 		"node_totals_ms", nodeTotalsLoadedAt.Sub(queryStart).Milliseconds(),
 		"edge_data_ms", edgeDataLoadedAt.Sub(nodeTotalsLoadedAt).Milliseconds(),
+		"selection_ms", selectionDuration.Milliseconds(),
+		"layout_ms", layoutDuration.Milliseconds(),
 		"layout_selection_ms", layoutAndSelectionLoadedAt.Sub(edgeDataLoadedAt).Milliseconds(),
 		"duration_ms", time.Since(queryStart).Milliseconds(),
 	)
@@ -992,6 +1026,9 @@ func (s *Service) scheduleSummaryRefresh(jobs []summaryJob) {
 			slog.Warn("background UI summary refresh failed", "err", err)
 			return
 		}
+		s.mu.Lock()
+		s.summaryRefreshPending = false
+		s.mu.Unlock()
 		slog.Debug("background UI summary refresh complete", "duration_ms", time.Since(startTime).Milliseconds())
 		if err := s.refreshMetadataWithOptions(bgCtx, refreshMetadataOptions{forceSummary: true}); err != nil {
 			slog.Warn("publish refreshed UI summaries failed", "err", err)
@@ -1038,10 +1075,11 @@ func (s *Service) filteredCTE(state QueryState) (string, []any) {
 
 	srcExpr, dstExpr := entityExpressions(state.Granularity)
 	whereClause, args := filterClause(state, srcExpr, dstExpr)
-	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, bytes, 0 AS nxdomain_lookups, 0 AS successful_lookups, dst_is_private, ip_version, src_is_private, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
+	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, bytes, 0 AS nxdomain_lookups, 0 AS successful_lookups, dst_is_private, ip_version, protocol, %s AS service_port, src_is_private, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
 		filteredCTEName,
 		srcExpr,
 		dstExpr,
+		rawServicePortExpression(),
 		quoteLiteral(s.globPath),
 		whereClause,
 	), args
@@ -1051,7 +1089,7 @@ func (s *Service) filteredRawFlowsCTE(state QueryState) (string, []any) {
 	srcScopeExpr, dstScopeExpr := entityExpressions(state.Granularity)
 	srcDisplayExpr, dstDisplayExpr := entityExpressions(GranularityHostname)
 	whereClause, args := filterClause(state, srcScopeExpr, dstScopeExpr)
-	return fmt.Sprintf("WITH %s AS (SELECT %s AS %s, %s AS %s, %s AS src_entity, %s AS dst_entity, bytes, direction, dst_ip, dst_port, ip_version, packets, protocol, src_ip, src_port, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
+	return fmt.Sprintf("WITH %s AS (SELECT %s AS %s, %s AS %s, %s AS src_entity, %s AS dst_entity, bytes, direction, dst_ip, dst_port, ip_version, packets, protocol, %s AS service_port, src_ip, src_port, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
 		filteredCTEName,
 		srcScopeExpr,
 		srcScopeEntityColumn,
@@ -1059,6 +1097,7 @@ func (s *Service) filteredRawFlowsCTE(state QueryState) (string, []any) {
 		dstScopeEntityColumn,
 		srcDisplayExpr,
 		dstDisplayExpr,
+		rawServicePortExpression(),
 		quoteLiteral(s.globPath),
 		whereClause,
 	), args
@@ -1321,7 +1360,7 @@ func (s *Service) selectionDetails(
 	keepEntities []string,
 	visibleNodeMap map[string]Node,
 	visibleEdges []Edge,
-) (*Node, *Edge, []DetailPeer, []HistogramBin, error) {
+) (*Node, *Edge, []DetailPeer, []HistogramBin, SelectionBreakdown, error) {
 	var selectedNode *Node
 	if state.SelectedEntity != "" {
 		if node, ok := visibleNodeMap[state.SelectedEntity]; ok {
@@ -1341,14 +1380,23 @@ func (s *Service) selectionDetails(
 		}
 	}
 
+	var breakdown SelectionBreakdown
+	if state.Metric != MetricDNSLookups && state.EntityActionsEnabled() {
+		var err error
+		breakdown, err = s.selectionBreakdown(ctx, state)
+		if err != nil {
+			return nil, nil, nil, nil, SelectionBreakdown{}, err
+		}
+	}
+
 	if selectedNode == nil {
-		return nil, selectedEdge, nil, nil, nil
+		return nil, selectedEdge, nil, nil, breakdown, nil
 	}
 
 	if selectedNode.Synthetic {
 		topEntities, err := s.queryRestTopEntities(ctx, state, keepEntities, selectedNode.ID == graphRestSourceID)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, SelectionBreakdown{}, err
 		}
 		peers := make([]DetailPeer, 0, len(topEntities))
 		for _, entity := range topEntities {
@@ -1357,7 +1405,7 @@ func (s *Service) selectionDetails(
 				MetricValue: entity.Total,
 			})
 		}
-		return selectedNode, selectedEdge, peers, nil, nil
+		return selectedNode, selectedEdge, peers, nil, breakdown, nil
 	}
 
 	var peers []DetailPeer
@@ -1374,9 +1422,300 @@ func (s *Service) selectionDetails(
 		return queryErr
 	})
 	if err := group.Wait(); err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, SelectionBreakdown{}, err
 	}
-	return selectedNode, selectedEdge, peers, sparkline, nil
+	return selectedNode, selectedEdge, peers, sparkline, breakdown, nil
+}
+
+func (s *Service) selectionBreakdown(ctx context.Context, state QueryState) (SelectionBreakdown, error) {
+	if state.Metric == MetricDNSLookups {
+		return SelectionBreakdown{}, nil
+	}
+
+	cte, args := s.filteredRawFlowsCTE(state)
+	scopeClause, scopeArgs := selectionBreakdownScopeClause(state)
+	queryArgs := append(append([]any(nil), args...), scopeArgs...)
+
+	var protocols []BreakdownSlice
+	var families []BreakdownSlice
+	var ports []BreakdownSlice
+
+	group, groupContext := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		var err error
+		protocols, err = s.queryBreakdownProtocols(groupContext, state.Metric, cte, scopeClause, queryArgs)
+		return err
+	})
+	group.Go(func() error {
+		var err error
+		families, err = s.queryBreakdownFamilies(groupContext, state.Metric, cte, scopeClause, queryArgs)
+		return err
+	})
+	group.Go(func() error {
+		var err error
+		ports, err = s.queryBreakdownPorts(groupContext, state.Metric, cte, scopeClause, queryArgs)
+		return err
+	})
+	if err := group.Wait(); err != nil {
+		return SelectionBreakdown{}, err
+	}
+
+	breakdown := SelectionBreakdown{}
+	protocols = foldBreakdownSlices(protocols)
+	families = foldBreakdownSlices(families)
+	ports = foldBreakdownSlices(ports)
+	if len(protocols) > 1 {
+		breakdown.Protocols = &BreakdownChart{Label: "Protocols", Slices: protocols}
+	}
+	if len(families) > 1 {
+		breakdown.Family = &BreakdownChart{Label: "IP Family", Slices: families}
+	}
+	if len(ports) > 1 {
+		breakdown.Ports = &BreakdownChart{Label: "Popular Ports", Slices: ports}
+	}
+	return breakdown, nil
+}
+
+func selectionBreakdownScopeClause(state QueryState) (string, []any) {
+	switch {
+	case state.SelectedEdgeSrc != "" && state.SelectedEdgeDst != "":
+		return fmt.Sprintf("(%s = ? AND %s = ?)", srcScopeEntityColumn, dstScopeEntityColumn), []any{state.SelectedEdgeSrc, state.SelectedEdgeDst}
+	case state.SelectedEntity != "":
+		return fmt.Sprintf("(%s = ? OR %s = ?)", srcScopeEntityColumn, dstScopeEntityColumn), []any{state.SelectedEntity, state.SelectedEntity}
+	default:
+		return "true", nil
+	}
+}
+
+func (s *Service) queryBreakdownProtocols(ctx context.Context, metric Metric, cte, scopeClause string, args []any) ([]BreakdownSlice, error) {
+	query := fmt.Sprintf(`%s
+SELECT protocol, SUM(metric_value) AS total_metric
+FROM (
+  SELECT protocol, %s AS metric_value
+  FROM %s
+  WHERE %s
+) protocol_breakdown
+GROUP BY protocol
+ORDER BY total_metric DESC, protocol
+`, cte, metricValueExpression(metric), filteredCTEName, scopeClause)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query protocol breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	slices := make([]BreakdownSlice, 0, 8)
+	for rows.Next() {
+		var protocol int32
+		var total int64
+		if err := rows.Scan(&protocol, &total); err != nil {
+			return nil, fmt.Errorf("scan protocol breakdown row: %w", err)
+		}
+		slices = append(slices, BreakdownSlice{
+			FilterParam: "protocol",
+			FilterValue: strconv.FormatInt(int64(protocol), 10),
+			Label:       rawFlowProtocolLabel(protocol),
+			Value:       total,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate protocol breakdown rows: %w", err)
+	}
+	return slices, nil
+}
+
+func (s *Service) queryBreakdownFamilies(ctx context.Context, metric Metric, cte, scopeClause string, args []any) ([]BreakdownSlice, error) {
+	query := fmt.Sprintf(`%s
+SELECT ip_version, SUM(metric_value) AS total_metric
+FROM (
+  SELECT ip_version, %s AS metric_value
+  FROM %s
+  WHERE %s
+) family_breakdown
+GROUP BY ip_version
+ORDER BY total_metric DESC, ip_version
+`, cte, metricValueExpression(metric), filteredCTEName, scopeClause)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query family breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	slices := make([]BreakdownSlice, 0, 2)
+	for rows.Next() {
+		var family int32
+		var total int64
+		if err := rows.Scan(&family, &total); err != nil {
+			return nil, fmt.Errorf("scan family breakdown row: %w", err)
+		}
+		slice := BreakdownSlice{Label: ipFamilyBreakdownLabel(family), Value: total}
+		if filterValue := addressFamilyFilterValue(family); filterValue != "" {
+			slice.FilterParam = "family"
+			slice.FilterValue = filterValue
+		}
+		slices = append(slices, slice)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate family breakdown rows: %w", err)
+	}
+	return slices, nil
+}
+
+func (s *Service) queryBreakdownPorts(ctx context.Context, metric Metric, cte, scopeClause string, args []any) ([]BreakdownSlice, error) {
+	query := fmt.Sprintf(`%s
+SELECT service_port, SUM(metric_value) AS total_metric
+FROM (
+  SELECT
+    service_port,
+    %s AS metric_value
+  FROM %s
+  WHERE %s
+) port_breakdown
+WHERE service_port IS NOT NULL
+GROUP BY service_port
+ORDER BY total_metric DESC, service_port
+`, cte, metricValueExpression(metric), filteredCTEName, scopeClause)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query port breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	ports := make([]BreakdownSlice, 0, breakdownSliceLimit+1)
+	for rows.Next() {
+		var port int32
+		var total int64
+		if err := rows.Scan(&port, &total); err != nil {
+			return nil, fmt.Errorf("scan port breakdown row: %w", err)
+		}
+		portLabel := strconv.FormatInt(int64(port), 10)
+		ports = append(ports, BreakdownSlice{FilterParam: "port", FilterValue: portLabel, Label: portLabel, Value: total})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate port breakdown rows: %w", err)
+	}
+	return ports, nil
+}
+
+func foldBreakdownSlices(slices []BreakdownSlice) []BreakdownSlice {
+	if len(slices) == 0 {
+		return nil
+	}
+	var total int64
+	for _, slice := range slices {
+		total += slice.Value
+	}
+	if total <= 0 {
+		return nil
+	}
+	ret := make([]BreakdownSlice, 0, breakdownSliceLimit)
+	var restTotal int64
+	for index, slice := range slices {
+		if slice.Value <= 0 {
+			continue
+		}
+		if index < breakdownSliceLimit && slice.Value*100 >= total*5 {
+			ret = append(ret, slice)
+			continue
+		}
+		restTotal += slice.Value
+	}
+	if restTotal > 0 {
+		if len(ret) >= breakdownSliceLimit {
+			restTotal += ret[len(ret)-1].Value
+			ret = ret[:len(ret)-1]
+		}
+		ret = append(ret, BreakdownSlice{Label: breakdownRestLabel, Value: restTotal})
+	}
+	return ret
+}
+
+func breakdownFromTotals(protocolTotals, familyTotals, portTotals map[int32]int64) SelectionBreakdown {
+	protocols := foldBreakdownSlices(breakdownSlicesFromIntTotals(protocolTotals, "protocol", rawFlowProtocolLabel, func(value int32) string {
+		return strconv.FormatInt(int64(value), 10)
+	}))
+	families := foldBreakdownSlices(breakdownSlicesFromIntTotals(familyTotals, "family", ipFamilyBreakdownLabel, addressFamilyFilterValue))
+	ports := foldBreakdownSlices(breakdownSlicesFromIntTotals(portTotals, "port", func(value int32) string {
+		return strconv.FormatInt(int64(value), 10)
+	}, func(value int32) string {
+		return strconv.FormatInt(int64(value), 10)
+	}))
+
+	breakdown := SelectionBreakdown{}
+	if len(protocols) > 1 {
+		breakdown.Protocols = &BreakdownChart{Label: "Protocols", Slices: protocols}
+	}
+	if len(families) > 1 {
+		breakdown.Family = &BreakdownChart{Label: "IP Family", Slices: families}
+	}
+	if len(ports) > 1 {
+		breakdown.Ports = &BreakdownChart{Label: "Popular Ports", Slices: ports}
+	}
+	return breakdown
+}
+
+func breakdownSlicesFromIntTotals(totals map[int32]int64, filterParam string, labelFunc, filterValueFunc func(int32) string) []BreakdownSlice {
+	values := make([]int32, 0, len(totals))
+	for value, total := range totals {
+		if total <= 0 {
+			continue
+		}
+		values = append(values, value)
+	}
+	slices.SortFunc(values, func(left, right int32) int {
+		leftTotal := totals[left]
+		rightTotal := totals[right]
+		if leftTotal == rightTotal {
+			if left < right {
+				return -1
+			}
+			if left > right {
+				return 1
+			}
+			return 0
+		}
+		if leftTotal > rightTotal {
+			return -1
+		}
+		return 1
+	})
+
+	ret := make([]BreakdownSlice, 0, len(values))
+	for _, value := range values {
+		filterValue := filterValueFunc(value)
+		slice := BreakdownSlice{
+			Label: labelFunc(value),
+			Value: totals[value],
+		}
+		if filterValue != "" {
+			slice.FilterParam = filterParam
+			slice.FilterValue = filterValue
+		}
+		ret = append(ret, slice)
+	}
+	return ret
+}
+
+func ipFamilyBreakdownLabel(family int32) string {
+	switch family {
+	case model.IPVersion4:
+		return "IPv4"
+	case model.IPVersion6:
+		return "IPv6"
+	default:
+		return strconv.FormatInt(int64(family), 10)
+	}
+}
+
+func addressFamilyFilterValue(family int32) string {
+	switch family {
+	case model.IPVersion4:
+		return string(AddressFamilyIPv4)
+	case model.IPVersion6:
+		return string(AddressFamilyIPv6)
+	default:
+		return ""
+	}
 }
 
 func (s *Service) queryNodePeers(ctx context.Context, state QueryState, entity string) ([]DetailPeer, error) {
@@ -1557,6 +1896,14 @@ func filterClause(state QueryState, srcExpr, dstExpr string) (string, []any) {
 			conditions = append(conditions, "direction = ?")
 			args = append(args, directionIngressParquetValue)
 		}
+		if state.Protocol > 0 {
+			conditions = append(conditions, "protocol = ?")
+			args = append(args, state.Protocol)
+		}
+		if state.Port > 0 {
+			conditions = append(conditions, rawServicePortExpression()+" = ?")
+			args = append(args, state.Port)
+		}
 	}
 
 	switch state.AddressFamily {
@@ -1569,6 +1916,44 @@ func filterClause(state QueryState, srcExpr, dstExpr string) (string, []any) {
 	}
 
 	return strings.Join(conditions, " AND "), args
+}
+
+func rawServicePortExpression() string {
+	return servicePortExpression("src_port", "dst_port", "protocol", "direction")
+}
+
+func servicePortExpression(srcPortColumn, dstPortColumn, protocolColumn, directionColumn string) string {
+	return fmt.Sprintf(`CASE
+  WHEN %s NOT IN (6, 17) THEN NULL
+  WHEN %s BETWEEN 1 AND 9999 AND %s BETWEEN 1 AND 9999 THEN
+    CASE
+      WHEN %s = %d THEN %s
+      WHEN %s = %d THEN %s
+      WHEN %s <= %s THEN %s
+      ELSE %s
+    END
+  WHEN %s BETWEEN 1 AND 9999 THEN %s
+  WHEN %s BETWEEN 1 AND 9999 THEN %s
+  ELSE NULL
+END`,
+		protocolColumn,
+		srcPortColumn,
+		dstPortColumn,
+		directionColumn,
+		directionEgressParquetValue,
+		dstPortColumn,
+		directionColumn,
+		directionIngressParquetValue,
+		srcPortColumn,
+		srcPortColumn,
+		dstPortColumn,
+		srcPortColumn,
+		dstPortColumn,
+		srcPortColumn,
+		srcPortColumn,
+		dstPortColumn,
+		dstPortColumn,
+	)
 }
 
 func metricValueExpression(metric Metric) string {
@@ -1758,6 +2143,12 @@ func buildBreadcrumbs(state QueryState) []string {
 	}
 	if state.Direction != "" && state.Direction != DirectionBoth {
 		breadcrumbs = append(breadcrumbs, "Direction: "+directionLabel(state.Direction))
+	}
+	if state.Protocol > 0 {
+		breadcrumbs = append(breadcrumbs, "Protocol: "+rawFlowProtocolLabel(state.Protocol))
+	}
+	if state.Port > 0 {
+		breadcrumbs = append(breadcrumbs, "Port: "+strconv.FormatInt(int64(state.Port), 10))
 	}
 	return breadcrumbs
 }

@@ -329,6 +329,8 @@ Manifest metadata is used to decide whether outputs are fresh or need rebuilding
 - `ip_version`
 - `last_seen_ns`
 - `nxdomain_lookups`
+- `protocol`
+- `service_port`
 - `src_private_bytes`
 - `src_private_connections`
 - `src_public_bytes`
@@ -350,3 +352,5 @@ Manifest metadata is used to decide whether outputs are fresh or need rebuilding
 - `connections`
 - `direction`
 - `ip_version`
+- `protocol`
+- `service_port`

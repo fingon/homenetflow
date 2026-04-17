@@ -117,6 +117,8 @@ type QueryState struct {
 	NodeLimit       int
 	Page            int
 	PageSize        int
+	Port            int32
+	Protocol        int32
 	Search          string
 	SelectedEdgeDst string
 	SelectedEdgeSrc string
@@ -151,6 +153,8 @@ type ClientState struct {
 	NodeLimit       int      `json:"node_limit"`
 	Page            int      `json:"page"`
 	PageSize        int      `json:"page_size"`
+	Port            int32    `json:"port"`
+	Protocol        int32    `json:"protocol"`
 	Search          string   `json:"search"`
 	SelectedEdgeDst string   `json:"selected_edge_dst"`
 	SelectedEdgeSrc string   `json:"selected_edge_src"`
@@ -214,6 +218,14 @@ func ParseQueryState(r *http.Request) QueryState {
 
 	if pageSize := parsePositiveInt(query.Get("page_size")); pageSize > 0 {
 		state.PageSize = pageSize
+	}
+
+	if protocol := parsePositiveInt32(query.Get("protocol")); protocol > 0 {
+		state.Protocol = protocol
+	}
+
+	if port := parsePositiveInt32(query.Get("port")); port > 0 {
+		state.Port = port
 	}
 
 	if edgeLimit := parseNonNegativeInt(query.Get("edge_limit")); edgeLimit >= 0 {
@@ -288,6 +300,8 @@ func (s QueryState) normalized(span TimeSpan, pruneEntityActions bool) QueryStat
 	}
 	if state.Metric == MetricDNSLookups {
 		state.Direction = DirectionBoth
+		state.Port = 0
+		state.Protocol = 0
 	}
 	if !state.Sort.valid() {
 		state.Sort = defaultSortForMetric(state.Metric)
@@ -364,6 +378,12 @@ func (s QueryState) Values() url.Values {
 	if s.PageSize != defaultPageSize {
 		values.Set("page_size", strconv.Itoa(s.PageSize))
 	}
+	if s.Protocol > 0 {
+		values.Set("protocol", strconv.FormatInt(int64(s.Protocol), 10))
+	}
+	if s.Port > 0 {
+		values.Set("port", strconv.FormatInt(int64(s.Port), 10))
+	}
 	if s.Search != "" {
 		values.Set("search", s.Search)
 	}
@@ -427,6 +447,8 @@ func (s QueryState) ClientState() ClientState {
 		NodeLimit:       s.NodeLimit,
 		Page:            s.Page,
 		PageSize:        s.PageSize,
+		Port:            s.Port,
+		Protocol:        s.Protocol,
 		Search:          s.Search,
 		SelectedEdgeDst: s.SelectedEdgeDst,
 		SelectedEdgeSrc: s.SelectedEdgeSrc,
@@ -598,6 +620,14 @@ func parsePositiveInt(value string) int {
 		return 0
 	}
 	return parsed
+}
+
+func parsePositiveInt32(value string) int32 {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 32)
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return int32(parsed)
 }
 
 func parseNonNegativeInt(value string) int {

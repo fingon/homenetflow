@@ -337,6 +337,92 @@ input[type="search"] {
   font-size: 0.9rem;
 }
 
+.breakdown-panel {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 0.85rem;
+}
+
+.breakdown-chart {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.breakdown-chart-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.breakdown-chart-body {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.breakdown-svg {
+  width: 8.5rem;
+  height: 8.5rem;
+}
+
+.breakdown-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.breakdown-list-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.breakdown-list-label {
+  min-width: 0;
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+
+.breakdown-list-swatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+
+.breakdown-list-value {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.breakdown-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.breakdown-link:hover,
+.breakdown-link:focus-visible {
+  text-decoration: underline;
+}
+
+.breakdown-svg a path {
+  cursor: pointer;
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
@@ -653,5 +739,14 @@ svg.histogram-svg {
 
   .graph-canvas {
     min-height: 24rem;
+  }
+
+  .breakdown-chart-body {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+
+  .breakdown-list {
+    width: 100%;
   }
 }

@@ -18,6 +18,8 @@ const (
 	graphDenseNodeCount             = 36
 	graphPrimaryRingCount           = 12
 	graphWidthPx                    = 960
+	breakdownChartSizePx            = 136
+	breakdownDonutThicknessPx       = 24
 	fullTimestampFormat             = time.RFC3339
 	histogramAxisTickCount          = 5
 	histogramBottomPadPx            = 28
@@ -67,6 +69,16 @@ var ipProtocolNames = map[int32]string{
 	51:  "AH",
 	58:  "ICMPv6",
 	132: "SCTP",
+}
+
+var breakdownSliceColors = []string{
+	"#b14d24",
+	"#587ea3",
+	"#4d6f52",
+	"#c4a237",
+	"#8d2f20",
+	"#7d6f9b",
+	"#3c8f87",
 }
 
 func Index(dashboard DashboardData, devMode bool, devSessionToken string) g.Node {
@@ -180,6 +192,7 @@ func AppShell(dashboard DashboardData) g.Node {
 				),
 			),
 		),
+		BreakdownPanel(state, dashboard.Graph),
 		Section(
 			Class("section-panel section-block"),
 			ID("rankings-section"),
@@ -240,6 +253,14 @@ func SummaryPanel(state QueryState, graph GraphData) g.Node {
 	if currentDirection != DirectionBoth {
 		directionChip = Span(Class("chip"), g.Text("Direction: "+directionLabel(currentDirection)))
 	}
+	protocolChip := g.Node(nil)
+	if state.Protocol > 0 {
+		protocolChip = Span(Class("chip"), g.Text("Protocol: "+rawFlowProtocolLabel(state.Protocol)))
+	}
+	portChip := g.Node(nil)
+	if state.Port > 0 {
+		portChip = Span(Class("chip"), g.Text("Port: "+strconv.FormatInt(int64(state.Port), 10)))
+	}
 
 	return Div(
 		Class("summary-panel"),
@@ -249,6 +270,8 @@ func SummaryPanel(state QueryState, graph GraphData) g.Node {
 			Span(Class("chip"), g.Text("Time: "), timestampRangeNode(state.FromNs, state.ToNs)),
 			addressFamilyChip,
 			directionChip,
+			protocolChip,
+			portChip,
 			renderNodes(state.Include, func(item string) g.Node {
 				return Span(Class("chip"), g.Text("Entity: "+item))
 			}),
@@ -362,16 +385,19 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 	}
 
 	if graph.SelectedNode == nil {
+		nodes := []g.Node(nil)
 		if !state.EntityActionsEnabled() {
-			return Div(
+			nodes = append(nodes,
 				sectionTitle("Selected Item"),
 				P(Class("panel-subtle"), g.Text(entityActionsUnavailableMessage)),
 			)
+			return Div(nodes...)
 		}
-		return Div(
+		nodes = append(nodes,
 			sectionTitle("Selected Item"),
 			P(Class("panel-subtle"), g.Text("Click a node to highlight it and inspect its peers.")),
 		)
+		return Div(nodes...)
 	}
 	if !state.EntityActionsEnabled() {
 		return Div(
@@ -418,6 +444,189 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 		),
 	)
 	return Div(nodes...)
+}
+
+func BreakdownPanel(state QueryState, graph GraphData) g.Node {
+	panel := breakdownPanel(state, graph.Breakdown)
+	if panel == nil {
+		return nil
+	}
+	return Section(
+		Class("section-panel section-block"),
+		ID("breakdown-section"),
+		sectionHeader("Breakdown", "breakdown-content", true),
+		Div(
+			ID("breakdown-content"),
+			Class("section-content"),
+			panel,
+		),
+	)
+}
+
+func breakdownPanel(state QueryState, breakdown SelectionBreakdown) g.Node {
+	if state.Metric == MetricDNSLookups {
+		return nil
+	}
+
+	charts := []g.Node(nil)
+	if breakdown.Protocols != nil {
+		charts = append(charts, breakdownChartNode(state, state.Metric, *breakdown.Protocols))
+	}
+	if breakdown.Family != nil {
+		charts = append(charts, breakdownChartNode(state, state.Metric, *breakdown.Family))
+	}
+	if breakdown.Ports != nil {
+		charts = append(charts, breakdownChartNode(state, state.Metric, *breakdown.Ports))
+	}
+	if len(charts) == 0 {
+		return nil
+	}
+
+	return Div(
+		Class("breakdown-panel"),
+		Div(
+			Class("breakdown-grid"),
+			g.Group(charts),
+		),
+	)
+}
+
+func breakdownChartNode(state QueryState, metric Metric, chart BreakdownChart) g.Node {
+	return Section(
+		Class("breakdown-chart"),
+		H3(Class("breakdown-chart-title"), g.Text(chart.Label)),
+		Div(
+			Class("breakdown-chart-body"),
+			g.Raw(breakdownChartSVGMarkup(state, chart.Slices)),
+			Ul(
+				Class("breakdown-list"),
+				renderNodes(chart.Slices, func(slice BreakdownSlice) g.Node {
+					return Li(
+						Class("breakdown-list-item"),
+						breakdownSliceLabelNode(state, slice, breakdownSliceColor(sliceIndex(chart.Slices, slice.Label))),
+						Span(Class("breakdown-list-value"), g.Text(formatMetricValue(metric, slice.Value))),
+					)
+				}),
+			),
+		),
+	)
+}
+
+func breakdownSliceLabelNode(state QueryState, slice BreakdownSlice, color string) g.Node {
+	nodes := []g.Node{
+		Span(Class("breakdown-list-swatch"), Style("background:"+color)),
+		Span(g.Text(slice.Label)),
+	}
+	if slice.FilterParam == "" || slice.FilterValue == "" || slice.Label == breakdownRestLabel {
+		return Span(append([]g.Node{Class("breakdown-list-label")}, nodes...)...)
+	}
+	href := breakdownFilterURL(state, slice)
+	return A(
+		append([]g.Node{
+			Href(href),
+			Class("breakdown-list-label breakdown-link"),
+			g.Attr("hx-get", href),
+			g.Attr("hx-target", hxTargetAppShellValue),
+			g.Attr("hx-select", hxSelectAppShellValue),
+			g.Attr("hx-swap", hxSwapOuterHTMLValue),
+			g.Attr("hx-push-url", "true"),
+		}, nodes...)...,
+	)
+}
+
+func breakdownFilterURL(state QueryState, slice BreakdownSlice) string {
+	nextState := state.Clone()
+	nextState.Page = defaultPage
+	nextState = nextState.ResetSelection()
+	switch slice.FilterParam {
+	case "protocol":
+		nextState.Protocol = parsePositiveInt32(slice.FilterValue)
+	case "family":
+		if family := AddressFamily(slice.FilterValue); family.valid() {
+			nextState.AddressFamily = family
+		}
+	case "port":
+		nextState.Port = parsePositiveInt32(slice.FilterValue)
+	}
+	return stateURL(nextState)
+}
+
+func breakdownChartSVGMarkup(state QueryState, slices []BreakdownSlice) string {
+	var builder strings.Builder
+
+	center := float64(breakdownChartSizePx) / 2
+	radius := center - 4
+	innerRadius := radius - breakdownDonutThicknessPx
+	var total int64
+	for _, slice := range slices {
+		total += slice.Value
+	}
+
+	fmt.Fprintf(&builder, `<svg class="breakdown-svg" viewBox="0 0 %d %d" role="img" aria-label="Traffic breakdown">`, breakdownChartSizePx, breakdownChartSizePx)
+	if total <= 0 {
+		builder.WriteString(`</svg>`)
+		return builder.String()
+	}
+
+	startAngle := -math.Pi / 2
+	for index, slice := range slices {
+		if slice.Value <= 0 {
+			continue
+		}
+		angle := (float64(slice.Value) / float64(total)) * 2 * math.Pi
+		endAngle := startAngle + angle
+		path := fmt.Sprintf(`<path d="%s" fill="%s"><title>%s: %s</title></path>`,
+			donutSegmentPath(center, center, radius, innerRadius, startAngle, endAngle),
+			breakdownSliceColor(index),
+			html.EscapeString(slice.Label),
+			html.EscapeString(strconv.FormatInt(slice.Value, 10)),
+		)
+		if slice.FilterParam != "" && slice.FilterValue != "" && slice.Label != breakdownRestLabel {
+			fmt.Fprintf(&builder, `<a %s>%s</a>`, navAttrString(breakdownFilterURL(state, slice)), path)
+		} else {
+			builder.WriteString(path)
+		}
+		startAngle = endAngle
+	}
+
+	builder.WriteString(`</svg>`)
+	return builder.String()
+}
+
+func donutSegmentPath(centerX, centerY, outerRadius, innerRadius, startAngle, endAngle float64) string {
+	startOuterX := centerX + outerRadius*math.Cos(startAngle)
+	startOuterY := centerY + outerRadius*math.Sin(startAngle)
+	endOuterX := centerX + outerRadius*math.Cos(endAngle)
+	endOuterY := centerY + outerRadius*math.Sin(endAngle)
+	startInnerX := centerX + innerRadius*math.Cos(startAngle)
+	startInnerY := centerY + innerRadius*math.Sin(startAngle)
+	endInnerX := centerX + innerRadius*math.Cos(endAngle)
+	endInnerY := centerY + innerRadius*math.Sin(endAngle)
+	largeArcFlag := 0
+	if endAngle-startAngle > math.Pi {
+		largeArcFlag = 1
+	}
+
+	return fmt.Sprintf(
+		"M %0.2f %0.2f A %0.2f %0.2f 0 %d 1 %0.2f %0.2f L %0.2f %0.2f A %0.2f %0.2f 0 %d 0 %0.2f %0.2f Z",
+		startOuterX, startOuterY,
+		outerRadius, outerRadius, largeArcFlag, endOuterX, endOuterY,
+		endInnerX, endInnerY,
+		innerRadius, innerRadius, largeArcFlag, startInnerX, startInnerY,
+	)
+}
+
+func breakdownSliceColor(index int) string {
+	return breakdownSliceColors[index%len(breakdownSliceColors)]
+}
+
+func sliceIndex(slices []BreakdownSlice, label string) int {
+	for index, slice := range slices {
+		if slice.Label == label {
+			return index
+		}
+	}
+	return 0
 }
 
 func TablePanel(state QueryState, table TableData) g.Node {
@@ -635,7 +844,7 @@ func topBar(dashboard DashboardData) g.Node {
 }
 
 func hiddenStateFields(state QueryState) g.Node {
-	return g.Group([]g.Node{
+	nodes := []g.Node{
 		Input(Type("hidden"), ID("filter-from-ns"), Name("from"), Value(strconv.FormatInt(state.FromNs, 10))),
 		Input(Type("hidden"), ID("filter-to-ns"), Name("to"), Value(strconv.FormatInt(state.ToNs, 10))),
 		Input(Type("hidden"), Name("sort"), Value(string(state.Sort))),
@@ -646,7 +855,14 @@ func hiddenStateFields(state QueryState) g.Node {
 		Input(Type("hidden"), Name("selected_edge_dst"), Value(state.SelectedEdgeDst)),
 		renderHiddenValues("include", state.Include),
 		renderHiddenValues("exclude", state.Exclude),
-	})
+	}
+	if state.Protocol > 0 {
+		nodes = append(nodes, Input(Type("hidden"), Name("protocol"), Value(strconv.FormatInt(int64(state.Protocol), 10))))
+	}
+	if state.Port > 0 {
+		nodes = append(nodes, Input(Type("hidden"), Name("port"), Value(strconv.FormatInt(int64(state.Port), 10))))
+	}
+	return g.Group(nodes)
 }
 
 func renderHiddenValues(name string, values []string) g.Node {
@@ -1179,6 +1395,12 @@ func flowDetailFilters(state QueryState) g.Node {
 	if currentDirection != DirectionBoth {
 		chips = append(chips, Span(Class("chip"), g.Text("Direction: "+directionLabel(currentDirection))))
 	}
+	if state.Protocol > 0 {
+		chips = append(chips, Span(Class("chip"), g.Text("Protocol: "+rawFlowProtocolLabel(state.Protocol))))
+	}
+	if state.Port > 0 {
+		chips = append(chips, Span(Class("chip"), g.Text("Port: "+strconv.FormatInt(int64(state.Port), 10))))
+	}
 	for _, item := range state.Include {
 		chips = append(chips, Span(Class("chip"), g.Text("Entity: "+item)))
 	}
@@ -1254,6 +1476,12 @@ func flowDetailHiddenFields(query FlowQuery) g.Node {
 	}
 	if state.Direction != "" && state.Direction != DirectionBoth {
 		nodes = append(nodes, Input(Type("hidden"), Name("direction"), Value(string(state.Direction))))
+	}
+	if state.Protocol > 0 {
+		nodes = append(nodes, Input(Type("hidden"), Name("protocol"), Value(strconv.FormatInt(int64(state.Protocol), 10))))
+	}
+	if state.Port > 0 {
+		nodes = append(nodes, Input(Type("hidden"), Name("port"), Value(strconv.FormatInt(int64(state.Port), 10))))
 	}
 	if state.Search != "" {
 		nodes = append(nodes, Input(Type("hidden"), Name("search"), Value(state.Search)))

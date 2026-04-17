@@ -74,9 +74,11 @@ User-visible behavior:
 - switches graph/table grouping between `tld`, `2ld`, `hostname`, and `ip`
 - filters by address family (`all`, `ipv4`, `ipv6`)
 - filters by direction (`both`, `ingress`, `egress`)
+- filters by protocol and service port from traffic breakdown slices
 - supports include and exclude filters for selected entities
 - supports free-text search
 - shows rankings and summary totals for the active view
+- shows summary-backed traffic breakdown pies for protocols, IP family, and popular ports
 - shows a sortable flows table with paging
 - opens flow-detail views for a selected entity or edge when the time range is 7 days or less
 - groups overflowed graph nodes into `Other Sources` and `Other Destinations`

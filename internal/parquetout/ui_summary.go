@@ -26,6 +26,8 @@ type EdgeSummaryRow struct {
 	IPVersion             int32  `parquet:"ip_version"`
 	LastSeenNs            int64  `parquet:"last_seen_ns"`
 	NXDomainLookups       int64  `parquet:"nxdomain_lookups"`
+	Protocol              int32  `parquet:"protocol"`
+	ServicePort           *int32 `parquet:"service_port,optional"`
 	Source                string `parquet:"src_entity"`
 	SrcPrivateBytes       int64  `parquet:"src_private_bytes"`
 	SrcPrivateConnections int64  `parquet:"src_private_connections"`
@@ -48,6 +50,8 @@ type BucketedEdgeSummaryRow struct {
 	IPVersion             int32  `parquet:"ip_version"`
 	LastSeenNs            int64  `parquet:"last_seen_ns"`
 	NXDomainLookups       int64  `parquet:"nxdomain_lookups"`
+	Protocol              int32  `parquet:"protocol"`
+	ServicePort           *int32 `parquet:"service_port,optional"`
 	Source                string `parquet:"src_entity"`
 	SrcPrivateBytes       int64  `parquet:"src_private_bytes"`
 	SrcPrivateConnections int64  `parquet:"src_private_connections"`
@@ -62,6 +66,8 @@ type HistogramSummaryRow struct {
 	Connections   int64  `parquet:"connections"`
 	Direction     *int32 `parquet:"direction,optional"`
 	IPVersion     int32  `parquet:"ip_version"`
+	Protocol      int32  `parquet:"protocol"`
+	ServicePort   *int32 `parquet:"service_port,optional"`
 }
 
 type EdgeSummaryWriter struct {

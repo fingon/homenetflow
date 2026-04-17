@@ -847,6 +847,68 @@ func TestSelectedPanelDisablesEntityActionsForLongRange(t *testing.T) {
 	assert.Assert(t, !strings.Contains(markup, "Show matching flows"))
 }
 
+func TestBreakdownPanelRendersTrafficBreakdown(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, BreakdownPanel(QueryState{
+		Metric: MetricBytes,
+	}, GraphData{
+		ActiveMetric: MetricBytes,
+		Breakdown: SelectionBreakdown{
+			Protocols: &BreakdownChart{
+				Label: "Protocols",
+				Slices: []BreakdownSlice{
+					{FilterParam: "protocol", FilterValue: "6", Label: "6 (TCP)", Value: 120},
+					{FilterParam: "protocol", FilterValue: "17", Label: "17 (UDP)", Value: 80},
+				},
+			},
+		},
+	}))
+
+	assert.Assert(t, strings.Contains(markup, "Breakdown"))
+	assert.Assert(t, strings.Contains(markup, "Protocols"))
+	assert.Assert(t, strings.Contains(markup, "6 (TCP)"))
+	assert.Assert(t, strings.Contains(markup, "17 (UDP)"))
+	assert.Assert(t, strings.Contains(markup, `class="breakdown-svg"`))
+	assert.Assert(t, strings.Contains(markup, `protocol=6`))
+}
+
+func TestBreakdownPanelRendersFamilyLinks(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, BreakdownPanel(QueryState{
+		Metric: MetricConnections,
+	}, GraphData{
+		ActiveMetric: MetricConnections,
+		Breakdown: SelectionBreakdown{
+			Family: &BreakdownChart{
+				Label: "IP Family",
+				Slices: []BreakdownSlice{
+					{FilterParam: "family", FilterValue: "ipv4", Label: "IPv4", Value: 7},
+					{FilterParam: "family", FilterValue: "ipv6", Label: "IPv6", Value: 3},
+				},
+			},
+		},
+	}))
+
+	assert.Assert(t, strings.Contains(markup, "IP Family"))
+	assert.Assert(t, strings.Contains(markup, "IPv4"))
+	assert.Assert(t, strings.Contains(markup, "IPv6"))
+	assert.Assert(t, strings.Contains(markup, `family=ipv4`))
+}
+
+func TestBreakdownPanelDoesNotRenderForDNSMetric(t *testing.T) {
+	t.Parallel()
+
+	node := BreakdownPanel(QueryState{
+		Metric: MetricDNSLookups,
+	}, GraphData{
+		ActiveMetric: MetricDNSLookups,
+	})
+
+	assert.Assert(t, node == nil)
+}
+
 func TestSelectedPanelPeerLinksSelectPeerEntity(t *testing.T) {
 	t.Parallel()
 

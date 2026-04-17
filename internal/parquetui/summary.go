@@ -507,11 +507,13 @@ SELECT %s AS src_entity, %s AS dst_entity,
   COALESCE(SUM(CASE WHEN dst_is_private THEN 0 ELSE 1 END), 0) AS dst_public_connections,
   COALESCE(MIN(time_start_ns), 0) AS first_seen_ns,
   ip_version,
-  COALESCE(MAX(time_end_ns), 0) AS last_seen_ns
+  COALESCE(MAX(time_end_ns), 0) AS last_seen_ns,
+  protocol,
+  %s AS service_port
 FROM read_parquet(%s)
-GROUP BY src_entity, dst_entity, direction, ip_version
-ORDER BY src_entity, dst_entity, direction, ip_version
-`, srcExpr, dstExpr, quoteLiteral(sourceFile.AbsPath))
+GROUP BY src_entity, dst_entity, direction, ip_version, protocol, service_port
+ORDER BY src_entity, dst_entity, direction, ip_version, protocol, service_port
+`, srcExpr, dstExpr, rawServicePortExpression(), quoteLiteral(sourceFile.AbsPath))
 
 	writer, finalize, err := parquetout.CreateUISummaryEdges(outputPath, model.NewUISummaryManifest(sourceFile, summaryEdgeKind, string(granularity), spanStartNs, spanEndNs))
 	if err != nil {
@@ -528,6 +530,7 @@ ORDER BY src_entity, dst_entity, direction, ip_version
 	for rows.Next() {
 		var row parquetout.EdgeSummaryRow
 		var direction sql.NullInt32
+		var servicePort sql.NullInt32
 		if err := rows.Scan(
 			&row.Source,
 			&row.Destination,
@@ -545,10 +548,13 @@ ORDER BY src_entity, dst_entity, direction, ip_version
 			&row.FirstSeenNs,
 			&row.IPVersion,
 			&row.LastSeenNs,
+			&row.Protocol,
+			&servicePort,
 		); err != nil {
 			return fmt.Errorf("scan %s summary edge row for %q: %w", granularity, sourceFile.RelPath, err)
 		}
 		row.Direction = directionValue(direction)
+		row.ServicePort = nullableInt32Value(servicePort)
 		batch = append(batch, row)
 		if len(batch) < summaryBuildRowBatchSize {
 			continue
@@ -598,11 +604,13 @@ SELECT CAST(FLOOR(time_start_ns / %d) AS BIGINT) * %d AS bucket_start_ns,
   COALESCE(SUM(CASE WHEN dst_is_private THEN 0 ELSE 1 END), 0) AS dst_public_connections,
   COALESCE(MIN(time_start_ns), 0) AS first_seen_ns,
   ip_version,
-  COALESCE(MAX(time_end_ns), 0) AS last_seen_ns
+  COALESCE(MAX(time_end_ns), 0) AS last_seen_ns,
+  protocol,
+  %s AS service_port
 FROM read_parquet(%s)
-GROUP BY bucket_start_ns, src_entity, dst_entity, direction, ip_version
-ORDER BY bucket_start_ns, src_entity, dst_entity, direction, ip_version
-`, summaryBucketWidthNs, summaryBucketWidthNs, srcExpr, dstExpr, quoteLiteral(sourceFile.AbsPath))
+GROUP BY bucket_start_ns, src_entity, dst_entity, direction, ip_version, protocol, service_port
+ORDER BY bucket_start_ns, src_entity, dst_entity, direction, ip_version, protocol, service_port
+`, summaryBucketWidthNs, summaryBucketWidthNs, srcExpr, dstExpr, rawServicePortExpression(), quoteLiteral(sourceFile.AbsPath))
 
 	writer, finalize, err := parquetout.CreateUISummaryBucketedEdges(outputPath, model.NewUISummaryManifest(sourceFile, summaryBucketedEdgeKind, string(granularity), spanStartNs, spanEndNs))
 	if err != nil {
@@ -619,6 +627,7 @@ ORDER BY bucket_start_ns, src_entity, dst_entity, direction, ip_version
 	for rows.Next() {
 		var row parquetout.BucketedEdgeSummaryRow
 		var direction sql.NullInt32
+		var servicePort sql.NullInt32
 		if err := rows.Scan(
 			&row.BucketStartNs,
 			&row.Source,
@@ -637,10 +646,13 @@ ORDER BY bucket_start_ns, src_entity, dst_entity, direction, ip_version
 			&row.FirstSeenNs,
 			&row.IPVersion,
 			&row.LastSeenNs,
+			&row.Protocol,
+			&servicePort,
 		); err != nil {
 			return fmt.Errorf("scan %s bucketed summary edge row for %q: %w", granularity, sourceFile.RelPath, err)
 		}
 		row.Direction = directionValue(direction)
+		row.ServicePort = nullableInt32Value(servicePort)
 		batch = append(batch, row)
 		if len(batch) < summaryBuildRowBatchSize {
 			continue
@@ -677,11 +689,13 @@ SELECT CAST(FLOOR(time_start_ns / %d) AS BIGINT) * %d AS bucket_start_ns,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   COUNT(*) AS connection_total,
   direction,
-  ip_version
+  ip_version,
+  protocol,
+  %s AS service_port
 FROM read_parquet(%s)
-GROUP BY bucket_start_ns, direction, ip_version
-ORDER BY bucket_start_ns, direction, ip_version
-`, summaryBucketWidthNs, summaryBucketWidthNs, quoteLiteral(sourceFile.AbsPath))
+GROUP BY bucket_start_ns, direction, ip_version, protocol, service_port
+ORDER BY bucket_start_ns, direction, ip_version, protocol, service_port
+`, summaryBucketWidthNs, summaryBucketWidthNs, rawServicePortExpression(), quoteLiteral(sourceFile.AbsPath))
 
 	writer, finalize, err := parquetout.CreateUISummaryHistogram(outputPath, model.NewUISummaryManifest(sourceFile, summaryHistogramKind, "", spanStartNs, spanEndNs))
 	if err != nil {
@@ -698,10 +712,12 @@ ORDER BY bucket_start_ns, direction, ip_version
 	for rows.Next() {
 		var row parquetout.HistogramSummaryRow
 		var direction sql.NullInt32
-		if err := rows.Scan(&row.BucketStartNs, &row.Bytes, &row.Connections, &direction, &row.IPVersion); err != nil {
+		var servicePort sql.NullInt32
+		if err := rows.Scan(&row.BucketStartNs, &row.Bytes, &row.Connections, &direction, &row.IPVersion, &row.Protocol, &servicePort); err != nil {
 			return fmt.Errorf("scan histogram summary row for %q: %w", sourceFile.RelPath, err)
 		}
 		row.Direction = directionValue(direction)
+		row.ServicePort = nullableInt32Value(servicePort)
 		batch = append(batch, row)
 		if len(batch) < summaryBuildRowBatchSize {
 			continue
@@ -1075,6 +1091,14 @@ func directionValue(value sql.NullInt32) *int32 {
 	}
 	direction := value.Int32
 	return &direction
+}
+
+func nullableInt32Value(value sql.NullInt32) *int32 {
+	if !value.Valid {
+		return nil
+	}
+	ret := value.Int32
+	return &ret
 }
 
 func parquetPathHasColumn(ctx context.Context, db *sql.DB, path, columnName string) (bool, error) {

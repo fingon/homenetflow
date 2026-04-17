@@ -107,6 +107,15 @@ func TestParseQueryStateDirection(t *testing.T) {
 	assert.Equal(t, state.Direction, DirectionIngress)
 }
 
+func TestParseQueryStateProtocolAndPort(t *testing.T) {
+	request := httptest.NewRequest("GET", "/?protocol=17&port=53", nil)
+
+	state := ParseQueryState(request)
+
+	assert.Equal(t, state.Protocol, int32(17))
+	assert.Equal(t, state.Port, int32(53))
+}
+
 func TestParseQueryStateInvalidDirectionDefaultsToBoth(t *testing.T) {
 	for _, direction := range []string{"sideways", "inbound", "outbound"} {
 		request := httptest.NewRequest("GET", "/?direction="+direction, nil)
@@ -244,6 +253,19 @@ func TestQueryStateNormalizedRestrictsLongRangeToSummaryCapabilities(t *testing.
 	assert.Equal(t, normalized.Search, "")
 }
 
+func TestQueryStateNormalizedClearsProtocolAndPortForDNSLookups(t *testing.T) {
+	state := QueryState{
+		Metric:   MetricDNSLookups,
+		Port:     53,
+		Protocol: 17,
+	}
+
+	normalized := state.Normalized(TimeSpan{StartNs: 1, EndNs: 2})
+
+	assert.Equal(t, normalized.Port, int32(0))
+	assert.Equal(t, normalized.Protocol, int32(0))
+}
+
 func TestQueryStateNormalizedKeepsEntityActionsAtWeekRange(t *testing.T) {
 	state := QueryState{
 		Exclude:        []string{"drop.lan"},
@@ -271,6 +293,8 @@ func TestQueryStateValuesSkipPreset(t *testing.T) {
 		ToNs:          20,
 		Metric:        MetricBytes,
 		Granularity:   Granularity2LD,
+		Port:          443,
+		Protocol:      6,
 		Sort:          SortBytes,
 		Preset:        presetWeekValue,
 	}
@@ -280,6 +304,8 @@ func TestQueryStateValuesSkipPreset(t *testing.T) {
 	assert.Equal(t, values.Get("preset"), "")
 	assert.Equal(t, values.Get("family"), "ipv4")
 	assert.Equal(t, values.Get("direction"), "egress")
+	assert.Equal(t, values.Get("protocol"), "6")
+	assert.Equal(t, values.Get("port"), "443")
 	assert.Equal(t, values.Get("view"), "")
 }
 

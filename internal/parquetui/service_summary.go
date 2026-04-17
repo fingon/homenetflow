@@ -31,6 +31,8 @@ type summaryEdgeAggregate struct {
 	IPVersion             int32
 	LastSeenNs            int64
 	NXDomainLookups       int64
+	Protocol              int32
+	ServicePort           *int32
 	Source                string
 	SrcPrivateBytes       int64
 	SrcPrivateConnections int64
@@ -124,11 +126,17 @@ func (s *Service) summaryGraph(ctx context.Context, state QueryState, span TimeS
 		return GraphData{}, err
 	}
 	layoutBuiltAt := time.Now()
+	breakdown, err := s.summaryBreakdown(ctx, state, span)
+	if err != nil {
+		return GraphData{}, err
+	}
+	breakdownBuiltAt := time.Now()
 
 	graph := GraphData{
 		ActiveGranularity: state.Granularity,
 		ActiveMetric:      state.Metric,
 		Breadcrumbs:       buildBreadcrumbs(state),
+		Breakdown:         breakdown,
 		Edges:             visibleEdges,
 		HiddenEdgeCount:   hiddenEdgeCount,
 		HiddenNodeCount:   max(0, len(view.nodeTotals)-countNonSynthetic(view.nodeTotals, keepLookup)),
@@ -146,9 +154,36 @@ func (s *Service) summaryGraph(ctx context.Context, state QueryState, span TimeS
 		"snapshot_ms", snapshotLoadedAt.Sub(queryStart).Milliseconds(),
 		"derive_ms", viewBuiltAt.Sub(snapshotLoadedAt).Milliseconds(),
 		"layout_ms", layoutBuiltAt.Sub(viewBuiltAt).Milliseconds(),
+		"breakdown_ms", breakdownBuiltAt.Sub(layoutBuiltAt).Milliseconds(),
 		"duration_ms", time.Since(queryStart).Milliseconds(),
 	)
 	return graph, nil
+}
+
+func (s *Service) summaryBreakdown(ctx context.Context, state QueryState, span TimeSpan) (SelectionBreakdown, error) {
+	if state.Metric == MetricDNSLookups {
+		return SelectionBreakdown{}, nil
+	}
+
+	snapshot, err := s.summaryGraphSnapshotForState(ctx, state, span)
+	if err != nil {
+		return SelectionBreakdown{}, err
+	}
+	protocolTotals := make(map[int32]int64)
+	familyTotals := make(map[int32]int64)
+	portTotals := make(map[int32]int64)
+	for _, edge := range snapshot.edges {
+		value := summaryMetricValue(state.Metric, edge.Bytes, edge.Connections)
+		if value <= 0 {
+			continue
+		}
+		protocolTotals[edge.Protocol] += value
+		familyTotals[edge.IPVersion] += value
+		if edge.ServicePort != nil {
+			portTotals[*edge.ServicePort] += value
+		}
+	}
+	return breakdownFromTotals(protocolTotals, familyTotals, portTotals), nil
 }
 
 func (s *Service) summaryHistogram(ctx context.Context, state QueryState) ([]HistogramBin, error) {
@@ -163,7 +198,7 @@ func (s *Service) summaryHistogram(ctx context.Context, state QueryState) ([]His
 
 	queryStart := time.Now()
 	widthNs := max(int64(1), (state.ToNs-state.FromNs+1)/histogramBinCount)
-	whereClause, args := summaryFilterClause(state.AddressFamily, state.Direction)
+	whereClause, args := summaryFilterClause(state)
 	rangeClause := "WHERE bucket_start_ns BETWEEN ? AND ?"
 	if whereClause != "" {
 		rangeClause = whereClause + " AND bucket_start_ns BETWEEN ? AND ?"
@@ -284,19 +319,19 @@ func (s *Service) summaryGraphSnapshotForCurrentSpan(ctx context.Context, state 
 
 func (s *Service) summaryGraphSnapshotForState(ctx context.Context, state QueryState, span TimeSpan) (*summaryGraphSnapshotData, error) {
 	if state.FromNs == span.StartNs && state.ToNs == span.EndNs {
-		return s.summaryGraphSnapshot(ctx, state.Granularity, state.AddressFamily, state.Direction, state.Metric)
+		return s.summaryGraphSnapshot(ctx, state)
 	}
 	return s.bucketedSummaryGraphSnapshot(ctx, state)
 }
 
-func (s *Service) summaryGraphSnapshot(ctx context.Context, granularity Granularity, addressFamily AddressFamily, direction DirectionFilter, metric Metric) (*summaryGraphSnapshotData, error) {
-	cacheKey := summaryGraphSnapshotCacheKey(granularity, addressFamily, direction, metric, s.currentRevision())
+func (s *Service) summaryGraphSnapshot(ctx context.Context, state QueryState) (*summaryGraphSnapshotData, error) {
+	cacheKey := summaryGraphSnapshotCacheKey(state.Granularity, state.AddressFamily, state.Direction, state.Metric, s.currentRevision()) + summaryFilterCacheSuffix(state)
 	if snapshot, ok := s.summaryGraphCache.Get(cacheKey); ok {
 		return snapshot, nil
 	}
 
 	queryStart := time.Now()
-	whereClause, args := summaryFilterClause(addressFamily, direction)
+	whereClause, args := summaryFilterClause(state)
 	query := fmt.Sprintf(`
 SELECT src_entity, dst_entity,
   COALESCE(SUM(bytes), 0) AS bytes_total,
@@ -314,11 +349,13 @@ SELECT src_entity, dst_entity,
   ip_version,
   COALESCE(MAX(last_seen_ns), 0) AS last_seen_ns,
   COALESCE(SUM(nxdomain_lookups), 0) AS nxdomain_lookup_total,
+  protocol,
+  service_port,
   COALESCE(SUM(successful_lookups), 0) AS successful_lookup_total
 FROM read_parquet(%s)
 %s
-GROUP BY src_entity, dst_entity, direction, ip_version
-`, quoteLiteral(s.summaryEdgeGlob(granularity, metric)), whereClause)
+GROUP BY src_entity, dst_entity, direction, ip_version, protocol, service_port
+`, quoteLiteral(s.summaryEdgeGlob(state.Granularity, state.Metric)), whereClause)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -328,11 +365,12 @@ GROUP BY src_entity, dst_entity, direction, ip_version
 
 	snapshot := &summaryGraphSnapshotData{
 		edges:       make([]summaryEdgeAggregate, 0, 128),
-		granularity: granularity,
+		granularity: state.Granularity,
 	}
 	for rows.Next() {
 		var edge summaryEdgeAggregate
 		var direction sql.NullInt32
+		var servicePort sql.NullInt32
 		if err := rows.Scan(
 			&edge.Source,
 			&edge.Destination,
@@ -351,11 +389,14 @@ GROUP BY src_entity, dst_entity, direction, ip_version
 			&edge.IPVersion,
 			&edge.LastSeenNs,
 			&edge.NXDomainLookups,
+			&edge.Protocol,
+			&servicePort,
 			&edge.SuccessfulLookups,
 		); err != nil {
 			return nil, fmt.Errorf("scan summary graph snapshot row: %w", err)
 		}
 		edge.Direction = directionValue(direction)
+		edge.ServicePort = nullableInt32Value(servicePort)
 		snapshot.edges = append(snapshot.edges, edge)
 		snapshot.totals.Bytes += edge.Bytes
 		snapshot.totals.Connections += edge.Connections
@@ -365,7 +406,7 @@ GROUP BY src_entity, dst_entity, direction, ip_version
 	}
 
 	s.summaryGraphCache.Set(cacheKey, snapshot)
-	slog.Debug("UI summary graph snapshot built", "granularity", granularity, "family", addressFamily, "direction", direction, "edge_count", len(snapshot.edges), "duration_ms", time.Since(queryStart).Milliseconds())
+	slog.Debug("UI summary graph snapshot built", "granularity", state.Granularity, "family", state.AddressFamily, "direction", state.Direction, "protocol", state.Protocol, "port", state.Port, "edge_count", len(snapshot.edges), "duration_ms", time.Since(queryStart).Milliseconds())
 	return snapshot, nil
 }
 
@@ -373,13 +414,14 @@ func (s *Service) bucketedSummaryGraphSnapshot(ctx context.Context, state QueryS
 	fromBucketStartNs := summaryBucketStartNs(state.FromNs)
 	toBucketStartNs := summaryBucketStartNs(state.ToNs)
 	cacheKey := summaryGraphSnapshotCacheKey(state.Granularity, state.AddressFamily, state.Direction, state.Metric, s.currentRevision()) +
+		summaryFilterCacheSuffix(state) +
 		fmt.Sprintf(":%d:%d", fromBucketStartNs, toBucketStartNs)
 	if snapshot, ok := s.summaryGraphCache.Get(cacheKey); ok {
 		return snapshot, nil
 	}
 
 	queryStart := time.Now()
-	whereClause, args := summaryFilterClause(state.AddressFamily, state.Direction)
+	whereClause, args := summaryFilterClause(state)
 	rangeClause := "WHERE bucket_start_ns BETWEEN ? AND ?"
 	if whereClause != "" {
 		rangeClause = whereClause + " AND bucket_start_ns BETWEEN ? AND ?"
@@ -402,10 +444,12 @@ SELECT src_entity, dst_entity,
   ip_version,
   COALESCE(MAX(last_seen_ns), 0) AS last_seen_ns,
   COALESCE(SUM(nxdomain_lookups), 0) AS nxdomain_lookup_total,
+  protocol,
+  service_port,
   COALESCE(SUM(successful_lookups), 0) AS successful_lookup_total
 FROM read_parquet(%s)
 %s
-GROUP BY src_entity, dst_entity, direction, ip_version
+GROUP BY src_entity, dst_entity, direction, ip_version, protocol, service_port
 `, quoteLiteral(s.summaryBucketedEdgeGlob(state.Granularity, state.Metric)), rangeClause)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -421,6 +465,7 @@ GROUP BY src_entity, dst_entity, direction, ip_version
 	for rows.Next() {
 		var edge summaryEdgeAggregate
 		var direction sql.NullInt32
+		var servicePort sql.NullInt32
 		if err := rows.Scan(
 			&edge.Source,
 			&edge.Destination,
@@ -439,11 +484,14 @@ GROUP BY src_entity, dst_entity, direction, ip_version
 			&edge.IPVersion,
 			&edge.LastSeenNs,
 			&edge.NXDomainLookups,
+			&edge.Protocol,
+			&servicePort,
 			&edge.SuccessfulLookups,
 		); err != nil {
 			return nil, fmt.Errorf("scan bucketed summary graph snapshot row: %w", err)
 		}
 		edge.Direction = directionValue(direction)
+		edge.ServicePort = nullableInt32Value(servicePort)
 		snapshot.edges = append(snapshot.edges, edge)
 		snapshot.totals.Bytes += edge.Bytes
 		snapshot.totals.Connections += edge.Connections
@@ -708,6 +756,13 @@ func summaryGraphSnapshotCacheKey(granularity Granularity, addressFamily Address
 	return fmt.Sprintf("summary-graph:%d:%s:%s:%s:%s", revision, granularity, addressFamily, direction, metric)
 }
 
+func summaryFilterCacheSuffix(state QueryState) string {
+	if state.Metric == MetricDNSLookups || (state.Protocol == 0 && state.Port == 0) {
+		return ""
+	}
+	return fmt.Sprintf(":protocol=%d:port=%d", state.Protocol, state.Port)
+}
+
 func summaryBucketStartNs(timestampNs int64) int64 {
 	if timestampNs <= 0 {
 		return 0
@@ -749,10 +804,10 @@ func summaryMetricColumn(metric Metric) string {
 	return "bytes"
 }
 
-func summaryFilterClause(addressFamily AddressFamily, direction DirectionFilter) (string, []any) {
+func summaryFilterClause(state QueryState) (string, []any) {
 	conditions := []string(nil)
 	args := []any(nil)
-	switch addressFamily {
+	switch state.AddressFamily {
 	case AddressFamilyIPv4:
 		conditions = append(conditions, "ip_version = ?")
 		args = append(args, model.IPVersion4)
@@ -760,13 +815,23 @@ func summaryFilterClause(addressFamily AddressFamily, direction DirectionFilter)
 		conditions = append(conditions, "ip_version = ?")
 		args = append(args, model.IPVersion6)
 	}
-	switch direction {
-	case DirectionEgress:
-		conditions = append(conditions, "direction = ?")
-		args = append(args, directionEgressParquetValue)
-	case DirectionIngress:
-		conditions = append(conditions, "direction = ?")
-		args = append(args, directionIngressParquetValue)
+	if state.Metric != MetricDNSLookups {
+		switch state.Direction {
+		case DirectionEgress:
+			conditions = append(conditions, "direction = ?")
+			args = append(args, directionEgressParquetValue)
+		case DirectionIngress:
+			conditions = append(conditions, "direction = ?")
+			args = append(args, directionIngressParquetValue)
+		}
+		if state.Protocol > 0 {
+			conditions = append(conditions, "protocol = ?")
+			args = append(args, state.Protocol)
+		}
+		if state.Port > 0 {
+			conditions = append(conditions, "service_port = ?")
+			args = append(args, state.Port)
+		}
 	}
 	if len(conditions) == 0 {
 		return "", nil
