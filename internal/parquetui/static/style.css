@@ -605,6 +605,84 @@ input[type="search"] {
   margin-bottom: 1rem;
 }
 
+.ignore-rules-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(18rem, 0.8fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.ignore-rule-form,
+.rule-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.ignore-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.checkbox-group {
+  justify-content: flex-end;
+}
+
+.checkbox-label {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  min-height: 2.4rem;
+}
+
+.rule-card {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.rule-card.is-disabled {
+  opacity: 0.7;
+}
+
+.rule-card-header,
+.table-destination-cell {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.inline-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 8px;
+  border: 1px solid var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.ignored-copy {
+  color: var(--warning);
+}
+
+.ignored-row td {
+  background: rgba(166, 155, 132, 0.12);
+}
+
+.hint-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+}
+
 .flow-detail-sort-note {
   margin: 0 0 0.5rem;
 }
@@ -661,6 +739,10 @@ svg.histogram-svg {
 
 .graph-node.is-selected .graph-label {
   font-weight: 700;
+}
+
+.graph-node.is-ignored .graph-label {
+  font-style: italic;
 }
 
 .graph-node[data-label-visible="true"] .graph-label,
@@ -734,6 +816,11 @@ svg.histogram-svg {
   }
 
   .rankings-section {
+    grid-template-columns: 1fr;
+  }
+
+  .ignore-rules-layout,
+  .ignore-rule-grid {
     grid-template-columns: 1fr;
   }
 

@@ -16,6 +16,8 @@ const (
 	defaultPage      = 1
 	defaultPageSize  = 100
 	defaultPort      = 8080
+	falseValue       = "false"
+	trueValue        = "true"
 	entityActionDays = 7
 	presetAllValue   = "all"
 	presetHourValue  = "1h"
@@ -113,6 +115,8 @@ type QueryState struct {
 	Exclude         []string
 	FromNs          int64
 	Granularity     Granularity
+	HideIgnored     bool
+	HideIgnoredSet  bool
 	Include         []string
 	NodeLimit       int
 	Page            int
@@ -148,6 +152,7 @@ type ClientState struct {
 	Exclude         []string `json:"exclude"`
 	From            int64    `json:"from"`
 	Granularity     string   `json:"granularity"`
+	HideIgnored     bool     `json:"hide_ignored"`
 	Include         []string `json:"include"`
 	Metric          string   `json:"metric"`
 	NodeLimit       int      `json:"node_limit"`
@@ -176,6 +181,8 @@ func ParseQueryState(r *http.Request) QueryState {
 		EdgeLimit:       defaultEdgeLimit,
 		Exclude:         compactValues(query["exclude"]),
 		Granularity:     Granularity2LD,
+		HideIgnored:     parseBoolDefaultTrue(query.Get("hide_ignored")),
+		HideIgnoredSet:  query.Has("hide_ignored"),
 		Include:         compactValues(query["include"]),
 		Page:            defaultPage,
 		PageSize:        defaultPageSize,
@@ -298,6 +305,9 @@ func (s QueryState) normalized(span TimeSpan, pruneEntityActions bool) QueryStat
 	if !state.Metric.valid() {
 		state.Metric = MetricBytes
 	}
+	if !state.HideIgnoredSet && !state.HideIgnored {
+		state.HideIgnored = true
+	}
 	if state.Metric == MetricDNSLookups {
 		state.Direction = DirectionBoth
 		state.Port = 0
@@ -366,6 +376,9 @@ func (s QueryState) Values() url.Values {
 	values.Set("metric", string(s.Metric))
 	values.Set("granularity", string(s.Granularity))
 	values.Set("sort", string(s.Sort))
+	if !s.HideIgnored {
+		values.Set("hide_ignored", "false")
+	}
 	if s.EdgeLimit != defaultEdgeLimit {
 		values.Set("edge_limit", strconv.Itoa(s.EdgeLimit))
 	}
@@ -442,6 +455,7 @@ func (s QueryState) ClientState() ClientState {
 		Exclude:         append([]string(nil), s.Exclude...),
 		From:            s.FromNs,
 		Granularity:     string(s.Granularity),
+		HideIgnored:     s.HideIgnored,
 		Include:         append([]string(nil), s.Include...),
 		Metric:          string(s.Metric),
 		NodeLimit:       s.NodeLimit,
@@ -636,6 +650,17 @@ func parseNonNegativeInt(value string) int {
 		return -1
 	}
 	return parsed
+}
+
+func parseBoolDefaultTrue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "1", trueValue, "yes", "on":
+		return true
+	case "0", falseValue, "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func (m Metric) valid() bool {

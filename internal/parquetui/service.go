@@ -42,6 +42,7 @@ const (
 	srcScopeEntityColumn               = "src_scope_entity"
 	dstScopeEntityColumn               = "dst_scope_entity"
 	rawQueryConcurrencyMax             = 4
+	sqlIgnoredFalseExpression          = "false AS is_ignored"
 	srcEntityColumn                    = "src_entity"
 	summaryTopItemLimit                = 10
 	tableCacheKind                     = "table"
@@ -121,6 +122,7 @@ type Node struct {
 	DNSResultState       dnsResultState
 	ID                   string `json:"id"`
 	Ingress              int64  `json:"ingress"`
+	Ignored              bool   `json:"ignored"`
 	Label                string `json:"label"`
 	Egress               int64  `json:"egress"`
 	NXDomainLookups      int64
@@ -138,6 +140,7 @@ type Edge struct {
 	Destination       string `json:"destination"`
 	DNSResultState    dnsResultState
 	FirstSeenNs       int64 `json:"firstSeenNs"`
+	Ignored           bool  `json:"ignored"`
 	LastSeenNs        int64 `json:"lastSeenNs"`
 	MetricValue       int64 `json:"metricValue"`
 	NXDomainLookups   int64
@@ -202,6 +205,7 @@ type TableRow struct {
 	Destination       string
 	DNSResultState    dnsResultState
 	FirstSeenNs       int64
+	Ignored           bool
 	LastSeenNs        int64
 	NXDomainLookups   int64
 	Source            string
@@ -216,6 +220,7 @@ type FlowDetailRow struct {
 	DstPort     int32
 	Direction   *int32
 	EndNs       int64
+	Ignored     bool
 	IPVersion   int32
 	Packets     int64
 	Protocol    int32
@@ -242,23 +247,25 @@ type TableData struct {
 }
 
 type FlowDetailData struct {
-	Page         int
-	PageSize     int
-	PresetCounts []FlowPresetCount
-	Query        FlowQuery
-	Rows         []FlowDetailRow
-	Span         TimeSpan
-	TotalCount   int
-	TotalPages   int
-	VisibleRows  []FlowDetailRow
+	IgnoreRuleCount int
+	Page            int
+	PageSize        int
+	PresetCounts    []FlowPresetCount
+	Query           FlowQuery
+	Rows            []FlowDetailRow
+	Span            TimeSpan
+	TotalCount      int
+	TotalPages      int
+	VisibleRows     []FlowDetailRow
 }
 
 type DashboardData struct {
-	Graph     GraphData
-	Histogram []HistogramBin
-	Span      TimeSpan
-	State     QueryState
-	Table     TableData
+	Graph           GraphData
+	Histogram       []HistogramBin
+	IgnoreRuleCount int
+	Span            TimeSpan
+	State           QueryState
+	Table           TableData
 }
 
 type Service struct {
@@ -267,8 +274,11 @@ type Service struct {
 	graphCache            *resultCache[GraphData]
 	dnsLookupGlobPath     string
 	dnsLookupHasAnswer    bool
+	ignoreRulePath        string
+	ignoreRules           []IgnoreRule
 	globPath              string
 	histogramCache        *resultCache[[]HistogramBin]
+	inetAvailable         bool
 	layoutCache           *resultCache[map[string]LayoutPoint]
 	reloadInterval        time.Duration
 	srcParquetPath        string
@@ -313,12 +323,14 @@ func NewService(ctx context.Context, srcParquetPath string, reloadInterval time.
 		graphCache:        newResultCache[GraphData](resultCacheLimit),
 		globPath:          globPath,
 		histogramCache:    newResultCache[[]HistogramBin](resultCacheLimit),
+		ignoreRulePath:    ignoreRulesPath(absPath),
 		layoutCache:       newResultCache[map[string]LayoutPoint](resultCacheLimit),
 		reloadInterval:    reloadInterval,
 		srcParquetPath:    absPath,
 		summaryGraphCache: newResultCache[*summaryGraphSnapshotData](resultCacheLimit),
 		tableCache:        newResultCache[TableData](resultCacheLimit),
 	}
+	service.inetAvailable = service.detectINETSupport(ctx)
 
 	if err := service.refreshMetadata(ctx); err != nil {
 		_ = db.Close()
@@ -570,11 +582,12 @@ func (s *Service) Dashboard(ctx context.Context, state QueryState) (DashboardDat
 	table := tableFromGraph(graph, state)
 
 	return DashboardData{
-		Graph:     graph,
-		Histogram: histogram,
-		Span:      span,
-		State:     state,
-		Table:     table,
+		Graph:           graph,
+		Histogram:       histogram,
+		IgnoreRuleCount: s.ignoreRuleCount(),
+		Span:            span,
+		State:           state,
+		Table:           table,
 	}, nil
 }
 
@@ -603,7 +616,10 @@ func (s *Service) histogramWithSpan(ctx context.Context, state QueryState, span 
 	}
 
 	widthNs := max(int64(1), (state.ToNs-state.FromNs+1)/histogramBinCount)
-	cte, args := s.filteredCTE(state)
+	cte, args, err := s.filteredCTE(state)
+	if err != nil {
+		return nil, err
+	}
 	query := fmt.Sprintf(`%s
 SELECT bucket, SUM(metric_value) AS value
 FROM %s
@@ -723,7 +739,10 @@ func (s *Service) FlowDetails(ctx context.Context, query FlowQuery) (FlowDetailD
 		return FlowDetailData{}, err
 	}
 
-	cte, args := s.filteredRawFlowsCTE(state)
+	cte, args, err := s.filteredRawFlowsCTE(state)
+	if err != nil {
+		return FlowDetailData{}, err
+	}
 	scopeClause, scopeArgs := flowScopeClause(query)
 	countArgs := append(append([]any(nil), args...), scopeArgs...)
 
@@ -739,7 +758,7 @@ func (s *Service) FlowDetails(ctx context.Context, query FlowQuery) (FlowDetailD
 	offset := (page - 1) * pageSize
 
 	rowsQuery := fmt.Sprintf(`%s
-SELECT time_start_ns, time_end_ns, src_entity, dst_entity, src_ip, dst_ip, src_port, dst_port, protocol, packets, bytes, direction, ip_version
+SELECT time_start_ns, time_end_ns, src_entity, dst_entity, src_ip, dst_ip, src_port, dst_port, protocol, packets, bytes, direction, ip_version, is_ignored
 FROM %s
 WHERE %s
 ORDER BY %s
@@ -756,6 +775,7 @@ LIMIT ? OFFSET ?
 	for rows.Next() {
 		var row FlowDetailRow
 		var direction sql.NullInt32
+		var ignored bool
 		if err := rows.Scan(
 			&row.StartNs,
 			&row.EndNs,
@@ -770,9 +790,11 @@ LIMIT ? OFFSET ?
 			&row.Bytes,
 			&direction,
 			&row.IPVersion,
+			&ignored,
 		); err != nil {
 			return FlowDetailData{}, fmt.Errorf("scan selected flow row: %w", err)
 		}
+		row.Ignored = ignored
 		if direction.Valid {
 			value := direction.Int32
 			row.Direction = &value
@@ -784,15 +806,16 @@ LIMIT ? OFFSET ?
 	}
 
 	return FlowDetailData{
-		Page:         page,
-		PageSize:     pageSize,
-		PresetCounts: presetCounts,
-		Query:        query,
-		Rows:         visibleRows,
-		Span:         span,
-		TotalCount:   totalCount,
-		TotalPages:   totalPages,
-		VisibleRows:  visibleRows,
+		IgnoreRuleCount: s.ignoreRuleCount(),
+		Page:            page,
+		PageSize:        pageSize,
+		PresetCounts:    presetCounts,
+		Query:           query,
+		Rows:            visibleRows,
+		Span:            span,
+		TotalCount:      totalCount,
+		TotalPages:      totalPages,
+		VisibleRows:     visibleRows,
 	}, nil
 }
 
@@ -824,7 +847,10 @@ func (s *Service) flowPresetCounts(ctx context.Context, query FlowQuery, span Ti
 		if !state.EntityActionsEnabled() {
 			continue
 		}
-		cte, args := s.filteredRawFlowsCTE(state)
+		cte, args, err := s.filteredRawFlowsCTE(state)
+		if err != nil {
+			return nil, err
+		}
 		scopeClause, scopeArgs := flowScopeClause(presetQuery)
 		count, err := s.countRawFlows(ctx, cte, scopeClause, append(append([]any(nil), args...), scopeArgs...))
 		if err != nil {
@@ -862,6 +888,7 @@ func tableFromGraph(graph GraphData, state QueryState) TableData {
 			Destination:       edge.Destination,
 			DNSResultState:    edge.DNSResultState,
 			FirstSeenNs:       edge.FirstSeenNs,
+			Ignored:           edge.Ignored,
 			LastSeenNs:        edge.LastSeenNs,
 			NXDomainLookups:   edge.NXDomainLookups,
 			Source:            edge.Source,
@@ -925,6 +952,15 @@ func (s *Service) refreshMetadataWithOptions(ctx context.Context, options refres
 	for path, modTime := range dnsModTimes {
 		modTimes[path] = modTime
 	}
+	ignoreRules, err := loadIgnoreRules(s.ignoreRulePath)
+	if err != nil {
+		return err
+	}
+	if info, statErr := os.Stat(s.ignoreRulePath); statErr == nil {
+		modTimes[s.ignoreRulePath] = info.ModTime()
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("stat ignore rules %q: %w", s.ignoreRulePath, statErr)
+	}
 
 	s.mu.RLock()
 	unchanged := mapsEqual(s.fileModTimes, modTimes) && s.spanValid && !s.summaryRefreshPending && !options.forceSummary
@@ -981,6 +1017,7 @@ func (s *Service) refreshMetadataWithOptions(ctx context.Context, options refres
 
 	s.mu.Lock()
 	s.fileModTimes = modTimes
+	s.ignoreRules = ignoreRules
 	s.summaries = summaries
 	s.span = span
 	s.spanValid = true
@@ -1068,28 +1105,57 @@ func (s *Service) querySpan(ctx context.Context) (TimeSpan, error) {
 	return span, nil
 }
 
-func (s *Service) filteredCTE(state QueryState) (string, []any) {
+func (s *Service) filteredCTE(state QueryState) (string, []any, error) {
 	if state.Metric == MetricDNSLookups {
 		return s.filteredDNSLookupCTE(state)
 	}
 
 	srcExpr, dstExpr := entityExpressions(state.Granularity)
 	whereClause, args := filterClause(state, srcExpr, dstExpr)
-	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, bytes, 0 AS nxdomain_lookups, 0 AS successful_lookups, dst_is_private, ip_version, protocol, %s AS service_port, src_is_private, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
+	ignoreCondition, ignoreArgs, err := buildFlowIgnoreConditionSQL(s.enabledIgnoreRules(), s.inetSupportEnabled())
+	if err != nil {
+		return "", nil, err
+	}
+	ignoredSelect := sqlIgnoredFalseExpression
+	if ignoreCondition != "" {
+		if state.HideIgnored {
+			whereClause = whereClause + " AND NOT (" + ignoreCondition + ")"
+			args = append(args, ignoreArgs...)
+		} else {
+			ignoredSelect = "CASE WHEN " + ignoreCondition + " THEN true ELSE false END AS is_ignored"
+			args = append(ignoreArgs, args...)
+		}
+	}
+	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, bytes, 0 AS nxdomain_lookups, 0 AS successful_lookups, dst_is_private, ip_version, protocol, %s AS service_port, src_is_private, time_start_ns, time_end_ns, %s FROM read_parquet(%s) WHERE %s)",
 		filteredCTEName,
 		srcExpr,
 		dstExpr,
 		rawServicePortExpression(),
+		ignoredSelect,
 		quoteLiteral(s.globPath),
 		whereClause,
-	), args
+	), args, nil
 }
 
-func (s *Service) filteredRawFlowsCTE(state QueryState) (string, []any) {
+func (s *Service) filteredRawFlowsCTE(state QueryState) (string, []any, error) {
 	srcScopeExpr, dstScopeExpr := entityExpressions(state.Granularity)
 	srcDisplayExpr, dstDisplayExpr := entityExpressions(GranularityHostname)
 	whereClause, args := filterClause(state, srcScopeExpr, dstScopeExpr)
-	return fmt.Sprintf("WITH %s AS (SELECT %s AS %s, %s AS %s, %s AS src_entity, %s AS dst_entity, bytes, direction, dst_ip, dst_port, ip_version, packets, protocol, %s AS service_port, src_ip, src_port, time_start_ns, time_end_ns FROM read_parquet(%s) WHERE %s)",
+	ignoreCondition, ignoreArgs, err := buildFlowIgnoreConditionSQL(s.enabledIgnoreRules(), s.inetSupportEnabled())
+	if err != nil {
+		return "", nil, err
+	}
+	ignoredSelect := sqlIgnoredFalseExpression
+	if ignoreCondition != "" {
+		if state.HideIgnored {
+			whereClause = whereClause + " AND NOT (" + ignoreCondition + ")"
+			args = append(args, ignoreArgs...)
+		} else {
+			ignoredSelect = "CASE WHEN " + ignoreCondition + " THEN true ELSE false END AS is_ignored"
+			args = append(ignoreArgs, args...)
+		}
+	}
+	return fmt.Sprintf("WITH %s AS (SELECT %s AS %s, %s AS %s, %s AS src_entity, %s AS dst_entity, bytes, direction, dst_ip, dst_port, ip_version, packets, protocol, %s AS service_port, src_ip, src_port, time_start_ns, time_end_ns, %s FROM read_parquet(%s) WHERE %s)",
 		filteredCTEName,
 		srcScopeExpr,
 		srcScopeEntityColumn,
@@ -1098,9 +1164,10 @@ func (s *Service) filteredRawFlowsCTE(state QueryState) (string, []any) {
 		srcDisplayExpr,
 		dstDisplayExpr,
 		rawServicePortExpression(),
+		ignoredSelect,
 		quoteLiteral(s.globPath),
 		whereClause,
-	), args
+	), args, nil
 }
 
 func flowScopeClause(query FlowQuery) (string, []any) {
@@ -1143,14 +1210,28 @@ func flowSortOrderBy(sortKey FlowSort, sortDir FlowSortDir) string {
 	}
 }
 
-func (s *Service) filteredDNSLookupCTE(state QueryState) (string, []any) {
+func (s *Service) filteredDNSLookupCTE(state QueryState) (string, []any, error) {
 	srcExpr, dstExpr := dnsLookupEntityExpressions(state.Granularity)
 	whereClause, args := filterClause(state, srcExpr, dstExpr)
 	answerExpr := quoteLiteral("")
 	if s.hasDNSLookupAnswer() {
 		answerExpr = dnsLookupAnswerExpression
 	}
-	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, 0 AS bytes, lookups, CASE WHEN %s = %s THEN lookups ELSE 0 END AS nxdomain_lookups, CASE WHEN %s != '' AND %s != %s THEN lookups ELSE 0 END AS successful_lookups, false AS dst_is_private, client_ip_version AS ip_version, client_is_private AS src_is_private, time_start_ns, time_start_ns AS time_end_ns FROM %s WHERE %s)",
+	ignoreCondition, ignoreArgs, err := buildDNSIgnoreConditionSQL(s.enabledIgnoreRules(), s.inetSupportEnabled())
+	if err != nil {
+		return "", nil, err
+	}
+	ignoredSelect := sqlIgnoredFalseExpression
+	if ignoreCondition != "" {
+		if state.HideIgnored {
+			whereClause = whereClause + " AND NOT (" + ignoreCondition + ")"
+			args = append(args, ignoreArgs...)
+		} else {
+			ignoredSelect = "CASE WHEN " + ignoreCondition + " THEN true ELSE false END AS is_ignored"
+			args = append(ignoreArgs, args...)
+		}
+	}
+	return fmt.Sprintf("WITH %s AS (SELECT %s AS src_entity, %s AS dst_entity, 0 AS bytes, lookups, CASE WHEN %s = %s THEN lookups ELSE 0 END AS nxdomain_lookups, CASE WHEN %s != '' AND %s != %s THEN lookups ELSE 0 END AS successful_lookups, false AS dst_is_private, client_ip_version AS ip_version, client_is_private AS src_is_private, time_start_ns, time_start_ns AS time_end_ns, %s FROM %s WHERE %s)",
 		filteredCTEName,
 		srcExpr,
 		dstExpr,
@@ -1159,9 +1240,10 @@ func (s *Service) filteredDNSLookupCTE(state QueryState) (string, []any) {
 		answerExpr,
 		answerExpr,
 		quoteLiteral(model.DNSAnswerNXDOMAIN),
+		ignoredSelect,
 		readParquetExpression(s.dnsLookupGlobPath, true),
 		whereClause,
-	), args
+	), args, nil
 }
 
 func cteWithHistogramBucket(cte string, metric Metric) string {
@@ -1173,24 +1255,30 @@ histogram AS (
 }
 
 func (s *Service) queryNodeTotals(ctx context.Context, state QueryState) ([]Node, error) {
-	cte, args := s.filteredCTE(state)
+	cte, args, err := s.filteredCTE(state)
+	if err != nil {
+		return nil, err
+	}
 	valueExpr := metricValueExpression(state.Metric)
 	query := fmt.Sprintf(`%s
 SELECT entity,
   SUM(total_metric) AS total_metric,
   SUM(ingress_metric) AS ingress_metric,
   SUM(egress_metric) AS egress_metric,
+  SUM(ignored_metric) AS ignored_metric,
   SUM(nxdomain_metric) AS nxdomain_metric,
   SUM(successful_metric) AS successful_metric,
   SUM(private_metric) AS private_metric,
   SUM(public_metric) AS public_metric
 FROM (
   SELECT src_entity AS entity, %s AS total_metric, 0 AS ingress_metric, %s AS egress_metric,
+    CASE WHEN is_ignored THEN %s ELSE 0 END AS ignored_metric,
     nxdomain_lookups AS nxdomain_metric, successful_lookups AS successful_metric,
     %s AS private_metric, %s AS public_metric
   FROM %s
   UNION ALL
   SELECT dst_entity AS entity, %s AS total_metric, %s AS ingress_metric, 0 AS egress_metric,
+    CASE WHEN is_ignored THEN %s ELSE 0 END AS ignored_metric,
     nxdomain_lookups AS nxdomain_metric, successful_lookups AS successful_metric,
     %s AS private_metric, %s AS public_metric
   FROM %s
@@ -1200,9 +1288,11 @@ ORDER BY total_metric DESC, entity
 `, cte,
 		valueExpr,
 		valueExpr,
+		valueExpr,
 		privateMetricExpression("src_is_private", state.Metric),
 		publicMetricExpression("src_is_private", state.Metric),
 		filteredCTEName,
+		valueExpr,
 		valueExpr,
 		valueExpr,
 		privateMetricExpression("dst_is_private", state.Metric),
@@ -1219,9 +1309,11 @@ ORDER BY total_metric DESC, entity
 	nodes := make([]Node, 0, 128)
 	for rows.Next() {
 		var node Node
-		if err := rows.Scan(&node.ID, &node.Total, &node.Ingress, &node.Egress, &node.NXDomainLookups, &node.SuccessfulLookups, &node.PrivateMetric, &node.PublicMetric); err != nil {
+		var ignoredMetric int64
+		if err := rows.Scan(&node.ID, &node.Total, &node.Ingress, &node.Egress, &ignoredMetric, &node.NXDomainLookups, &node.SuccessfulLookups, &node.PrivateMetric, &node.PublicMetric); err != nil {
 			return nil, fmt.Errorf("scan node total row: %w", err)
 		}
+		node.Ignored = ignoredMetric > 0
 		node.Label = node.ID
 		node.AddressClass = classifyNodeAddress(node.PrivateMetric, node.PublicMetric)
 		node.DNSResultState = dnsResultStateForCounts(node.NXDomainLookups, node.SuccessfulLookups)
@@ -1239,7 +1331,10 @@ func (s *Service) queryRestNode(ctx context.Context, state QueryState, keepEntit
 		return nil, nil
 	}
 
-	cte, args := s.filteredCTE(state)
+	cte, args, err := s.filteredCTE(state)
+	if err != nil {
+		return nil, err
+	}
 	entityColumn := srcEntityColumn
 	nodeID := graphRestSourceID
 	if !sourceRole {
@@ -1249,22 +1344,23 @@ func (s *Service) queryRestNode(ctx context.Context, state QueryState, keepEntit
 	metricExpr := metricValueExpression(state.Metric)
 	inPlaceholders := placeholders(len(keepEntities))
 	query := fmt.Sprintf(`%s
-SELECT COUNT(*), COALESCE(SUM(total_metric), 0), COALESCE(SUM(nxdomain_metric), 0), COALESCE(SUM(successful_metric), 0)
+SELECT COUNT(*), COALESCE(SUM(total_metric), 0), COALESCE(SUM(ignored_metric), 0), COALESCE(SUM(nxdomain_metric), 0), COALESCE(SUM(successful_metric), 0)
 FROM (
-  SELECT %s AS entity, SUM(%s) AS total_metric, SUM(nxdomain_lookups) AS nxdomain_metric, SUM(successful_lookups) AS successful_metric
+  SELECT %s AS entity, SUM(%s) AS total_metric, SUM(CASE WHEN is_ignored THEN %s ELSE 0 END) AS ignored_metric, SUM(nxdomain_lookups) AS nxdomain_metric, SUM(successful_lookups) AS successful_metric
   FROM %s
   WHERE %s NOT IN (%s)
   GROUP BY %s
 ) collapsed_entities
-`, cte, entityColumn, metricExpr, filteredCTEName, entityColumn, inPlaceholders, entityColumn)
+`, cte, entityColumn, metricExpr, metricExpr, filteredCTEName, entityColumn, inPlaceholders, entityColumn)
 
 	queryArgs := append(append([]any(nil), args...), stringsToAny(keepEntities)...)
 	row := s.db.QueryRowContext(ctx, query, queryArgs...)
 	var entityCount int
 	var total int64
+	var ignoredMetric int64
 	var nxdomainLookups int64
 	var successfulLookups int64
-	if err := row.Scan(&entityCount, &total, &nxdomainLookups, &successfulLookups); err != nil {
+	if err := row.Scan(&entityCount, &total, &ignoredMetric, &nxdomainLookups, &successfulLookups); err != nil {
 		return nil, fmt.Errorf("scan rest node %q: %w", nodeID, err)
 	}
 	if total == 0 {
@@ -1274,6 +1370,7 @@ FROM (
 	node := &Node{
 		CollapsedEntityCount: entityCount,
 		ID:                   nodeID,
+		Ignored:              ignoredMetric > 0,
 		Label:                nodeID,
 		NXDomainLookups:      nxdomainLookups,
 		Synthetic:            true,
@@ -1293,7 +1390,10 @@ FROM (
 }
 
 func (s *Service) queryEdges(ctx context.Context, state QueryState, keepEntities []string) ([]Edge, error) {
-	cte, args := s.filteredCTE(state)
+	cte, args, err := s.filteredCTE(state)
+	if err != nil {
+		return nil, err
+	}
 	srcBucket := srcEntityColumn
 	dstBucket := dstEntityColumn
 	queryArgs := append([]any(nil), args...)
@@ -1309,6 +1409,7 @@ func (s *Service) queryEdges(ctx context.Context, state QueryState, keepEntities
 SELECT %s AS source_bucket, %s AS destination_bucket,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   %s AS connection_total,
+  COALESCE(SUM(CASE WHEN is_ignored THEN %s ELSE 0 END), 0) AS ignored_metric_total,
   COALESCE(SUM(nxdomain_lookups), 0) AS nxdomain_lookup_total,
   COALESCE(SUM(successful_lookups), 0) AS successful_lookup_total,
   COALESCE(MIN(time_start_ns), 0) AS first_seen_ns,
@@ -1316,7 +1417,7 @@ SELECT %s AS source_bucket, %s AS destination_bucket,
 FROM %s
 GROUP BY source_bucket, destination_bucket
 ORDER BY %s DESC, source_bucket, destination_bucket
-`, cte, srcBucket, dstBucket, connectionTotalExpression(state.Metric), filteredCTEName, metricOrderExpression(state.Metric))
+`, cte, srcBucket, dstBucket, connectionTotalExpression(state.Metric), metricValueExpression(state.Metric), filteredCTEName, metricOrderExpression(state.Metric))
 
 	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
@@ -1327,9 +1428,11 @@ ORDER BY %s DESC, source_bucket, destination_bucket
 	edges := make([]Edge, 0, 128)
 	for rows.Next() {
 		var edge Edge
-		if err := rows.Scan(&edge.Source, &edge.Destination, &edge.Bytes, &edge.Connections, &edge.NXDomainLookups, &edge.SuccessfulLookups, &edge.FirstSeenNs, &edge.LastSeenNs); err != nil {
+		var ignoredMetric int64
+		if err := rows.Scan(&edge.Source, &edge.Destination, &edge.Bytes, &edge.Connections, &ignoredMetric, &edge.NXDomainLookups, &edge.SuccessfulLookups, &edge.FirstSeenNs, &edge.LastSeenNs); err != nil {
 			return nil, fmt.Errorf("scan edge row: %w", err)
 		}
+		edge.Ignored = ignoredMetric > 0
 		edge.MetricValue = edgeMetricValue(edge, state.Metric)
 		edge.DNSResultState = dnsResultStateForCounts(edge.NXDomainLookups, edge.SuccessfulLookups)
 		edge.Synthetic = edge.Source == graphRestSourceID || edge.Destination == graphRestDestination
@@ -1432,7 +1535,10 @@ func (s *Service) selectionBreakdown(ctx context.Context, state QueryState) (Sel
 		return SelectionBreakdown{}, nil
 	}
 
-	cte, args := s.filteredRawFlowsCTE(state)
+	cte, args, err := s.filteredRawFlowsCTE(state)
+	if err != nil {
+		return SelectionBreakdown{}, err
+	}
 	scopeClause, scopeArgs := selectionBreakdownScopeClause(state)
 	queryArgs := append(append([]any(nil), args...), scopeArgs...)
 
@@ -1719,7 +1825,10 @@ func addressFamilyFilterValue(family int32) string {
 }
 
 func (s *Service) queryNodePeers(ctx context.Context, state QueryState, entity string) ([]DetailPeer, error) {
-	cte, args := s.filteredCTE(state)
+	cte, args, err := s.filteredCTE(state)
+	if err != nil {
+		return nil, err
+	}
 	metricExpr := metricValueExpression(state.Metric)
 	query := fmt.Sprintf(`%s
 SELECT peer_entity, SUM(metric_total) AS metric_total
@@ -1768,7 +1877,10 @@ func (s *Service) queryRestTopEntities(ctx context.Context, state QueryState, ke
 		return nil, nil
 	}
 
-	cte, args := s.filteredCTE(state)
+	cte, args, err := s.filteredCTE(state)
+	if err != nil {
+		return nil, err
+	}
 	entityColumn := "src_entity"
 	if !sourceRole {
 		entityColumn = "dst_entity"
@@ -2150,6 +2262,11 @@ func buildBreadcrumbs(state QueryState) []string {
 	if state.Port > 0 {
 		breadcrumbs = append(breadcrumbs, "Port: "+strconv.FormatInt(int64(state.Port), 10))
 	}
+	if state.HideIgnored {
+		breadcrumbs = append(breadcrumbs, "Ignored: hidden")
+	} else {
+		breadcrumbs = append(breadcrumbs, "Ignored: visible")
+	}
 	return breadcrumbs
 }
 
@@ -2189,6 +2306,16 @@ func (s *Service) currentRevision() uint64 {
 	return s.revision
 }
 
+func (s *Service) detectINETSupport(ctx context.Context) bool {
+	query := "SELECT CAST('127.0.0.1' AS INET)"
+	var value string
+	if err := s.db.QueryRowContext(ctx, query).Scan(&value); err != nil {
+		slog.Debug("DuckDB inet support unavailable", "err", err)
+		return false
+	}
+	return value != ""
+}
+
 func (s *Service) hasDNSLookupData() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -2199,6 +2326,66 @@ func (s *Service) hasDNSLookupAnswer() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.dnsLookupHasAnswer
+}
+
+func (s *Service) ignoreRulesSnapshot() []IgnoreRule {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]IgnoreRule(nil), s.ignoreRules...)
+}
+
+func (s *Service) ignoreRuleCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.ignoreRules)
+}
+
+func (s *Service) enabledIgnoreRules() []IgnoreRule {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return enabledIgnoreRules(s.ignoreRules)
+}
+
+func (s *Service) hasEnabledIgnoreRules() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, rule := range s.ignoreRules {
+		if rule.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) inetSupportEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.inetAvailable
+}
+
+func (s *Service) SaveIgnoreRule(rule IgnoreRule) error {
+	rule = normalizeIgnoreRule(rule)
+	if err := validateIgnoreRule(rule); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	nextRules := upsertIgnoreRule(s.ignoreRules, rule)
+	s.mu.Unlock()
+	if err := saveIgnoreRules(s.ignoreRulePath, nextRules); err != nil {
+		return err
+	}
+	return s.refreshMetadataWithOptions(s.bgCtx, refreshMetadataOptions{forceSummary: true})
+}
+
+func (s *Service) DeleteIgnoreRule(id string) error {
+	s.mu.Lock()
+	nextRules := deleteIgnoreRule(s.ignoreRules, id)
+	s.mu.Unlock()
+	if err := saveIgnoreRules(s.ignoreRulePath, nextRules); err != nil {
+		return err
+	}
+	return s.refreshMetadataWithOptions(s.bgCtx, refreshMetadataOptions{forceSummary: true})
 }
 
 func (s *Service) layoutPositions(ctx context.Context, state QueryState) (map[string]LayoutPoint, error) {

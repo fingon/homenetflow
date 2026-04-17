@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -156,6 +157,7 @@ func (a *App) routes() http.Handler {
 		panic(err)
 	}
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
+	mux.HandleFunc("/ignore-rules", a.handleIgnoreRules)
 	mux.HandleFunc("/version", a.handleVersion)
 	mux.HandleFunc("/flows", a.handleFlows)
 	mux.HandleFunc("/", a.handleIndex)
@@ -222,8 +224,112 @@ func (a *App) handleFlows(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *App) handleIgnoreRules(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		pageData := a.ignoreRulePageData(r, nil, "")
+		a.renderIgnoreRules(w, r, pageData)
+	case http.MethodPost:
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid form data", http.StatusBadRequest)
+			return
+		}
+		action := strings.TrimSpace(r.PostForm.Get("action"))
+		switch action {
+		case "delete":
+			if err := a.service.DeleteIgnoreRule(strings.TrimSpace(r.PostForm.Get("rule_id"))); err != nil {
+				pageData := a.ignoreRulePageData(r, nil, err.Error())
+				a.renderIgnoreRules(w, r, pageData)
+				return
+			}
+			pageData := a.ignoreRulePageData(r, nil, "")
+			a.renderIgnoreRules(w, r, pageData)
+		default:
+			rule, err := newIgnoreRuleFromForm(r.PostForm, time.Now().UTC())
+			if err != nil {
+				pageData := a.ignoreRulePageData(r, &rule, err.Error())
+				a.renderIgnoreRules(w, r, pageData)
+				return
+			}
+			if err := a.service.SaveIgnoreRule(rule); err != nil {
+				pageData := a.ignoreRulePageData(r, &rule, err.Error())
+				a.renderIgnoreRules(w, r, pageData)
+				return
+			}
+			pageData := a.ignoreRulePageData(r, nil, "")
+			a.renderIgnoreRules(w, r, pageData)
+		}
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func isHTMXRequest(r *http.Request) bool {
 	return r.Header.Get("HX-Request") == "true"
+}
+
+func (a *App) renderIgnoreRules(w http.ResponseWriter, r *http.Request, pageData IgnoreRulePageData) {
+	if isHTMXRequest(r) {
+		if err := IgnoreRulesShell(pageData).Render(w); err != nil {
+			slog.Error("render ignore rules shell failed", "err", err)
+			http.Error(w, "failed rendering ignore rules shell", http.StatusInternalServerError)
+		}
+		return
+	}
+	if err := IgnoreRulesIndex(pageData, a.devMode, a.devSessionToken).Render(w); err != nil {
+		slog.Error("render ignore rules index failed", "err", err)
+		http.Error(w, "failed rendering ignore rules index", http.StatusInternalServerError)
+	}
+}
+
+func (a *App) ignoreRulePageData(r *http.Request, editRule *IgnoreRule, errorMessage string) IgnoreRulePageData {
+	values := r.URL.Query()
+	if r.Method == http.MethodPost {
+		values = r.PostForm
+	}
+
+	returnURL := strings.TrimSpace(values.Get("return_to"))
+	if returnURL == "" {
+		returnURL = "/"
+	}
+	returnLabel := strings.TrimSpace(values.Get("return_label"))
+	if returnLabel == "" {
+		returnLabel = "Back"
+	}
+
+	rules := a.service.ignoreRulesSnapshot()
+	var selectedRule IgnoreRule
+	switch {
+	case editRule != nil:
+		selectedRule = normalizeIgnoreRule(*editRule)
+	case strings.TrimSpace(values.Get("rule_id")) != "":
+		if existingRule, ok := ignoreRuleByID(rules, strings.TrimSpace(values.Get("rule_id"))); ok {
+			selectedRule = existingRule
+			if values.Has("rule_name") || values.Has("rule_any_entity") || values.Has("rule_source_entity") || values.Has("rule_destination_entity") {
+				selectedRule = prefilledIgnoreRule(values)
+				selectedRule.ID = existingRule.ID
+				selectedRule.CreatedAtNs = existingRule.CreatedAtNs
+			}
+		} else {
+			selectedRule = prefilledIgnoreRule(values)
+		}
+	default:
+		selectedRule = prefilledIgnoreRule(values)
+	}
+
+	return IgnoreRulePageData{
+		EditRule:     selectedRule,
+		ErrorMessage: errorMessage,
+		ReturnLabel:  returnLabel,
+		ReturnURL:    returnURL,
+		Rules:        rules,
+		ValidationHints: []string{
+			"Any entity matches either side using exact host, 2LD, TLD, or IP values.",
+			"CIDR matching applies to source and destination IP fields when DuckDB inet support is available.",
+			"Protocol and port fields apply to flow traffic, not DNS lookup summaries.",
+		},
+	}
 }
 
 func (a *App) handleVersion(w http.ResponseWriter, _ *http.Request) {

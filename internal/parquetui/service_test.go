@@ -2,6 +2,7 @@ package parquetui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -78,6 +79,75 @@ func TestServiceGraphAddsRestNodesAtGranularLevels(t *testing.T) {
 	assert.Assert(t, containsNodeLabel(graph.Nodes, "Other Destinations"))
 }
 
+func TestServiceGraphHidesIgnoredTrafficByDefault(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+		sampleRecord("192.168.1.11", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 200, 30, 40),
+	})
+	writeIgnoreRules(t, tempDir, []IgnoreRule{{
+		ID:      "ignore-google",
+		Enabled: true,
+		Name:    "Ignore google",
+		Match: IgnoreRuleMatch{
+			DestinationEntity: "google.com",
+		},
+	}})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	graph, err := service.Graph(context.Background(), QueryState{
+		Granularity: Granularity2LD,
+		Metric:      MetricBytes,
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, graph.Totals.Bytes, int64(200))
+	assert.Equal(t, graph.Totals.Connections, int64(1))
+	assert.Assert(t, !containsNode(graph.Nodes, "google.com"))
+	assert.Assert(t, containsNode(graph.Nodes, "one.one.one.one"))
+}
+
+func TestServiceFlowDetailsShowsIgnoredRowsWhenRequested(t *testing.T) {
+	tempDir := t.TempDir()
+	record := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
+	record.Protocol = 17
+	record.SrcPort = 54000
+	record.DstPort = 53
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		record,
+		sampleRecord("192.168.1.11", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 200, 30, 40),
+	})
+	writeIgnoreRules(t, tempDir, []IgnoreRule{{
+		ID:      "ignore-dns53",
+		Enabled: true,
+		Name:    "Ignore UDP 53",
+		Match: IgnoreRuleMatch{
+			Protocol:        17,
+			DestinationPort: 53,
+		},
+	}})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	flows, err := service.FlowDetails(context.Background(), FlowQuery{
+		Entity: "alpha.lan",
+		Scope:  FlowScopeEntity,
+		State: QueryState{
+			Granularity:    GranularityHostname,
+			HideIgnored:    false,
+			HideIgnoredSet: true,
+			Metric:         MetricBytes,
+		},
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, flows.TotalCount, 1)
+	assert.Assert(t, flows.VisibleRows[0].Ignored)
+}
+
 func TestAppIndexRendersMainRegions(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
@@ -128,6 +198,36 @@ func TestAppIndexRendersDevMetadataInDevMode(t *testing.T) {
 	assert.Equal(t, recorder.Code, http.StatusOK)
 	assert.Assert(t, strings.Contains(recorder.Body.String(), `data-dev-mode="true"`))
 	assert.Assert(t, strings.Contains(recorder.Body.String(), `data-dev-session-token="dev-token"`))
+}
+
+func TestAppIgnoreRulesRendersManager(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+	})
+	writeIgnoreRules(t, tempDir, []IgnoreRule{{
+		ID:      "ignore-google",
+		Enabled: true,
+		Name:    "Ignore google",
+		Match: IgnoreRuleMatch{
+			DestinationEntity: "google.com",
+		},
+	}})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	app := &App{service: service}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/ignore-rules", nil)
+
+	app.routes().ServeHTTP(recorder, request)
+
+	assert.Equal(t, recorder.Code, http.StatusOK)
+	assert.Assert(t, strings.Contains(recorder.Body.String(), "Ignored Traffic Rules"))
+	assert.Assert(t, strings.Contains(recorder.Body.String(), "Ignore google"))
+	assert.Assert(t, strings.Contains(recorder.Body.String(), `name="rule_destination_entity"`))
 }
 
 func TestAppIndexDisablesDirectionForDNSLookups(t *testing.T) {
@@ -1779,6 +1879,14 @@ func writeDNSLookupParquet(t *testing.T, path string, records []model.DNSLookupR
 	assert.NilError(t, err)
 	assert.NilError(t, writer.WriteBatch(records))
 	assert.NilError(t, finalize())
+}
+
+func writeIgnoreRules(t *testing.T, dirPath string, rules []IgnoreRule) {
+	t.Helper()
+
+	bytes, err := json.Marshal(ignoreRuleFile{Rules: rules})
+	assert.NilError(t, err)
+	assert.NilError(t, os.WriteFile(filepath.Join(dirPath, ignoreRulesFilename), bytes, 0o644))
 }
 
 func sampleRecord(srcIP, dstIP, srcHost, src2LD, srcTLD, dstHost, dst2LD, dstTLD string, bytes, startNs, endNs int64) model.FlowRecord {
