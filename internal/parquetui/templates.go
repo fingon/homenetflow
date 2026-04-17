@@ -236,6 +236,7 @@ func SummaryPanel(state QueryState, graph GraphData) g.Node {
 		Div(
 			Class("filter-list"),
 			Span(Class("chip"), g.Text("Time: "), timestampRangeNode(state.FromNs, state.ToNs)),
+			Span(Class("chip"), g.Text(ignoreVisibilityLabel(state.HideIgnored))),
 			addressFamilyChip,
 			directionChip,
 			renderNodes(state.Include, func(item string) g.Node {
@@ -329,6 +330,9 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 			sectionTitle("Selected Edge"),
 			P(Class(dnsResultClass("", graph.SelectedEdge.DNSResultState)), g.Text(fmt.Sprintf("%s -> %s", graph.SelectedEdge.Source, graph.SelectedEdge.Destination))),
 		}
+		if graph.SelectedEdge.Ignored {
+			nodes = append(nodes, P(Class("panel-subtle ignored-copy"), g.Text("Matches an ignored-traffic rule.")))
+		}
 		if graph.ActiveMetric != MetricDNSLookups {
 			nodes = append(nodes, P(g.Text("Bytes: "+formatMetricValue(MetricBytes, graph.SelectedEdge.Bytes))))
 		}
@@ -336,11 +340,12 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 			P(g.Text(connectionsTotalLabel(graph.ActiveMetric)+": "+formatMetricValue(connectionsDisplayMetric(graph.ActiveMetric), graph.SelectedEdge.Connections))),
 			P(g.Text("First seen: "), timestampNode(graph.SelectedEdge.FirstSeenNs, now)),
 			P(g.Text("Last seen: "), timestampNode(graph.SelectedEdge.LastSeenNs, now)),
-			Div(
-				Class("button-row"),
-				navLink(deselectStateURL(state), "action-button", "Deselect"),
-			),
 		)
+		buttons := []g.Node{navLink(deselectStateURL(state), "action-button", "Deselect")}
+		if !graph.SelectedEdge.Synthetic {
+			buttons = append([]g.Node{navLink(selectedEdgeIgnoreRuleURL(state, graph.SelectedEdge), actionButtonClass, "Ignore traffic like this")}, buttons...)
+		}
+		nodes = append(nodes, Div(append([]g.Node{Class("button-row")}, buttons...)...))
 		if flowDetailLinksEnabled(state, graph.SelectedEdge.Synthetic) {
 			nodes = append(nodes, Div(
 				Class("button-row"),
@@ -383,21 +388,27 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 		sectionTitle("Selected Entity"),
 		P(Class(dnsResultClass("", selectedNode.DNSResultState)), g.Text(selectedNode.Label)),
 	}
+	if selectedNode.Ignored {
+		nodes = append(nodes, P(Class("panel-subtle ignored-copy"), g.Text("Matches an ignored-traffic rule.")))
+	}
 	if selectedNode.Ingress != 0 {
 		nodes = append(nodes, P(g.Text("Ingress: "+formatMetricValue(graph.ActiveMetric, selectedNode.Ingress))))
 	}
 	if selectedNode.Egress != 0 {
 		nodes = append(nodes, P(g.Text("Egress: "+formatMetricValue(graph.ActiveMetric, selectedNode.Egress))))
 	}
+	buttons := []g.Node{
+		navLink(entityURL, actionButtonClass, "Filter to this entity"),
+		navLink(excludeURL, actionButtonClass, "Exclude"),
+		navLink(drillURL, actionButtonClass, "Drill down granularity"),
+		navLink(deselectStateURL(state), actionButtonClass, "Deselect"),
+		flowDetailEntityLink(state, selectedNode),
+	}
+	if !selectedNode.Synthetic {
+		buttons = append([]g.Node{navLink(selectedNodeIgnoreRuleURL(state, selectedNode), actionButtonClass, "Ignore traffic like this")}, buttons...)
+	}
 	nodes = append(nodes,
-		Div(
-			Class("button-row"),
-			navLink(entityURL, actionButtonClass, "Filter to this entity"),
-			navLink(excludeURL, actionButtonClass, "Exclude"),
-			navLink(drillURL, actionButtonClass, "Drill down granularity"),
-			navLink(deselectStateURL(state), actionButtonClass, "Deselect"),
-			flowDetailEntityLink(state, selectedNode),
-		),
+		Div(append([]g.Node{Class("button-row")}, buttons...)...),
 		sectionTitle("Peers"),
 		Ul(
 			Class("rank-list"),
@@ -443,9 +454,12 @@ func tablePanelAt(state QueryState, table TableData, now time.Time) g.Node {
 					if row.Synthetic {
 						rowClass = strings.TrimSpace(rowClass + " synthetic-row")
 					}
+					if row.Ignored {
+						rowClass = strings.TrimSpace(rowClass + " ignored-row")
+					}
 					cells := []g.Node{
 						Td(tableEntityNode(state, row.Source)),
-						Td(tableEntityNode(state, row.Destination)),
+						Td(destinationCellNode(state, row)),
 					}
 					if state.Metric != MetricDNSLookups {
 						cells = append(cells, Td(g.Text(formatMetricValue(MetricBytes, row.Bytes))))
@@ -492,19 +506,26 @@ func flowDetailTableAt(flows FlowDetailData, now time.Time) g.Node {
 					Th(flowDetailSortLink(flows.Query, "Packets", FlowSortPackets, sortAllColumns)),
 					Th(flowDetailSortLink(flows.Query, "Bytes", FlowSortBytes, sortAllColumns)),
 					Th(flowDetailSortLink(flows.Query, "Direction", FlowSortDirection, sortAllColumns)),
+					Th(Class("flow-detail-column"), g.Text("")),
 				),
 			),
 			TBody(
 				renderNodes(flows.VisibleRows, func(row FlowDetailRow) g.Node {
+					rowClass := ""
+					if row.Ignored {
+						rowClass = "ignored-row"
+					}
 					return Tr(
+						Class(rowClass),
 						Td(timestampNode(row.StartNs, now)),
 						Td(timestampNode(row.EndNs, now)),
 						Td(flowEndpointNode(row.Source, row.SrcIP, row.SrcPort)),
-						Td(flowEndpointNode(row.Destination, row.DstIP, row.DstPort)),
+						Td(flowDetailDestinationNode(row)),
 						Td(g.Text(strconv.FormatInt(int64(row.Protocol), 10))),
 						Td(g.Text(strconv.FormatInt(row.Packets, 10))),
 						Td(g.Text(formatMetricValue(MetricBytes, row.Bytes))),
 						Td(g.Text(rawFlowDirectionLabel(row.Direction))),
+						Td(Class("flow-detail-column"), navLink(flowDetailIgnoreRuleURL(flows.Query, row), "flow-detail-link", "Ignore")),
 					)
 				}),
 			),
@@ -582,6 +603,12 @@ func topBar(dashboard DashboardData) g.Node {
 					toggleRadioDisabled("direction", string(DirectionIngress), "Ingress", currentDirection == DirectionIngress, directionDisabled),
 				),
 				Div(
+					Class("group segmented"),
+					Label(g.Text("Ignored")),
+					toggleRadio("hide_ignored", "true", "Hide", state.HideIgnored),
+					toggleRadio("hide_ignored", "false", "Show", !state.HideIgnored),
+				),
+				Div(
 					Class("group"),
 					Input(
 						Type("search"),
@@ -617,6 +644,7 @@ func topBar(dashboard DashboardData) g.Node {
 						optionValue("0", "All", state.EdgeLimit == 0),
 					),
 				),
+				navLink(ignoreRulesURL(stateURL(state), "Back to graph"), actionButtonClass, fmt.Sprintf("Ignored Rules (%d)", dashboard.IgnoreRuleCount)),
 				navLink("/", "action-button danger", "Reset"),
 			),
 		),
@@ -746,10 +774,14 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 			nodeFill(node),
 			nodeStroke(node.Selected),
 			nodeStrokeWidth(node.Selected))
-		builder.WriteString(titleMarkup(fmt.Sprintf("%s\nIngress: %s\nEgress: %s",
+		nodeTitle := fmt.Sprintf("%s\nIngress: %s\nEgress: %s",
 			node.Label,
 			formatMetricValue(state.Metric, node.Ingress),
-			formatMetricValue(state.Metric, node.Egress))))
+			formatMetricValue(state.Metric, node.Egress))
+		if node.Ignored {
+			nodeTitle += "\nIgnored by rule"
+		}
+		builder.WriteString(titleMarkup(nodeTitle))
 		builder.WriteString(`</circle>`)
 		builder.WriteString(labelTextMarkup(0, radius+18, node.Label, "middle"))
 		builder.WriteString(`</g>`)
@@ -765,6 +797,9 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 func edgeTitle(metric Metric, edge Edge) string {
 	lines := []string{
 		fmt.Sprintf("%s -> %s", edge.Source, edge.Destination),
+	}
+	if edge.Ignored {
+		lines = append(lines, "Ignored by rule")
 	}
 	if metric != MetricDNSLookups {
 		lines = append(lines, "Bytes: "+formatMetricValue(MetricBytes, edge.Bytes))
@@ -1141,6 +1176,7 @@ func flowDetailFilters(state QueryState) g.Node {
 	chips := []g.Node{
 		Span(Class("chip"), g.Text("Time: "), timestampRangeNode(state.FromNs, state.ToNs)),
 		Span(Class("chip"), g.Text("Granularity: "+strings.ToUpper(string(state.Granularity)))),
+		Span(Class("chip"), g.Text(ignoreVisibilityLabel(state.HideIgnored))),
 	}
 	if currentAddressFamily != AddressFamilyAll {
 		chips = append(chips, Span(Class("chip"), g.Text("Address Family: "+addressFamilyLabel(currentAddressFamily))))
@@ -1174,6 +1210,12 @@ func flowDetailControls(flows FlowDetailData) g.Node {
 					return toggleRadio("preset", count.Preset, label, selectedPreset(state) == count.Preset)
 				}),
 			),
+		),
+		Div(
+			Class("group segmented"),
+			Label(g.Text("Ignored")),
+			toggleRadio("hide_ignored", "true", "Hide", state.HideIgnored),
+			toggleRadio("hide_ignored", "false", "Show", !state.HideIgnored),
 		),
 	}
 	if query.Scope == FlowScopeEdge {
@@ -1245,6 +1287,22 @@ func flowEndpointNode(entity, ip string, port int32) g.Node {
 	)
 }
 
+func destinationCellNode(state QueryState, row TableRow) g.Node {
+	nodes := []g.Node{tableEntityNode(state, row.Destination)}
+	if row.Ignored {
+		nodes = append(nodes, Span(Class("inline-badge"), g.Text("Ignored")))
+	}
+	return Div(append([]g.Node{Class("table-destination-cell")}, nodes...)...)
+}
+
+func flowDetailDestinationNode(row FlowDetailRow) g.Node {
+	nodes := []g.Node{flowEndpointNode(row.Destination, row.DstIP, row.DstPort)}
+	if row.Ignored {
+		nodes = append(nodes, Span(Class("inline-badge"), g.Text("Ignored")))
+	}
+	return Div(append([]g.Node{Class("table-destination-cell")}, nodes...)...)
+}
+
 func rawFlowDirectionLabel(direction *int32) string {
 	if direction == nil {
 		return "-"
@@ -1257,6 +1315,13 @@ func rawFlowDirectionLabel(direction *int32) string {
 	default:
 		return strconv.FormatInt(int64(*direction), 10)
 	}
+}
+
+func ignoreVisibilityLabel(hideIgnored bool) string {
+	if hideIgnored {
+		return "Ignored: hidden"
+	}
+	return "Ignored: visible"
 }
 
 func statBlock(label, value string) g.Node {
@@ -1447,6 +1512,9 @@ func graphNodeClass(node Node) string {
 	if node.Selected {
 		className += " is-selected"
 	}
+	if node.Ignored {
+		className += " is-ignored"
+	}
 	if node.Synthetic {
 		className += " is-synthetic"
 	}
@@ -1463,6 +1531,9 @@ func edgeStroke(edge Edge) string {
 	}
 	if edge.Selected {
 		return selectedEdgeStroke
+	}
+	if edge.Ignored {
+		return syntheticNodeFill
 	}
 	return unselectedEdgeStroke
 }
@@ -1500,6 +1571,9 @@ func nodeFill(node Node) string {
 	}
 	if node.Selected {
 		return selectedRegularNodeFill
+	}
+	if node.Ignored {
+		return syntheticNodeFill
 	}
 	if node.AddressClass == nodeAddressClassPrivate {
 		return privateEntityNodeFill

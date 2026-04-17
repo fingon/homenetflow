@@ -45,6 +45,9 @@ type summaryMetricView struct {
 }
 
 func (s *Service) canUseSummaryGraph(state QueryState, span TimeSpan) bool {
+	if s.hasEnabledIgnoreRules() {
+		return false
+	}
 	if state.Granularity != GranularityTLD && state.Granularity != Granularity2LD {
 		return false
 	}
