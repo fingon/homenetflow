@@ -23,7 +23,10 @@ import (
 //go:embed static/*
 var staticFiles embed.FS
 
-const serverShutdownTimeout = 5 * time.Second
+const (
+	serverShutdownTimeout = 5 * time.Second
+	versionEndpointPath   = "/version"
+)
 
 type App struct {
 	devMode         bool
@@ -158,7 +161,7 @@ func (a *App) routes() http.Handler {
 	}
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	mux.HandleFunc("/ignore-rules", a.handleIgnoreRules)
-	mux.HandleFunc("/version", a.handleVersion)
+	mux.HandleFunc(versionEndpointPath, a.handleVersion)
 	mux.HandleFunc("/flows", a.handleFlows)
 	mux.HandleFunc("/", a.handleIndex)
 	return requestLogger(mux)
@@ -168,6 +171,9 @@ func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
+		if r.URL.Path == versionEndpointPath {
+			return
+		}
 		slog.Debug("http request", "method", r.Method, "path", r.URL.Path, "duration_ms", time.Since(start).Milliseconds())
 	})
 }
