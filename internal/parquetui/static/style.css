@@ -202,6 +202,22 @@ input[type="search"] {
   font-size: 0.88rem;
 }
 
+.inline-form {
+  display: inline-flex;
+  margin: 0;
+}
+
+.rule-status-button {
+  cursor: pointer;
+  font: inherit;
+}
+
+.rule-status-button:hover,
+.rule-status-button:focus-visible {
+  border-color: currentColor;
+  color: var(--text);
+}
+
 .content-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 20rem;
@@ -487,6 +503,11 @@ input[type="search"] {
   border-color: currentColor;
 }
 
+.ranking-link.is-ignored {
+  color: var(--warning);
+  font-style: italic;
+}
+
 .list-button {
   width: 100%;
   text-align: left;
@@ -675,6 +696,10 @@ input[type="search"] {
 
 .ignored-row td {
   background: rgba(166, 155, 132, 0.12);
+}
+
+.flows-table tr.ignored-row td {
+  background: rgba(166, 155, 132, 0.18);
 }
 
 .hint-list {

@@ -298,6 +298,9 @@ func totalStatBlocks(state QueryState, graph GraphData) []g.Node {
 		nodes = append(nodes, statBlock("Bytes", formatMetricValue(MetricBytes, graph.Totals.Bytes)))
 	}
 	nodes = append(nodes, statBlock(connectionsTotalLabel(state.Metric), formatMetricValue(connectionsDisplayMetric(state.Metric), graph.Totals.Connections)))
+	if graph.Totals.Ignored > 0 {
+		nodes = append(nodes, statBlock(ignoredTotalLabel(state.Metric), formatMetricValue(ignoredDisplayMetric(state.Metric), graph.Totals.Ignored)))
+	}
 	return nodes
 }
 
@@ -309,7 +312,7 @@ func RankingsPanel(state QueryState, graph GraphData) g.Node {
 			Ul(
 				Class("rank-list"),
 				renderNodes(graph.TopEntities, func(node Node) g.Node {
-					return Li(rankingItem(state, selectEntityStateURL(state, node.ID), node.DNSResultState, node.Label, formatMetricValue(graph.ActiveMetric, node.Total)))
+					return Li(rankingItem(state, selectEntityStateURL(state, node.ID), node.DNSResultState, node.Ignored, node.Label, formatMetricValue(graph.ActiveMetric, node.Total)))
 				}),
 			),
 		),
@@ -319,7 +322,7 @@ func RankingsPanel(state QueryState, graph GraphData) g.Node {
 			Ul(
 				Class("rank-list"),
 				renderNodes(graph.TopEdges, func(edge Edge) g.Node {
-					return Li(rankingItem(state, selectEdgeStateURL(state, edge.Source, edge.Destination), edge.DNSResultState, fmt.Sprintf("%s -> %s", edge.Source, edge.Destination), formatMetricValue(graph.ActiveMetric, edge.MetricValue)))
+					return Li(rankingItem(state, selectEdgeStateURL(state, edge.Source, edge.Destination), edge.DNSResultState, edge.Ignored, fmt.Sprintf("%s -> %s", edge.Source, edge.Destination), formatMetricValue(graph.ActiveMetric, edge.MetricValue)))
 				}),
 			),
 		),
@@ -338,6 +341,26 @@ func connectionsTotalLabel(metric Metric) string {
 		return "DNS Lookups"
 	}
 	return "Connections"
+}
+
+func ignoredTotalLabel(metric Metric) string {
+	if metric == MetricDNSLookups {
+		return "Ignored DNS Lookups"
+	}
+	if metric == MetricConnections {
+		return "Ignored Connections"
+	}
+	return "Ignored Bytes"
+}
+
+func ignoredDisplayMetric(metric Metric) Metric {
+	if metric == MetricDNSLookups {
+		return MetricDNSLookups
+	}
+	if metric == MetricConnections {
+		return MetricConnections
+	}
+	return MetricBytes
 }
 
 func connectionsDisplayMetric(metric Metric) Metric {
@@ -450,7 +473,7 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 		Ul(
 			Class("rank-list"),
 			renderNodes(graph.SelectedNodePeers, func(peer DetailPeer) g.Node {
-				return Li(rankingItem(state, selectEntityStateURL(state, peer.Entity), dnsResultStateSuccess, peer.Entity, formatMetricValue(graph.ActiveMetric, peer.MetricValue)))
+				return Li(rankingItem(state, selectEntityStateURL(state, peer.Entity), dnsResultStateSuccess, false, peer.Entity, formatMetricValue(graph.ActiveMetric, peer.MetricValue)))
 			}),
 		),
 	)
@@ -1183,29 +1206,46 @@ func tableEntityNode(state QueryState, entity string) g.Node {
 	return navLink(selectEntityStateURL(state, entity), "table-link", entity)
 }
 
-func rankingLink(href string, dnsState dnsResultState, label, value string) g.Node {
+func rankingLink(href string, dnsState dnsResultState, ignored bool, label, value string) g.Node {
 	return A(
 		Href(href),
-		Class(dnsResultClass("table-link ranking-link", dnsState)),
+		Class(rankingItemClass("table-link ranking-link", dnsState, ignored)),
 		g.Attr("hx-get", href),
 		g.Attr("hx-target", hxTargetAppShellValue),
 		g.Attr("hx-select", hxSelectAppShellValue),
 		g.Attr("hx-swap", hxSwapOuterHTMLValue),
 		g.Attr("hx-push-url", "true"),
 		Span(Class("ranking-label"), g.Text(label)),
+		ignoredBadgeNode(ignored),
 		Span(Class("ranking-value"), g.Text(value)),
 	)
 }
 
-func rankingItem(state QueryState, href string, dnsState dnsResultState, label, value string) g.Node {
+func rankingItem(state QueryState, href string, dnsState dnsResultState, ignored bool, label, value string) g.Node {
 	if state.EntityActionsEnabled() {
-		return rankingLink(href, dnsState, label, value)
+		return rankingLink(href, dnsState, ignored, label, value)
 	}
 	return Div(
-		Class(dnsResultClass("table-link ranking-link disabled", dnsState)),
+		Class(rankingItemClass("table-link ranking-link disabled", dnsState, ignored)),
 		Span(Class("ranking-label"), g.Text(label)),
+		ignoredBadgeNode(ignored),
 		Span(Class("ranking-value"), g.Text(value)),
 	)
+}
+
+func rankingItemClass(baseClass string, dnsState dnsResultState, ignored bool) string {
+	className := dnsResultClass(baseClass, dnsState)
+	if ignored {
+		className = strings.TrimSpace(className + " is-ignored")
+	}
+	return className
+}
+
+func ignoredBadgeNode(ignored bool) g.Node {
+	if !ignored {
+		return nil
+	}
+	return Span(Class("inline-badge"), g.Text("Ignored"))
 }
 
 func selectedFlowEntityURL(state QueryState, entity string) string {

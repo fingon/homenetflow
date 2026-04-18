@@ -150,7 +150,7 @@ func renderIgnoreRuleRows(page IgnoreRulePageData) g.Node {
 				Div(
 					Class("rule-card-header"),
 					Strong(g.Text(rule.Name)),
-					Span(Class("chip"), g.Text(ignoreRuleStatus(rule))),
+					ignoreRuleStatusForm(page, rule),
 				),
 				P(Class("panel-subtle"), g.Text(rule.Match.Summary())),
 				Div(
@@ -160,6 +160,24 @@ func renderIgnoreRuleRows(page IgnoreRulePageData) g.Node {
 				),
 			)
 		}),
+	)
+}
+
+func ignoreRuleStatusForm(page IgnoreRulePageData, rule IgnoreRule) g.Node {
+	return Form(
+		Method("post"),
+		Action("/ignore-rules"),
+		Class("inline-form"),
+		g.Attr("hx-post", "/ignore-rules"),
+		g.Attr("hx-target", hxTargetAppShellValue),
+		g.Attr("hx-select", hxSelectAppShellValue),
+		g.Attr("hx-swap", hxSwapOuterHTMLValue),
+		g.Attr("hx-push-url", "true"),
+		Input(Type("hidden"), Name("action"), Value("toggle_enabled")),
+		Input(Type("hidden"), Name("rule_id"), Value(rule.ID)),
+		Input(Type("hidden"), Name("return_to"), Value(page.ReturnURL)),
+		Input(Type("hidden"), Name("return_label"), Value(page.ReturnLabel)),
+		Button(Type("submit"), Class("chip rule-status-button"), g.Text(ignoreRuleStatus(rule))),
 	)
 }
 

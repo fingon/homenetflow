@@ -114,6 +114,7 @@ type Totals struct {
 	Connections int64
 	Edges       int
 	Entities    int
+	Ignored     int64
 }
 
 type Node struct {
@@ -141,6 +142,7 @@ type Edge struct {
 	DNSResultState    dnsResultState
 	FirstSeenNs       int64 `json:"firstSeenNs"`
 	Ignored           bool  `json:"ignored"`
+	IgnoredMetric     int64 `json:"ignoredMetric"`
 	LastSeenNs        int64 `json:"lastSeenNs"`
 	MetricValue       int64 `json:"metricValue"`
 	NXDomainLookups   int64
@@ -490,7 +492,7 @@ func (s *Service) graphWithSpan(ctx context.Context, state QueryState, span Time
 		return 1
 	})
 
-	totals := totalsFromEdges(edges, len(nodeTotals), len(visibleEdges))
+	totals := totalsFromEdges(edges, len(nodeTotals), len(visibleEdges), state.Metric)
 	topEntities := limitNodes(nodes, summaryTopItemLimit)
 	topEdges := limitTopEdges(visibleEdges, summaryTopItemLimit)
 
@@ -1433,6 +1435,7 @@ ORDER BY %s DESC, source_bucket, destination_bucket
 			return nil, fmt.Errorf("scan edge row: %w", err)
 		}
 		edge.Ignored = ignoredMetric > 0
+		edge.IgnoredMetric = ignoredMetric
 		edge.MetricValue = edgeMetricValue(edge, state.Metric)
 		edge.DNSResultState = dnsResultStateForCounts(edge.NXDomainLookups, edge.SuccessfulLookups)
 		edge.Synthetic = edge.Source == graphRestSourceID || edge.Destination == graphRestDestination
@@ -1445,11 +1448,12 @@ ORDER BY %s DESC, source_bucket, destination_bucket
 	return edges, nil
 }
 
-func totalsFromEdges(edges []Edge, totalEntities, visibleEdges int) Totals {
+func totalsFromEdges(edges []Edge, totalEntities, visibleEdges int, metric Metric) Totals {
 	var totals Totals
 	for _, edge := range edges {
 		totals.Bytes += edge.Bytes
 		totals.Connections += edge.Connections
+		totals.Ignored += ignoredMetricValue(edge, metric)
 	}
 	totals.Entities = totalEntities
 	totals.Edges = visibleEdges
@@ -2214,6 +2218,16 @@ func edgeMetricValue(edge Edge, metric Metric) int64 {
 	return edge.Bytes
 }
 
+func ignoredMetricValue(edge Edge, metric Metric) int64 {
+	if edge.IgnoredMetric > 0 {
+		return edge.IgnoredMetric
+	}
+	if !edge.Ignored {
+		return 0
+	}
+	return edgeMetricValue(edge, metric)
+}
+
 func dnsResultStateForCounts(nxdomainLookups, successfulLookups int64) dnsResultState {
 	if nxdomainLookups <= 0 {
 		return dnsResultStateSuccess
@@ -2382,6 +2396,19 @@ func (s *Service) DeleteIgnoreRule(id string) error {
 	s.mu.Lock()
 	nextRules := deleteIgnoreRule(s.ignoreRules, id)
 	s.mu.Unlock()
+	if err := saveIgnoreRules(s.ignoreRulePath, nextRules); err != nil {
+		return err
+	}
+	return s.refreshMetadataWithOptions(s.bgCtx, refreshMetadataOptions{forceSummary: true})
+}
+
+func (s *Service) ToggleIgnoreRuleEnabled(id string) error {
+	s.mu.Lock()
+	nextRules, ok := toggleIgnoreRuleEnabled(s.ignoreRules, id)
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("ignore rule %q not found", id)
+	}
 	if err := saveIgnoreRules(s.ignoreRulePath, nextRules); err != nil {
 		return err
 	}

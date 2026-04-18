@@ -1086,6 +1086,29 @@ func TestRankingsPanelUsesSelectionLinkStyling(t *testing.T) {
 	assert.Assert(t, strings.Contains(edgeAnchor, `>200</span>`))
 }
 
+func TestRankingsPanelMarksIgnoredItems(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, RankingsPanel(QueryState{
+		FromNs:      10,
+		Granularity: GranularityHostname,
+		Metric:      MetricDNSLookups,
+		Sort:        SortDNSLookups,
+		ToNs:        20,
+	}, GraphData{
+		ActiveMetric: MetricDNSLookups,
+		TopEntities: []Node{
+			{ID: "tapo1.lan", Ignored: true, Label: "tapo1.lan", Total: 100},
+		},
+		TopEdges: []Edge{
+			{Destination: "tapo1.lan", Ignored: true, MetricValue: 200, Source: "fw.lan"},
+		},
+	}))
+
+	assert.Assert(t, strings.Contains(markup, `ranking-link is-ignored`))
+	assert.Assert(t, strings.Contains(markup, `>Ignored</span>`))
+}
+
 func TestRankingsPanelDisablesSelectionForLongRange(t *testing.T) {
 	t.Parallel()
 
@@ -1109,6 +1132,24 @@ func TestRankingsPanelDisablesSelectionForLongRange(t *testing.T) {
 	assert.Assert(t, !strings.Contains(markup, `selected_entity=alpha.lan`))
 	assert.Assert(t, !strings.Contains(markup, `selected_edge_src=alpha.lan`))
 	assert.Assert(t, !strings.Contains(markup, `hx-get=`))
+}
+
+func TestSummaryPanelRendersIgnoredDNSLookupTotals(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, SummaryPanel(QueryState{
+		FromNs: 10,
+		Metric: MetricDNSLookups,
+		ToNs:   20,
+	}, GraphData{
+		Totals: Totals{
+			Connections: 7,
+			Ignored:     3,
+		},
+	}))
+
+	assert.Assert(t, strings.Contains(markup, ">Ignored DNS Lookups<"))
+	assert.Assert(t, strings.Contains(markup, ">3<"))
 }
 
 func TestSummaryPanelActiveFiltersOnlyRenderTimeAndEntityFilters(t *testing.T) {

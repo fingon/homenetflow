@@ -137,6 +137,21 @@ func deleteIgnoreRule(rules []IgnoreRule, id string) []IgnoreRule {
 	return nextRules
 }
 
+func toggleIgnoreRuleEnabled(rules []IgnoreRule, id string) ([]IgnoreRule, bool) {
+	nextRules := append([]IgnoreRule(nil), rules...)
+	for index, rule := range nextRules {
+		if rule.ID != id {
+			continue
+		}
+		rule.Enabled = !rule.Enabled
+		rule.UpdatedAtNs = time.Now().UTC().UnixNano()
+		nextRules[index] = rule
+		sortIgnoreRules(nextRules)
+		return nextRules, true
+	}
+	return nextRules, false
+}
+
 func normalizeIgnoreRule(rule IgnoreRule) IgnoreRule {
 	rule.ID = strings.TrimSpace(rule.ID)
 	rule.Name = strings.TrimSpace(rule.Name)
@@ -247,7 +262,7 @@ func newIgnoreRuleFromForm(values url.Values, now time.Time) (IgnoreRule, error)
 	}
 	rule := IgnoreRule{
 		CreatedAtNs: createdAtNs,
-		Enabled:     values.Get("enabled") != "false",
+		Enabled:     formBoolValue(values, "enabled", true),
 		ID:          ruleID,
 		Match: IgnoreRuleMatch{
 			AddressFamily:     AddressFamily(strings.TrimSpace(values.Get("rule_address_family"))),
@@ -302,9 +317,25 @@ func prefilledIgnoreRule(values url.Values) IgnoreRule {
 		Name: strings.TrimSpace(values.Get("rule_name")),
 	}
 	if values.Has("enabled") {
-		rule.Enabled = values.Get("enabled") != falseValue
+		rule.Enabled = formBoolValue(values, "enabled", true)
 	}
 	return normalizeIgnoreRule(rule)
+}
+
+func formBoolValue(values url.Values, name string, defaultValue bool) bool {
+	rawValues, ok := values[name]
+	if !ok {
+		return defaultValue
+	}
+	for _, value := range rawValues {
+		switch value {
+		case trueValue:
+			return true
+		case falseValue:
+			defaultValue = false
+		}
+	}
+	return defaultValue
 }
 
 func ignoreRuleByID(rules []IgnoreRule, id string) (IgnoreRule, bool) {

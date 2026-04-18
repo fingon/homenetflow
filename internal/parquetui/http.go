@@ -244,6 +244,14 @@ func (a *App) handleIgnoreRules(w http.ResponseWriter, r *http.Request) {
 			}
 			pageData := a.ignoreRulePageData(r, nil, "")
 			a.renderIgnoreRules(w, r, pageData)
+		case "toggle_enabled":
+			if err := a.service.ToggleIgnoreRuleEnabled(strings.TrimSpace(r.PostForm.Get("rule_id"))); err != nil {
+				pageData := a.ignoreRulePageData(r, nil, err.Error())
+				a.renderIgnoreRules(w, r, pageData)
+				return
+			}
+			pageData := a.ignoreRulePageData(r, nil, "")
+			a.renderIgnoreRules(w, r, pageData)
 		default:
 			rule, err := newIgnoreRuleFromForm(r.PostForm, time.Now().UTC())
 			if err != nil {

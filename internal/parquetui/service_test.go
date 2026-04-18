@@ -20,6 +20,7 @@ import (
 )
 
 const (
+	dnsLookupTestFW       = "fw.lan"
 	dnsLookupTestQuery2LD = "example.com"
 	dnsLookupTestQueryTLD = "com"
 )
@@ -32,13 +33,14 @@ func TestDirectionParquetValuesMatchIPFIX(t *testing.T) {
 func TestTotalsFromEdgesAggregatesRawEdgeData(t *testing.T) {
 	totals := totalsFromEdges([]Edge{
 		{Bytes: 100, Connections: 2},
-		{Bytes: 250, Connections: 3},
-	}, 4, 1)
+		{Bytes: 250, Connections: 3, IgnoredMetric: 2},
+	}, 4, 1, MetricConnections)
 
 	assert.Equal(t, totals.Bytes, int64(350))
 	assert.Equal(t, totals.Connections, int64(5))
 	assert.Equal(t, totals.Entities, 4)
 	assert.Equal(t, totals.Edges, 1)
+	assert.Equal(t, totals.Ignored, int64(2))
 }
 
 func TestNewServiceRejectsBaseParquet(t *testing.T) {
@@ -228,6 +230,41 @@ func TestAppIgnoreRulesRendersManager(t *testing.T) {
 	assert.Assert(t, strings.Contains(recorder.Body.String(), "Ignored Traffic Rules"))
 	assert.Assert(t, strings.Contains(recorder.Body.String(), "Ignore google"))
 	assert.Assert(t, strings.Contains(recorder.Body.String(), `name="rule_destination_entity"`))
+	assert.Assert(t, strings.Contains(recorder.Body.String(), `name="action" value="toggle_enabled"`))
+	assert.Assert(t, strings.Contains(recorder.Body.String(), `class="chip rule-status-button"`))
+}
+
+func TestAppIgnoreRulesTogglesRuleEnabled(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+	})
+	writeIgnoreRules(t, tempDir, []IgnoreRule{{
+		ID:      "ignore-google",
+		Enabled: false,
+		Name:    "Ignore google",
+		Match: IgnoreRuleMatch{
+			DestinationEntity: "google.com",
+		},
+	}})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	app := &App{service: service}
+	recorder := httptest.NewRecorder()
+	form := strings.NewReader("action=toggle_enabled&rule_id=ignore-google")
+	request := httptest.NewRequest(http.MethodPost, "/ignore-rules", form)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	app.routes().ServeHTTP(recorder, request)
+
+	assert.Equal(t, recorder.Code, http.StatusOK)
+	rules := service.ignoreRulesSnapshot()
+	assert.Equal(t, len(rules), 1)
+	assert.Assert(t, rules[0].Enabled)
+	assert.Assert(t, strings.Contains(recorder.Body.String(), ">Enabled<"))
 }
 
 func TestAppIndexDisablesDirectionForDNSLookups(t *testing.T) {
@@ -1339,6 +1376,106 @@ func TestServiceGraphClassifiesDNSLookupResultStates(t *testing.T) {
 	assert.Equal(t, nxdomainRow.DNSResultState, dnsResultStateNXDOMAIN)
 }
 
+func TestServiceGraphHidesIgnoredDNSLookupsByDefault(t *testing.T) {
+	const dnsLookupTestLAN = "lan"
+
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", dnsLookupTestFW, dnsLookupTestFW, "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour)),
+	})
+	clientHost := dnsLookupTestFW
+	client2LD := dnsLookupTestFW
+	clientTLD := dnsLookupTestLAN
+	tapo2LD := "tapo1.lan"
+	tapoTLD := dnsLookupTestLAN
+	example2LD := dnsLookupTestQuery2LD
+	exampleTLD := dnsLookupTestQueryTLD
+	writeDNSLookupParquet(t, filepath.Join(tempDir, "dns_lookups_202604.parquet"), []model.DNSLookupRecord{
+		{Client2LD: &client2LD, ClientHost: &clientHost, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 2, Query2LD: &tapo2LD, QueryName: "tapo1.lan", QueryTLD: &tapoTLD, QueryType: "A", TimeStartNs: int64(time.Hour)},
+		{Client2LD: &client2LD, ClientHost: &clientHost, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 1, Query2LD: &example2LD, QueryName: "www.example.com", QueryTLD: &exampleTLD, QueryType: "A", TimeStartNs: int64(time.Hour) + 1},
+	})
+	writeIgnoreRules(t, tempDir, []IgnoreRule{{
+		ID:      "ignore-tapo",
+		Enabled: true,
+		Name:    "Ignore tapo",
+		Match: IgnoreRuleMatch{
+			DestinationEntity: "tapo1.lan",
+			SourceEntity:      dnsLookupTestFW,
+		},
+	}})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	graph, err := service.Graph(context.Background(), QueryState{
+		Granularity: GranularityHostname,
+		Metric:      MetricDNSLookups,
+	})
+	assert.NilError(t, err)
+
+	assert.Equal(t, graph.Totals.Connections, int64(1))
+	assert.Equal(t, graph.Totals.Ignored, int64(0))
+	assert.Assert(t, containsNode(graph.Nodes, dnsLookupTestFW))
+	assert.Assert(t, containsNode(graph.Nodes, "www.example.com"))
+	assert.Assert(t, !containsNode(graph.Nodes, "tapo1.lan"))
+}
+
+func TestServiceGraphMarksVisibleIgnoredDNSLookups(t *testing.T) {
+	const dnsLookupTestLAN = "lan"
+
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", dnsLookupTestFW, dnsLookupTestFW, "lan", "dns.google", "google.com", "com", 100, int64(time.Hour), int64(2*time.Hour)),
+	})
+	clientHost := dnsLookupTestFW
+	client2LD := dnsLookupTestFW
+	clientTLD := dnsLookupTestLAN
+	tapo2LD := "tapo1.lan"
+	tapoTLD := dnsLookupTestLAN
+	example2LD := dnsLookupTestQuery2LD
+	exampleTLD := dnsLookupTestQueryTLD
+	writeDNSLookupParquet(t, filepath.Join(tempDir, "dns_lookups_202604.parquet"), []model.DNSLookupRecord{
+		{Client2LD: &client2LD, ClientHost: &clientHost, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 2, Query2LD: &tapo2LD, QueryName: "tapo1.lan", QueryTLD: &tapoTLD, QueryType: "A", TimeStartNs: int64(time.Hour)},
+		{Client2LD: &client2LD, ClientHost: &clientHost, ClientIP: "192.168.1.10", ClientIPVersion: model.IPVersion4, ClientIsPrivate: true, ClientTLD: &clientTLD, Lookups: 1, Query2LD: &example2LD, QueryName: "www.example.com", QueryTLD: &exampleTLD, QueryType: "A", TimeStartNs: int64(time.Hour) + 1},
+	})
+	writeIgnoreRules(t, tempDir, []IgnoreRule{{
+		ID:      "ignore-tapo",
+		Enabled: true,
+		Name:    "Ignore tapo",
+		Match: IgnoreRuleMatch{
+			DestinationEntity: "tapo1.lan",
+			SourceEntity:      dnsLookupTestFW,
+		},
+	}})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	state := QueryState{
+		Granularity:    GranularityHostname,
+		HideIgnored:    false,
+		HideIgnoredSet: true,
+		Metric:         MetricDNSLookups,
+	}
+	graph, err := service.Graph(context.Background(), state)
+	assert.NilError(t, err)
+
+	assert.Equal(t, graph.Totals.Connections, int64(3))
+	assert.Equal(t, graph.Totals.Ignored, int64(2))
+	tapoEdge := findEdge(t, graph.Edges, dnsLookupTestFW, "tapo1.lan")
+	assert.Assert(t, tapoEdge.Ignored)
+	assert.Equal(t, tapoEdge.IgnoredMetric, int64(2))
+	tapoNode := findNode(t, graph.Nodes, "tapo1.lan")
+	assert.Assert(t, tapoNode.Ignored)
+
+	table, err := service.Table(context.Background(), state)
+	assert.NilError(t, err)
+	tapoRow := findTableRow(t, table.Rows, dnsLookupTestFW, "tapo1.lan")
+	assert.Assert(t, tapoRow.Ignored)
+}
+
 func TestServiceDNSLookupSummaryFastPath(t *testing.T) {
 	const dnsLookupTestLAN = "lan"
 
@@ -1764,6 +1901,18 @@ func findEdge(t *testing.T, edges []Edge, source, destination string) Edge {
 	}
 	t.Fatalf("edge %q -> %q not found", source, destination)
 	return Edge{}
+}
+
+func findNode(t *testing.T, nodes []Node, nodeID string) Node {
+	t.Helper()
+
+	for _, node := range nodes {
+		if node.ID == nodeID {
+			return node
+		}
+	}
+	t.Fatalf("node %q not found", nodeID)
+	return Node{}
 }
 
 func findTableRow(t *testing.T, rows []TableRow, source, destination string) TableRow {
