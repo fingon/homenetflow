@@ -81,6 +81,8 @@ User-visible behavior:
 - shows summary-backed traffic breakdown pies for protocols, IP family, and popular ports
 - shows a sortable flows table with paging
 - opens flow-detail views for a selected entity or edge when the time range is 7 days or less
+- serves views over 7 days from UI summaries instead of raw flow rows
+- supports ignored-traffic rules based on entities, host/IP identity, CIDR, protocol, service port, direction, and address family
 - groups overflowed graph nodes into `Other Sources` and `Other Destinations`
 - colors nodes by address class so private, mixed, and public traffic are distinguishable
 - splits unresolved `tld` and `2ld` entities into `Unknown private` and `Unknown public`

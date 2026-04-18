@@ -28,7 +28,10 @@ const (
 	flowSortDirParam = "flow_sort_dir"
 )
 
-var errEntityActionsDisabled = errors.New("entity actions are available for ranges up to 7 days")
+var (
+	errEntityActionsDisabled  = errors.New("entity actions are available for ranges up to 7 days")
+	errLongRangeSummaryNeeded = errors.New("views over 7 days require UI summaries")
+)
 
 type Metric string
 

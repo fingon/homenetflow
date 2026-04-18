@@ -38,12 +38,11 @@ type IgnoreRuleMatch struct {
 	DestinationCIDR   string          `json:"destinationCidr,omitempty"`
 	DestinationEntity string          `json:"destinationEntity,omitempty"`
 	DestinationIP     string          `json:"destinationIp,omitempty"`
-	DestinationPort   int32           `json:"destinationPort,omitempty"`
 	Protocol          int32           `json:"protocol,omitempty"`
+	ServicePort       int32           `json:"servicePort,omitempty"`
 	SourceCIDR        string          `json:"sourceCidr,omitempty"`
 	SourceEntity      string          `json:"sourceEntity,omitempty"`
 	SourceIP          string          `json:"sourceIp,omitempty"`
-	SourcePort        int32           `json:"sourcePort,omitempty"`
 }
 
 type IgnoreRulePageData struct {
@@ -179,11 +178,8 @@ func validateIgnoreRule(rule IgnoreRule) error {
 	if rule.ID == "" {
 		return errors.New("rule id is required")
 	}
-	if rule.Match.SourcePort < 0 || rule.Match.SourcePort > 65535 {
-		return fmt.Errorf("source port must be between 0 and 65535, got %d", rule.Match.SourcePort)
-	}
-	if rule.Match.DestinationPort < 0 || rule.Match.DestinationPort > 65535 {
-		return fmt.Errorf("destination port must be between 0 and 65535, got %d", rule.Match.DestinationPort)
+	if rule.Match.ServicePort < 0 || rule.Match.ServicePort > 65535 {
+		return fmt.Errorf("service port must be between 0 and 65535, got %d", rule.Match.ServicePort)
 	}
 	if rule.Match.Protocol < 0 || rule.Match.Protocol > 255 {
 		return fmt.Errorf("protocol must be between 0 and 255, got %d", rule.Match.Protocol)
@@ -271,24 +267,20 @@ func newIgnoreRuleFromForm(values url.Values, now time.Time) (IgnoreRule, error)
 			DestinationCIDR:   strings.TrimSpace(values.Get("rule_destination_cidr")),
 			DestinationEntity: strings.TrimSpace(values.Get("rule_destination_entity")),
 			DestinationIP:     strings.TrimSpace(values.Get("rule_destination_ip")),
-			DestinationPort:   int32(parseNonNegativeInt(values.Get("rule_destination_port"))),
 			Protocol:          int32(parseNonNegativeInt(values.Get("rule_protocol"))),
+			ServicePort:       int32(parseNonNegativeInt(values.Get("rule_service_port"))),
 			SourceCIDR:        strings.TrimSpace(values.Get("rule_source_cidr")),
 			SourceEntity:      strings.TrimSpace(values.Get("rule_source_entity")),
 			SourceIP:          strings.TrimSpace(values.Get("rule_source_ip")),
-			SourcePort:        int32(parseNonNegativeInt(values.Get("rule_source_port"))),
 		},
 		Name:        strings.TrimSpace(values.Get("rule_name")),
 		UpdatedAtNs: now.UnixNano(),
 	}
-	if rule.Match.SourcePort < 0 {
-		rule.Match.SourcePort = ignoreRulePortUnspecified
-	}
-	if rule.Match.DestinationPort < 0 {
-		rule.Match.DestinationPort = ignoreRulePortUnspecified
-	}
 	if rule.Match.Protocol < 0 {
 		rule.Match.Protocol = ignoreRulePortUnspecified
+	}
+	if rule.Match.ServicePort < 0 {
+		rule.Match.ServicePort = ignoreRulePortUnspecified
 	}
 	rule = normalizeIgnoreRule(rule)
 	if err := validateIgnoreRule(rule); err != nil {
@@ -307,12 +299,11 @@ func prefilledIgnoreRule(values url.Values) IgnoreRule {
 			DestinationCIDR:   strings.TrimSpace(values.Get("rule_destination_cidr")),
 			DestinationEntity: strings.TrimSpace(values.Get("rule_destination_entity")),
 			DestinationIP:     strings.TrimSpace(values.Get("rule_destination_ip")),
-			DestinationPort:   int32(parsePositiveInt(values.Get("rule_destination_port"))),
 			Protocol:          int32(parsePositiveInt(values.Get("rule_protocol"))),
+			ServicePort:       int32(parsePositiveInt(values.Get("rule_service_port"))),
 			SourceCIDR:        strings.TrimSpace(values.Get("rule_source_cidr")),
 			SourceEntity:      strings.TrimSpace(values.Get("rule_source_entity")),
 			SourceIP:          strings.TrimSpace(values.Get("rule_source_ip")),
-			SourcePort:        int32(parsePositiveInt(values.Get("rule_source_port"))),
 		},
 		Name: strings.TrimSpace(values.Get("rule_name")),
 	}
@@ -365,12 +356,11 @@ func (m IgnoreRuleMatch) empty() bool {
 		m.DestinationCIDR == "" &&
 		m.DestinationEntity == "" &&
 		m.DestinationIP == "" &&
-		m.DestinationPort == 0 &&
 		m.Protocol == 0 &&
+		m.ServicePort == 0 &&
 		m.SourceCIDR == "" &&
 		m.SourceEntity == "" &&
-		m.SourceIP == "" &&
-		m.SourcePort == 0
+		m.SourceIP == ""
 }
 
 func (m IgnoreRuleMatch) Summary() string {
@@ -387,11 +377,8 @@ func (m IgnoreRuleMatch) Summary() string {
 	if m.Protocol > 0 {
 		parts = append(parts, "proto="+strconv.FormatInt(int64(m.Protocol), 10))
 	}
-	if m.SourcePort > 0 {
-		parts = append(parts, "src_port="+strconv.FormatInt(int64(m.SourcePort), 10))
-	}
-	if m.DestinationPort > 0 {
-		parts = append(parts, "dst_port="+strconv.FormatInt(int64(m.DestinationPort), 10))
+	if m.ServicePort > 0 {
+		parts = append(parts, "service_port="+strconv.FormatInt(int64(m.ServicePort), 10))
 	}
 	if m.SourceIP != "" {
 		parts = append(parts, "src_ip="+m.SourceIP)
@@ -425,6 +412,14 @@ func buildDNSIgnoreConditionSQL(rules []IgnoreRule, inetAvailable bool) (string,
 	return buildIgnoreConditionSQL(rules, inetAvailable, false)
 }
 
+func buildFlowSummaryIgnoreConditionSQL(rules []IgnoreRule, inetAvailable bool) (string, []any, error) {
+	return buildSummaryIgnoreConditionSQL(rules, inetAvailable, true)
+}
+
+func buildDNSSummaryIgnoreConditionSQL(rules []IgnoreRule, inetAvailable bool) (string, []any, error) {
+	return buildSummaryIgnoreConditionSQL(rules, inetAvailable, false)
+}
+
 func buildIgnoreConditionSQL(rules []IgnoreRule, inetAvailable, flowDataset bool) (string, []any, error) {
 	ruleConditions := make([]string, 0, len(rules))
 	args := make([]any, 0, len(rules)*8)
@@ -448,11 +443,174 @@ func buildIgnoreConditionSQL(rules []IgnoreRule, inetAvailable, flowDataset bool
 	return strings.Join(ruleConditions, " OR "), args, nil
 }
 
+func buildSummaryIgnoreConditionSQL(rules []IgnoreRule, inetAvailable, flowDataset bool) (string, []any, error) {
+	ruleConditions := make([]string, 0, len(rules))
+	args := make([]any, 0, len(rules)*8)
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		condition, conditionArgs, applies, err := summaryIgnoreRuleConditionSQL(rule, inetAvailable, flowDataset)
+		if err != nil {
+			return "", nil, err
+		}
+		if !applies || condition == "" {
+			continue
+		}
+		ruleConditions = append(ruleConditions, "("+condition+")")
+		args = append(args, conditionArgs...)
+	}
+	if len(ruleConditions) == 0 {
+		return "", nil, nil
+	}
+	return strings.Join(ruleConditions, " OR "), args, nil
+}
+
 func ignoreRuleConditionSQL(rule IgnoreRule, inetAvailable, flowDataset bool) (string, []any, bool, error) {
 	if flowDataset {
 		return flowIgnoreRuleConditionSQL(rule, inetAvailable)
 	}
 	return dnsIgnoreRuleConditionSQL(rule, inetAvailable)
+}
+
+func summaryIgnoreRuleConditionSQL(rule IgnoreRule, inetAvailable, flowDataset bool) (string, []any, bool, error) {
+	if flowDataset {
+		return flowSummaryIgnoreRuleConditionSQL(rule, inetAvailable)
+	}
+	return dnsSummaryIgnoreRuleConditionSQL(rule, inetAvailable)
+}
+
+func flowSummaryIgnoreRuleConditionSQL(rule IgnoreRule, inetAvailable bool) (string, []any, bool, error) {
+	conditions := []string(nil)
+	args := []any(nil)
+
+	appendEntity := func(value string, columns ...string) {
+		if value == "" {
+			return
+		}
+		parts := make([]string, 0, len(columns))
+		for _, column := range columns {
+			parts = append(parts, column+" = ?")
+			args = append(args, value)
+		}
+		conditions = append(conditions, "("+strings.Join(parts, " OR ")+")")
+	}
+
+	appendCIDR := func(column, value string) error {
+		if value == "" {
+			return nil
+		}
+		if !inetAvailable {
+			return fmt.Errorf("CIDR ignore rule %q requires DuckDB inet support", rule.Name)
+		}
+		conditions = append(conditions, fmt.Sprintf("(TRY_CAST(%s AS INET) <<= CAST(? AS INET))", column))
+		args = append(args, value)
+		return nil
+	}
+
+	appendEntity(rule.Match.AnyEntity, "src_entity", "src_host", "src_ip", "dst_entity", "dst_host", "dst_ip")
+	appendEntity(rule.Match.SourceEntity, "src_entity", "src_host", "src_ip")
+	appendEntity(rule.Match.DestinationEntity, "dst_entity", "dst_host", "dst_ip")
+	if rule.Match.SourceIP != "" {
+		conditions = append(conditions, "src_ip = ?")
+		args = append(args, rule.Match.SourceIP)
+	}
+	if rule.Match.DestinationIP != "" {
+		conditions = append(conditions, "dst_ip = ?")
+		args = append(args, rule.Match.DestinationIP)
+	}
+	if err := appendCIDR("src_ip", rule.Match.SourceCIDR); err != nil {
+		return "", nil, false, err
+	}
+	if err := appendCIDR("dst_ip", rule.Match.DestinationCIDR); err != nil {
+		return "", nil, false, err
+	}
+	if rule.Match.Protocol > 0 {
+		conditions = append(conditions, "protocol = ?")
+		args = append(args, rule.Match.Protocol)
+	}
+	if rule.Match.ServicePort > 0 {
+		conditions = append(conditions, "service_port = ?")
+		args = append(args, rule.Match.ServicePort)
+	}
+	if rule.Match.Direction != "" && rule.Match.Direction != DirectionBoth {
+		switch rule.Match.Direction {
+		case DirectionEgress:
+			conditions = append(conditions, "direction = ?")
+			args = append(args, directionEgressParquetValue)
+		case DirectionIngress:
+			conditions = append(conditions, "direction = ?")
+			args = append(args, directionIngressParquetValue)
+		}
+	}
+	switch rule.Match.AddressFamily {
+	case AddressFamilyIPv4:
+		conditions = append(conditions, "ip_version = ?")
+		args = append(args, 4)
+	case AddressFamilyIPv6:
+		conditions = append(conditions, "ip_version = ?")
+		args = append(args, 6)
+	}
+	if len(conditions) == 0 {
+		return "", nil, false, nil
+	}
+	return strings.Join(conditions, " AND "), args, true, nil
+}
+
+func dnsSummaryIgnoreRuleConditionSQL(rule IgnoreRule, inetAvailable bool) (string, []any, bool, error) {
+	if rule.Match.Protocol > 0 || rule.Match.ServicePort > 0 || rule.Match.DestinationIP != "" || rule.Match.DestinationCIDR != "" || (rule.Match.Direction != "" && rule.Match.Direction != DirectionBoth) {
+		return "", nil, false, nil
+	}
+
+	conditions := []string(nil)
+	args := []any(nil)
+
+	appendEntity := func(value string, columns ...string) {
+		if value == "" {
+			return
+		}
+		parts := make([]string, 0, len(columns))
+		for _, column := range columns {
+			parts = append(parts, column+" = ?")
+			args = append(args, value)
+		}
+		conditions = append(conditions, "("+strings.Join(parts, " OR ")+")")
+	}
+
+	appendCIDR := func(column, value string) error {
+		if value == "" {
+			return nil
+		}
+		if !inetAvailable {
+			return fmt.Errorf("CIDR ignore rule %q requires DuckDB inet support", rule.Name)
+		}
+		conditions = append(conditions, fmt.Sprintf("(TRY_CAST(%s AS INET) <<= CAST(? AS INET))", column))
+		args = append(args, value)
+		return nil
+	}
+
+	appendEntity(rule.Match.AnyEntity, "src_entity", "src_host", "src_ip", "dst_entity", "dst_host")
+	appendEntity(rule.Match.SourceEntity, "src_entity", "src_host", "src_ip")
+	appendEntity(rule.Match.DestinationEntity, "dst_entity", "dst_host")
+	if rule.Match.SourceIP != "" {
+		conditions = append(conditions, "src_ip = ?")
+		args = append(args, rule.Match.SourceIP)
+	}
+	if err := appendCIDR("src_ip", rule.Match.SourceCIDR); err != nil {
+		return "", nil, false, err
+	}
+	switch rule.Match.AddressFamily {
+	case AddressFamilyIPv4:
+		conditions = append(conditions, "ip_version = ?")
+		args = append(args, 4)
+	case AddressFamilyIPv6:
+		conditions = append(conditions, "ip_version = ?")
+		args = append(args, 6)
+	}
+	if len(conditions) == 0 {
+		return "", nil, false, nil
+	}
+	return strings.Join(conditions, " AND "), args, true, nil
 }
 
 func flowIgnoreRuleConditionSQL(rule IgnoreRule, inetAvailable bool) (string, []any, bool, error) {
@@ -504,13 +662,9 @@ func flowIgnoreRuleConditionSQL(rule IgnoreRule, inetAvailable bool) (string, []
 		conditions = append(conditions, "protocol = ?")
 		args = append(args, rule.Match.Protocol)
 	}
-	if rule.Match.SourcePort > 0 {
-		conditions = append(conditions, "src_port = ?")
-		args = append(args, rule.Match.SourcePort)
-	}
-	if rule.Match.DestinationPort > 0 {
-		conditions = append(conditions, "dst_port = ?")
-		args = append(args, rule.Match.DestinationPort)
+	if rule.Match.ServicePort > 0 {
+		conditions = append(conditions, rawServicePortExpression()+" = ?")
+		args = append(args, rule.Match.ServicePort)
 	}
 	if rule.Match.Direction != "" && rule.Match.Direction != DirectionBoth {
 		switch rule.Match.Direction {
@@ -537,7 +691,7 @@ func flowIgnoreRuleConditionSQL(rule IgnoreRule, inetAvailable bool) (string, []
 }
 
 func dnsIgnoreRuleConditionSQL(rule IgnoreRule, inetAvailable bool) (string, []any, bool, error) {
-	if rule.Match.Protocol > 0 || rule.Match.SourcePort > 0 || rule.Match.DestinationPort > 0 || rule.Match.DestinationIP != "" || rule.Match.DestinationCIDR != "" || (rule.Match.Direction != "" && rule.Match.Direction != DirectionBoth) {
+	if rule.Match.Protocol > 0 || rule.Match.ServicePort > 0 || rule.Match.DestinationIP != "" || rule.Match.DestinationCIDR != "" || (rule.Match.Direction != "" && rule.Match.Direction != DirectionBoth) {
 		return "", nil, false, nil
 	}
 

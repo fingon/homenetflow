@@ -126,8 +126,8 @@ func TestServiceFlowDetailsShowsIgnoredRowsWhenRequested(t *testing.T) {
 		Enabled: true,
 		Name:    "Ignore UDP 53",
 		Match: IgnoreRuleMatch{
-			Protocol:        17,
-			DestinationPort: 53,
+			Protocol:    17,
+			ServicePort: 53,
 		},
 	}})
 
@@ -1068,6 +1068,7 @@ func TestServiceGraphMonthPresetUsesBucketedSummaryFastPath(t *testing.T) {
 	assert.Assert(t, !containsNode(graph.Nodes, "google.com"))
 
 	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricBytes, service.currentRevision()) +
+		summaryFilterCacheSuffix(state) +
 		":" + strconv.FormatInt(summaryBucketStartNs(state.FromNs), 10) +
 		":" + strconv.FormatInt(summaryBucketStartNs(state.ToNs), 10)
 	_, ok := service.summaryGraphCache.Get(cacheKey)
@@ -1247,7 +1248,7 @@ func TestServiceGraphAddressFamilyUsesSummaryFastPath(t *testing.T) {
 	assert.Assert(t, containsNode(graph.Nodes, "google.com"))
 	assert.Assert(t, !containsNode(graph.Nodes, "example"))
 
-	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyIPv4, DirectionBoth, MetricBytes, service.currentRevision())
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyIPv4, DirectionBoth, MetricBytes, service.currentRevision()) + summaryFilterCacheSuffix(state)
 	_, ok := service.summaryGraphCache.Get(cacheKey)
 	assert.Assert(t, ok)
 }
@@ -1285,7 +1286,7 @@ func TestServiceGraphDirectionUsesSummaryFastPath(t *testing.T) {
 	assert.Assert(t, containsNode(graph.Nodes, "google.com"))
 	assert.Assert(t, !containsNode(graph.Nodes, "beta.lan"))
 
-	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionEgress, MetricBytes, service.currentRevision())
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionEgress, MetricBytes, service.currentRevision()) + summaryFilterCacheSuffix(state)
 	_, ok := service.summaryGraphCache.Get(cacheKey)
 	assert.Assert(t, ok)
 }
@@ -1509,7 +1510,7 @@ func TestServiceDNSLookupSummaryFastPath(t *testing.T) {
 	assert.Assert(t, containsNode(graph.Nodes, dnsLookupTestLAN))
 	assert.Assert(t, containsNode(graph.Nodes, "example.com"))
 
-	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricDNSLookups, service.currentRevision())
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricDNSLookups, service.currentRevision()) + summaryFilterCacheSuffix(state)
 	_, ok := service.summaryGraphCache.Get(cacheKey)
 	assert.Assert(t, ok)
 }
@@ -1572,7 +1573,7 @@ func TestServiceGraphBuildsSummarySnapshotCache(t *testing.T) {
 	_, err = service.Graph(context.Background(), state)
 	assert.NilError(t, err)
 
-	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricBytes, service.currentRevision())
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricBytes, service.currentRevision()) + summaryFilterCacheSuffix(state)
 	_, ok := service.summaryGraphCache.Get(cacheKey)
 	assert.Assert(t, ok)
 }
@@ -1730,7 +1731,7 @@ func TestServiceGraphPortFilterUsesSummaryFastPath(t *testing.T) {
 	assert.Equal(t, graph.Totals.Bytes, int64(100))
 	assert.Assert(t, containsNode(graph.Nodes, "google.com"))
 	assert.Assert(t, !containsNode(graph.Nodes, "one.one.one.one"))
-	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricBytes, service.currentRevision()) + ":protocol=0:port=443"
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricBytes, service.currentRevision()) + summaryFilterCacheSuffix(state)
 	_, ok := service.summaryGraphCache.Get(cacheKey)
 	assert.Assert(t, ok)
 }
@@ -1779,7 +1780,10 @@ func TestServiceRefreshMetadataRebuildsStaleUISummariesInBackground(t *testing.T
 	for {
 		manifest, manifestErr := parquetout.ReadUISummaryManifest(filepath.Join(tempDir, "ui_summary_edges_tld_202604.parquet"))
 		assert.NilError(t, manifestErr)
-		if manifest.Source.ModTimeNs == modTime.UnixNano() {
+		service.mu.RLock()
+		pending := service.summaryRefreshPending
+		service.mu.RUnlock()
+		if manifest.Source.ModTimeNs == modTime.UnixNano() && !pending {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -1788,7 +1792,97 @@ func TestServiceRefreshMetadataRebuildsStaleUISummariesInBackground(t *testing.T
 		time.Sleep(25 * time.Millisecond)
 	}
 
-	assert.Assert(t, !service.summaryRefreshPending)
+	service.mu.RLock()
+	pending := service.summaryRefreshPending
+	service.mu.RUnlock()
+	assert.Assert(t, !pending)
+}
+
+func TestServiceLongRangeServicePortIgnoreUsesSummary(t *testing.T) {
+	tempDir := t.TempDir()
+	ignoredRecord := sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20)
+	ignoredRecord.Protocol = 6
+	ignoredRecord.SrcPort = 55000
+	ignoredRecord.DstPort = 443
+	visibleRecord := sampleRecord("192.168.1.11", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 200, 1+int64(8*24*time.Hour), 1+int64(8*24*time.Hour)+20)
+	visibleRecord.Protocol = 17
+	visibleRecord.SrcPort = 55001
+	visibleRecord.DstPort = 53
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		ignoredRecord,
+		visibleRecord,
+	})
+	writeIgnoreRules(t, tempDir, []IgnoreRule{{
+		ID:      "ignore-https",
+		Enabled: true,
+		Name:    "Ignore HTTPS",
+		Match: IgnoreRuleMatch{
+			Protocol:    6,
+			ServicePort: 443,
+		},
+	}})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	span, err := service.Span(context.Background())
+	assert.NilError(t, err)
+	state := QueryState{
+		Granularity: Granularity2LD,
+		Metric:      MetricBytes,
+	}.Normalized(span)
+	assert.Assert(t, !state.EntityActionsEnabled())
+	assert.Assert(t, service.canUseSummaryGraph(state, span))
+
+	graph, err := service.Graph(context.Background(), state)
+	assert.NilError(t, err)
+	assert.Equal(t, graph.Totals.Bytes, int64(200))
+	assert.Assert(t, !containsNode(graph.Nodes, "google.com"))
+	assert.Assert(t, containsNode(graph.Nodes, "one.one.one.one"))
+
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricBytes, service.currentRevision()) + summaryFilterCacheSuffix(state)
+	_, ok := service.summaryGraphCache.Get(cacheKey)
+	assert.Assert(t, ok)
+}
+
+func TestServiceLongRangeSourceIPIgnoreUsesSummaryIdentity(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+		sampleRecord("10.0.0.5", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 200, 1+int64(8*24*time.Hour), 1+int64(8*24*time.Hour)+20),
+	})
+	writeIgnoreRules(t, tempDir, []IgnoreRule{{
+		ID:      "ignore-192-168-1",
+		Enabled: true,
+		Name:    "Ignore 192.168.1.10",
+		Match: IgnoreRuleMatch{
+			SourceIP: "192.168.1.10",
+		},
+	}})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	span, err := service.Span(context.Background())
+	assert.NilError(t, err)
+	state := QueryState{
+		Granularity: Granularity2LD,
+		Metric:      MetricBytes,
+	}.Normalized(span)
+	assert.Assert(t, !state.EntityActionsEnabled())
+	assert.Assert(t, service.canUseSummaryGraph(state, span))
+
+	graph, err := service.Graph(context.Background(), state)
+	assert.NilError(t, err)
+	assert.Equal(t, graph.Totals.Bytes, int64(200))
+	assert.Assert(t, !containsNode(graph.Nodes, "google.com"))
+	assert.Assert(t, containsNode(graph.Nodes, "one.one.one.one"))
+
+	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricBytes, service.currentRevision()) + summaryFilterCacheSuffix(state)
+	_, ok := service.summaryGraphCache.Get(cacheKey)
+	assert.Assert(t, ok)
 }
 
 func TestServiceTLDUsesUnknownForUnresolvedIPs(t *testing.T) {

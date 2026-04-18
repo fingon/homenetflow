@@ -17,6 +17,8 @@ type EdgeSummaryRow struct {
 	Bytes                 int64  `parquet:"bytes"`
 	Connections           int64  `parquet:"connections"`
 	Destination           string `parquet:"dst_entity"`
+	DestinationHost       string `parquet:"dst_host"`
+	DestinationIP         string `parquet:"dst_ip"`
 	Direction             *int32 `parquet:"direction,optional"`
 	DstPrivateBytes       int64  `parquet:"dst_private_bytes"`
 	DstPrivateConnections int64  `parquet:"dst_private_connections"`
@@ -29,6 +31,8 @@ type EdgeSummaryRow struct {
 	Protocol              int32  `parquet:"protocol"`
 	ServicePort           *int32 `parquet:"service_port,optional"`
 	Source                string `parquet:"src_entity"`
+	SourceHost            string `parquet:"src_host"`
+	SourceIP              string `parquet:"src_ip"`
 	SrcPrivateBytes       int64  `parquet:"src_private_bytes"`
 	SrcPrivateConnections int64  `parquet:"src_private_connections"`
 	SrcPublicBytes        int64  `parquet:"src_public_bytes"`
@@ -41,6 +45,8 @@ type BucketedEdgeSummaryRow struct {
 	Bytes                 int64  `parquet:"bytes"`
 	Connections           int64  `parquet:"connections"`
 	Destination           string `parquet:"dst_entity"`
+	DestinationHost       string `parquet:"dst_host"`
+	DestinationIP         string `parquet:"dst_ip"`
 	Direction             *int32 `parquet:"direction,optional"`
 	DstPrivateBytes       int64  `parquet:"dst_private_bytes"`
 	DstPrivateConnections int64  `parquet:"dst_private_connections"`
@@ -53,6 +59,8 @@ type BucketedEdgeSummaryRow struct {
 	Protocol              int32  `parquet:"protocol"`
 	ServicePort           *int32 `parquet:"service_port,optional"`
 	Source                string `parquet:"src_entity"`
+	SourceHost            string `parquet:"src_host"`
+	SourceIP              string `parquet:"src_ip"`
 	SrcPrivateBytes       int64  `parquet:"src_private_bytes"`
 	SrcPrivateConnections int64  `parquet:"src_private_connections"`
 	SrcPublicBytes        int64  `parquet:"src_public_bytes"`

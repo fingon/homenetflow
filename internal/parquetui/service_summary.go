@@ -30,6 +30,8 @@ type summaryEdgeAggregate struct {
 	FirstSeenNs           int64
 	IPVersion             int32
 	LastSeenNs            int64
+	IgnoredBytes          int64
+	IgnoredConnections    int64
 	NXDomainLookups       int64
 	Protocol              int32
 	ServicePort           *int32
@@ -47,9 +49,6 @@ type summaryMetricView struct {
 }
 
 func (s *Service) canUseSummaryGraph(state QueryState, span TimeSpan) bool {
-	if s.hasEnabledIgnoreRules() {
-		return false
-	}
 	if state.Granularity != GranularityTLD && state.Granularity != Granularity2LD {
 		return false
 	}
@@ -201,6 +200,13 @@ func (s *Service) summaryHistogram(ctx context.Context, state QueryState) ([]His
 
 	queryStart := time.Now()
 	widthNs := max(int64(1), (state.ToNs-state.FromNs+1)/histogramBinCount)
+	ignoreCondition, ignoreArgs, err := s.summaryIgnoreCondition(state)
+	if err != nil {
+		return nil, err
+	}
+	if state.HideIgnored && ignoreCondition != "" {
+		return s.bucketedSummaryHistogram(ctx, state, widthNs, ignoreCondition, ignoreArgs, queryStart)
+	}
 	whereClause, args := summaryFilterClause(state)
 	rangeClause := "WHERE bucket_start_ns BETWEEN ? AND ?"
 	if whereClause != "" {
@@ -257,6 +263,71 @@ ORDER BY bucket
 	s.histogramCache.Set(cacheKey, bins)
 	slog.Debug("UI summary histogram query complete", "granularity", state.Granularity, "family", state.AddressFamily, "duration_ms", time.Since(queryStart).Milliseconds())
 	return bins, nil
+}
+
+func (s *Service) bucketedSummaryHistogram(ctx context.Context, state QueryState, widthNs int64, ignoreCondition string, ignoreArgs []any, queryStart time.Time) ([]HistogramBin, error) {
+	whereClause, args := summaryFilterClause(state)
+	rangeClause := appendSummaryWhereCondition(whereClause, "NOT ("+ignoreCondition+")")
+	rangeClause = appendSummaryWhereCondition(rangeClause, "bucket_start_ns BETWEEN ? AND ?")
+	query := fmt.Sprintf(`
+SELECT CAST(FLOOR((bucket_start_ns - ?) / ?) AS BIGINT) AS bucket, SUM(%s) AS value
+FROM read_parquet(%s)
+%s
+GROUP BY bucket
+ORDER BY bucket
+`, summaryMetricColumn(state.Metric), quoteLiteral(s.summaryBucketedEdgeGlob(state.Granularity, state.Metric)), rangeClause)
+
+	queryArgs := append([]any{state.FromNs, widthNs}, args...)
+	queryArgs = append(queryArgs, ignoreArgs...)
+	queryArgs = append(queryArgs, summaryBucketStartNs(state.FromNs), summaryBucketStartNs(state.ToNs))
+	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("query bucketed summary histogram: %w", err)
+	}
+	defer rows.Close()
+
+	values := make(map[int]int64, histogramBinCount)
+	for rows.Next() {
+		var bucket int
+		var value int64
+		if err := rows.Scan(&bucket, &value); err != nil {
+			return nil, fmt.Errorf("scan bucketed summary histogram row: %w", err)
+		}
+		if bucket < 0 {
+			bucket = 0
+		}
+		if bucket >= histogramBinCount {
+			bucket = histogramBinCount - 1
+		}
+		values[bucket] += value
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate bucketed summary histogram rows: %w", err)
+	}
+
+	bins := make([]HistogramBin, 0, histogramBinCount)
+	for bucket := range histogramBinCount {
+		startNs := state.FromNs + int64(bucket)*widthNs
+		endNs := startNs + widthNs - 1
+		if bucket == histogramBinCount-1 {
+			endNs = state.ToNs
+		}
+		bins = append(bins, HistogramBin{
+			FromNs: startNs,
+			ToNs:   endNs,
+			Value:  values[bucket],
+		})
+	}
+	s.histogramCache.Set(state.cacheKey(histogramCacheKind, s.currentRevision()), bins)
+	slog.Debug("UI bucketed summary histogram query complete", "granularity", state.Granularity, "family", state.AddressFamily, "duration_ms", time.Since(queryStart).Milliseconds())
+	return bins, nil
+}
+
+func (s *Service) summaryIgnoreCondition(state QueryState) (string, []any, error) {
+	if state.Metric == MetricDNSLookups {
+		return buildDNSSummaryIgnoreConditionSQL(s.enabledIgnoreRules(), s.inetSupportEnabled())
+	}
+	return buildFlowSummaryIgnoreConditionSQL(s.enabledIgnoreRules(), s.inetSupportEnabled())
 }
 
 func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) (map[string]LayoutPoint, error) {
@@ -327,6 +398,44 @@ func (s *Service) summaryGraphSnapshotForState(ctx context.Context, state QueryS
 	return s.bucketedSummaryGraphSnapshot(ctx, state)
 }
 
+func (s *Service) summarySnapshotFilterExpressions(state QueryState) (string, string, string, []any, error) {
+	whereClause, filterArgs := summaryFilterClause(state)
+	var ignoreCondition string
+	var ignoreArgs []any
+	var err error
+	if state.Metric == MetricDNSLookups {
+		ignoreCondition, ignoreArgs, err = buildDNSSummaryIgnoreConditionSQL(s.enabledIgnoreRules(), s.inetSupportEnabled())
+	} else {
+		ignoreCondition, ignoreArgs, err = buildFlowSummaryIgnoreConditionSQL(s.enabledIgnoreRules(), s.inetSupportEnabled())
+	}
+	if err != nil {
+		return "", "", "", nil, err
+	}
+	if ignoreCondition == "" {
+		return "0", "0", whereClause, filterArgs, nil
+	}
+	if state.HideIgnored {
+		return "0", "0", appendSummaryWhereCondition(whereClause, "NOT ("+ignoreCondition+")"), append(filterArgs, ignoreArgs...), nil
+	}
+
+	ignoredBytesExpr := "COALESCE(SUM(CASE WHEN " + ignoreCondition + " THEN bytes ELSE 0 END), 0)"
+	ignoredConnectionsExpr := "COALESCE(SUM(CASE WHEN " + ignoreCondition + " THEN connections ELSE 0 END), 0)"
+	args := append([]any(nil), ignoreArgs...)
+	args = append(args, ignoreArgs...)
+	args = append(args, filterArgs...)
+	return ignoredBytesExpr, ignoredConnectionsExpr, whereClause, args, nil
+}
+
+func appendSummaryWhereCondition(whereClause, condition string) string {
+	if condition == "" {
+		return whereClause
+	}
+	if whereClause == "" {
+		return "WHERE " + condition
+	}
+	return whereClause + " AND " + condition
+}
+
 func (s *Service) summaryGraphSnapshot(ctx context.Context, state QueryState) (*summaryGraphSnapshotData, error) {
 	cacheKey := summaryGraphSnapshotCacheKey(state.Granularity, state.AddressFamily, state.Direction, state.Metric, s.currentRevision()) + summaryFilterCacheSuffix(state)
 	if snapshot, ok := s.summaryGraphCache.Get(cacheKey); ok {
@@ -334,11 +443,16 @@ func (s *Service) summaryGraphSnapshot(ctx context.Context, state QueryState) (*
 	}
 
 	queryStart := time.Now()
-	whereClause, args := summaryFilterClause(state)
+	ignoredBytesExpr, ignoredConnectionsExpr, whereClause, args, err := s.summarySnapshotFilterExpressions(state)
+	if err != nil {
+		return nil, err
+	}
 	query := fmt.Sprintf(`
 SELECT src_entity, dst_entity,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   COALESCE(SUM(connections), 0) AS connection_total,
+  %s AS ignored_bytes_total,
+  %s AS ignored_connection_total,
   direction,
   COALESCE(SUM(src_private_bytes), 0) AS src_private_bytes,
   COALESCE(SUM(src_private_connections), 0) AS src_private_connections,
@@ -358,7 +472,7 @@ SELECT src_entity, dst_entity,
 FROM read_parquet(%s)
 %s
 GROUP BY src_entity, dst_entity, direction, ip_version, protocol, service_port
-`, quoteLiteral(s.summaryEdgeGlob(state.Granularity, state.Metric)), whereClause)
+`, ignoredBytesExpr, ignoredConnectionsExpr, quoteLiteral(s.summaryEdgeGlob(state.Granularity, state.Metric)), whereClause)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -379,6 +493,8 @@ GROUP BY src_entity, dst_entity, direction, ip_version, protocol, service_port
 			&edge.Destination,
 			&edge.Bytes,
 			&edge.Connections,
+			&edge.IgnoredBytes,
+			&edge.IgnoredConnections,
 			&direction,
 			&edge.SrcPrivateBytes,
 			&edge.SrcPrivateConnections,
@@ -403,6 +519,7 @@ GROUP BY src_entity, dst_entity, direction, ip_version, protocol, service_port
 		snapshot.edges = append(snapshot.edges, edge)
 		snapshot.totals.Bytes += edge.Bytes
 		snapshot.totals.Connections += edge.Connections
+		snapshot.totals.Ignored += summaryMetricValue(state.Metric, edge.IgnoredBytes, edge.IgnoredConnections)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate summary graph snapshot rows: %w", err)
@@ -424,7 +541,10 @@ func (s *Service) bucketedSummaryGraphSnapshot(ctx context.Context, state QueryS
 	}
 
 	queryStart := time.Now()
-	whereClause, args := summaryFilterClause(state)
+	ignoredBytesExpr, ignoredConnectionsExpr, whereClause, args, err := s.summarySnapshotFilterExpressions(state)
+	if err != nil {
+		return nil, err
+	}
 	rangeClause := "WHERE bucket_start_ns BETWEEN ? AND ?"
 	if whereClause != "" {
 		rangeClause = whereClause + " AND bucket_start_ns BETWEEN ? AND ?"
@@ -434,6 +554,8 @@ func (s *Service) bucketedSummaryGraphSnapshot(ctx context.Context, state QueryS
 SELECT src_entity, dst_entity,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   COALESCE(SUM(connections), 0) AS connection_total,
+  %s AS ignored_bytes_total,
+  %s AS ignored_connection_total,
   direction,
   COALESCE(SUM(src_private_bytes), 0) AS src_private_bytes,
   COALESCE(SUM(src_private_connections), 0) AS src_private_connections,
@@ -453,7 +575,7 @@ SELECT src_entity, dst_entity,
 FROM read_parquet(%s)
 %s
 GROUP BY src_entity, dst_entity, direction, ip_version, protocol, service_port
-`, quoteLiteral(s.summaryBucketedEdgeGlob(state.Granularity, state.Metric)), rangeClause)
+`, ignoredBytesExpr, ignoredConnectionsExpr, quoteLiteral(s.summaryBucketedEdgeGlob(state.Granularity, state.Metric)), rangeClause)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -474,6 +596,8 @@ GROUP BY src_entity, dst_entity, direction, ip_version, protocol, service_port
 			&edge.Destination,
 			&edge.Bytes,
 			&edge.Connections,
+			&edge.IgnoredBytes,
+			&edge.IgnoredConnections,
 			&direction,
 			&edge.SrcPrivateBytes,
 			&edge.SrcPrivateConnections,
@@ -498,6 +622,7 @@ GROUP BY src_entity, dst_entity, direction, ip_version, protocol, service_port
 		snapshot.edges = append(snapshot.edges, edge)
 		snapshot.totals.Bytes += edge.Bytes
 		snapshot.totals.Connections += edge.Connections
+		snapshot.totals.Ignored += summaryMetricValue(state.Metric, edge.IgnoredBytes, edge.IgnoredConnections)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate bucketed summary graph snapshot rows: %w", err)
@@ -530,6 +655,8 @@ func buildSummaryMetricView(snapshot *summaryGraphSnapshotData, metric Metric) s
 			Source:            aggregate.Source,
 			SuccessfulLookups: aggregate.SuccessfulLookups,
 		}
+		edge.IgnoredMetric = summaryMetricValue(metric, aggregate.IgnoredBytes, aggregate.IgnoredConnections)
+		edge.Ignored = edge.IgnoredMetric > 0
 		edge.DNSResultState = dnsResultStateForCounts(edge.NXDomainLookups, edge.SuccessfulLookups)
 		edges = append(edges, edge)
 
@@ -539,6 +666,7 @@ func buildSummaryMetricView(snapshot *summaryGraphSnapshotData, metric Metric) s
 		sourceNode.PrivateMetric += summaryMetricValue(metric, aggregate.SrcPrivateBytes, aggregate.SrcPrivateConnections)
 		sourceNode.PublicMetric += summaryMetricValue(metric, aggregate.SrcPublicBytes, aggregate.SrcPublicConnections)
 		sourceNode.Egress += edge.MetricValue
+		sourceNode.Ignored = sourceNode.Ignored || edge.Ignored
 		sourceNode.NXDomainLookups += aggregate.NXDomainLookups
 		sourceNode.SuccessfulLookups += aggregate.SuccessfulLookups
 		sourceNode.Total += edge.MetricValue
@@ -552,6 +680,7 @@ func buildSummaryMetricView(snapshot *summaryGraphSnapshotData, metric Metric) s
 		destinationNode.PrivateMetric += summaryMetricValue(metric, aggregate.DstPrivateBytes, aggregate.DstPrivateConnections)
 		destinationNode.PublicMetric += summaryMetricValue(metric, aggregate.DstPublicBytes, aggregate.DstPublicConnections)
 		destinationNode.Ingress += edge.MetricValue
+		destinationNode.Ignored = destinationNode.Ignored || edge.Ignored
 		destinationNode.NXDomainLookups += aggregate.NXDomainLookups
 		destinationNode.SuccessfulLookups += aggregate.SuccessfulLookups
 		destinationNode.Total += edge.MetricValue
@@ -760,10 +889,11 @@ func summaryGraphSnapshotCacheKey(granularity Granularity, addressFamily Address
 }
 
 func summaryFilterCacheSuffix(state QueryState) string {
-	if state.Metric == MetricDNSLookups || (state.Protocol == 0 && state.Port == 0) {
-		return ""
+	parts := []string{fmt.Sprintf(":hide_ignored=%t", state.HideIgnored)}
+	if state.Metric != MetricDNSLookups && (state.Protocol != 0 || state.Port != 0) {
+		parts = append(parts, fmt.Sprintf(":protocol=%d:port=%d", state.Protocol, state.Port))
 	}
-	return fmt.Sprintf(":protocol=%d:port=%d", state.Protocol, state.Port)
+	return strings.Join(parts, "")
 }
 
 func summaryBucketStartNs(timestampNs int64) int64 {

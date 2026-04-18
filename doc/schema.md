@@ -296,7 +296,7 @@ Stored in UI summary parquet metadata key `homenetflow.parquetflowui.summary.man
 {
   "granularity": "tld",
   "kind": "edges",
-  "logicVersion": 8,
+  "logicVersion": 10,
   "source": {
     "path": "nfcap_202604.parquet",
     "sizeBytes": 1234,
@@ -318,6 +318,10 @@ Manifest metadata is used to decide whether outputs are fresh or need rebuilding
 
 - `src_entity`
 - `dst_entity`
+- `src_host`
+- `dst_host`
+- `src_ip`
+- `dst_ip`
 - `bytes`
 - `connections`
 - `direction`

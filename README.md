@@ -186,6 +186,8 @@ The UI expects enriched parquet files and validates that they carry the enrichme
 
 At `tld` and `2ld` granularities, unresolved entities are split into `Unknown private` and `Unknown public` instead of a single `Unknown` bucket.
 
+Views over 7 days are served from UI summaries instead of raw flow rows. Ignored-traffic rules use summary-safe dimensions: entities, host/IP identity, CIDR, protocol, service port, direction, and address family.
+
 ### Usage
 
 ```bash

@@ -97,8 +97,7 @@ func ignoreRuleEditor(page IgnoreRulePageData) g.Node {
 				formTextField("Source CIDR", "rule_source_cidr", rule.Match.SourceCIDR, "192.168.1.0/24"),
 				formTextField("Destination CIDR", "rule_destination_cidr", rule.Match.DestinationCIDR, "10.0.0.0/8"),
 				formNumberField("Protocol", "rule_protocol", rule.Match.Protocol, "6 or 17"),
-				formNumberField("Source Port", "rule_source_port", rule.Match.SourcePort, "443"),
-				formNumberField("Destination Port", "rule_destination_port", rule.Match.DestinationPort, "53"),
+				formNumberField("Service Port", "rule_service_port", rule.Match.ServicePort, "443"),
 				formSelectField("Direction", "rule_direction", string(rule.Match.Direction), []optionItem{
 					{Value: "", Label: "Any"},
 					{Value: string(DirectionEgress), Label: "Egress"},
@@ -323,11 +322,8 @@ func flowDetailIgnoreRuleURL(query FlowQuery, row FlowDetailRow) string {
 	values.Set("rule_source_entity", row.Source)
 	values.Set("rule_destination_entity", row.Destination)
 	values.Set("rule_protocol", strconv.FormatInt(int64(row.Protocol), 10))
-	if row.SrcPort > 0 {
-		values.Set("rule_source_port", strconv.FormatInt(int64(row.SrcPort), 10))
-	}
-	if row.DstPort > 0 {
-		values.Set("rule_destination_port", strconv.FormatInt(int64(row.DstPort), 10))
+	if row.ServicePort > 0 {
+		values.Set("rule_service_port", strconv.FormatInt(int64(row.ServicePort), 10))
 	}
 	switch row.IPVersion {
 	case 4:

@@ -494,6 +494,10 @@ func rebuildEdgeSummary(
 	srcExpr, dstExpr := entityExpressions(granularity)
 	query := fmt.Sprintf(`
 SELECT %s AS src_entity, %s AS dst_entity,
+  COALESCE(src_host, '') AS src_host,
+  src_ip,
+  COALESCE(dst_host, '') AS dst_host,
+  dst_ip,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   COUNT(*) AS connection_total,
   direction,
@@ -511,8 +515,8 @@ SELECT %s AS src_entity, %s AS dst_entity,
   protocol,
   %s AS service_port
 FROM read_parquet(%s)
-GROUP BY src_entity, dst_entity, direction, ip_version, protocol, service_port
-ORDER BY src_entity, dst_entity, direction, ip_version, protocol, service_port
+GROUP BY src_entity, dst_entity, src_host, src_ip, dst_host, dst_ip, direction, ip_version, protocol, service_port
+ORDER BY src_entity, dst_entity, src_host, src_ip, dst_host, dst_ip, direction, ip_version, protocol, service_port
 `, srcExpr, dstExpr, rawServicePortExpression(), quoteLiteral(sourceFile.AbsPath))
 
 	writer, finalize, err := parquetout.CreateUISummaryEdges(outputPath, model.NewUISummaryManifest(sourceFile, summaryEdgeKind, string(granularity), spanStartNs, spanEndNs))
@@ -534,6 +538,10 @@ ORDER BY src_entity, dst_entity, direction, ip_version, protocol, service_port
 		if err := rows.Scan(
 			&row.Source,
 			&row.Destination,
+			&row.SourceHost,
+			&row.SourceIP,
+			&row.DestinationHost,
+			&row.DestinationIP,
 			&row.Bytes,
 			&row.Connections,
 			&direction,
@@ -591,6 +599,10 @@ func rebuildBucketedEdgeSummary(
 	query := fmt.Sprintf(`
 SELECT CAST(FLOOR(time_start_ns / %d) AS BIGINT) * %d AS bucket_start_ns,
   %s AS src_entity, %s AS dst_entity,
+  COALESCE(src_host, '') AS src_host,
+  src_ip,
+  COALESCE(dst_host, '') AS dst_host,
+  dst_ip,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   COUNT(*) AS connection_total,
   direction,
@@ -608,8 +620,8 @@ SELECT CAST(FLOOR(time_start_ns / %d) AS BIGINT) * %d AS bucket_start_ns,
   protocol,
   %s AS service_port
 FROM read_parquet(%s)
-GROUP BY bucket_start_ns, src_entity, dst_entity, direction, ip_version, protocol, service_port
-ORDER BY bucket_start_ns, src_entity, dst_entity, direction, ip_version, protocol, service_port
+GROUP BY bucket_start_ns, src_entity, dst_entity, src_host, src_ip, dst_host, dst_ip, direction, ip_version, protocol, service_port
+ORDER BY bucket_start_ns, src_entity, dst_entity, src_host, src_ip, dst_host, dst_ip, direction, ip_version, protocol, service_port
 `, summaryBucketWidthNs, summaryBucketWidthNs, srcExpr, dstExpr, rawServicePortExpression(), quoteLiteral(sourceFile.AbsPath))
 
 	writer, finalize, err := parquetout.CreateUISummaryBucketedEdges(outputPath, model.NewUISummaryManifest(sourceFile, summaryBucketedEdgeKind, string(granularity), spanStartNs, spanEndNs))
@@ -632,6 +644,10 @@ ORDER BY bucket_start_ns, src_entity, dst_entity, direction, ip_version, protoco
 			&row.BucketStartNs,
 			&row.Source,
 			&row.Destination,
+			&row.SourceHost,
+			&row.SourceIP,
+			&row.DestinationHost,
+			&row.DestinationIP,
 			&row.Bytes,
 			&row.Connections,
 			&direction,
@@ -761,6 +777,10 @@ func rebuildDNSEdgeSummary(
 	}
 	query := fmt.Sprintf(`
 SELECT %s AS src_entity, %s AS dst_entity,
+  COALESCE(client_host, '') AS client_host,
+  client_ip,
+  query_name,
+  '' AS dst_ip,
   0 AS bytes_total,
   COALESCE(SUM(lookups), 0) AS lookup_total,
   COALESCE(SUM(CASE WHEN %s = %s THEN lookups ELSE 0 END), 0) AS nxdomain_lookup_total,
@@ -773,8 +793,8 @@ SELECT %s AS src_entity, %s AS dst_entity,
   client_ip_version,
   COALESCE(MAX(time_start_ns), 0) AS last_seen_ns
 FROM read_parquet(%s)
-GROUP BY src_entity, dst_entity, client_ip_version
-ORDER BY src_entity, dst_entity, client_ip_version
+GROUP BY src_entity, dst_entity, client_host, client_ip, query_name, client_ip_version
+ORDER BY src_entity, dst_entity, client_host, client_ip, query_name, client_ip_version
 `, srcExpr, dstExpr, answerExpr, quoteLiteral(model.DNSAnswerNXDOMAIN), answerExpr, answerExpr, quoteLiteral(model.DNSAnswerNXDOMAIN), quoteLiteral(paths.dnsSource))
 
 	sourceManifest, err := dnsSummarySourceManifest(paths.dnsSource)
@@ -807,6 +827,10 @@ ORDER BY src_entity, dst_entity, client_ip_version
 		if err := rows.Scan(
 			&row.Source,
 			&row.Destination,
+			&row.SourceHost,
+			&row.SourceIP,
+			&row.DestinationHost,
+			&row.DestinationIP,
 			&row.Bytes,
 			&row.Connections,
 			&row.NXDomainLookups,
@@ -865,6 +889,10 @@ func rebuildDNSBucketedEdgeSummary(
 	query := fmt.Sprintf(`
 SELECT CAST(FLOOR(time_start_ns / %d) AS BIGINT) * %d AS bucket_start_ns,
   %s AS src_entity, %s AS dst_entity,
+  COALESCE(client_host, '') AS client_host,
+  client_ip,
+  query_name,
+  '' AS dst_ip,
   0 AS bytes_total,
   COALESCE(SUM(lookups), 0) AS lookup_total,
   COALESCE(SUM(CASE WHEN %s = %s THEN lookups ELSE 0 END), 0) AS nxdomain_lookup_total,
@@ -877,8 +905,8 @@ SELECT CAST(FLOOR(time_start_ns / %d) AS BIGINT) * %d AS bucket_start_ns,
   client_ip_version,
   COALESCE(MAX(time_start_ns), 0) AS last_seen_ns
 FROM read_parquet(%s)
-GROUP BY bucket_start_ns, src_entity, dst_entity, client_ip_version
-ORDER BY bucket_start_ns, src_entity, dst_entity, client_ip_version
+GROUP BY bucket_start_ns, src_entity, dst_entity, client_host, client_ip, query_name, client_ip_version
+ORDER BY bucket_start_ns, src_entity, dst_entity, client_host, client_ip, query_name, client_ip_version
 `, summaryBucketWidthNs, summaryBucketWidthNs, srcExpr, dstExpr, answerExpr, quoteLiteral(model.DNSAnswerNXDOMAIN), answerExpr, answerExpr, quoteLiteral(model.DNSAnswerNXDOMAIN), quoteLiteral(paths.dnsSource))
 
 	sourceManifest, err := dnsSummarySourceManifest(paths.dnsSource)
@@ -912,6 +940,10 @@ ORDER BY bucket_start_ns, src_entity, dst_entity, client_ip_version
 			&row.BucketStartNs,
 			&row.Source,
 			&row.Destination,
+			&row.SourceHost,
+			&row.SourceIP,
+			&row.DestinationHost,
+			&row.DestinationIP,
 			&row.Bytes,
 			&row.Connections,
 			&row.NXDomainLookups,

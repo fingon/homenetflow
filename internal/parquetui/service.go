@@ -226,6 +226,7 @@ type FlowDetailRow struct {
 	IPVersion   int32
 	Packets     int64
 	Protocol    int32
+	ServicePort int32
 	Source      string
 	SrcIP       string
 	SrcPort     int32
@@ -407,6 +408,9 @@ func (s *Service) graphWithSpan(ctx context.Context, state QueryState, span Time
 	}
 	if s.canUseSummaryGraph(state, span) {
 		return s.summaryGraph(ctx, state, span)
+	}
+	if !state.EntityActionsEnabled() {
+		return GraphData{}, errLongRangeSummaryNeeded
 	}
 	cacheKey := state.cacheKey(graphCacheKind, s.currentRevision())
 	if graph, ok := s.graphCache.Get(cacheKey); ok {
@@ -609,6 +613,9 @@ func (s *Service) histogramWithSpan(ctx context.Context, state QueryState, span 
 	if s.canUseSummaryHistogram(state, span) {
 		return s.summaryHistogram(ctx, state)
 	}
+	if !state.EntityActionsEnabled() {
+		return nil, errLongRangeSummaryNeeded
+	}
 	if state.ToNs <= state.FromNs {
 		return nil, nil
 	}
@@ -760,7 +767,7 @@ func (s *Service) FlowDetails(ctx context.Context, query FlowQuery) (FlowDetailD
 	offset := (page - 1) * pageSize
 
 	rowsQuery := fmt.Sprintf(`%s
-SELECT time_start_ns, time_end_ns, src_entity, dst_entity, src_ip, dst_ip, src_port, dst_port, protocol, packets, bytes, direction, ip_version, is_ignored
+SELECT time_start_ns, time_end_ns, src_entity, dst_entity, src_ip, dst_ip, src_port, dst_port, protocol, packets, bytes, direction, ip_version, service_port, is_ignored
 FROM %s
 WHERE %s
 ORDER BY %s
@@ -778,6 +785,7 @@ LIMIT ? OFFSET ?
 		var row FlowDetailRow
 		var direction sql.NullInt32
 		var ignored bool
+		var servicePort sql.NullInt32
 		if err := rows.Scan(
 			&row.StartNs,
 			&row.EndNs,
@@ -792,6 +800,7 @@ LIMIT ? OFFSET ?
 			&row.Bytes,
 			&direction,
 			&row.IPVersion,
+			&servicePort,
 			&ignored,
 		); err != nil {
 			return FlowDetailData{}, fmt.Errorf("scan selected flow row: %w", err)
@@ -800,6 +809,9 @@ LIMIT ? OFFSET ?
 		if direction.Valid {
 			value := direction.Int32
 			row.Direction = &value
+		}
+		if servicePort.Valid {
+			row.ServicePort = servicePort.Int32
 		}
 		visibleRows = append(visibleRows, row)
 	}
@@ -2358,17 +2370,6 @@ func (s *Service) enabledIgnoreRules() []IgnoreRule {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return enabledIgnoreRules(s.ignoreRules)
-}
-
-func (s *Service) hasEnabledIgnoreRules() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, rule := range s.ignoreRules {
-		if rule.Enabled {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Service) inetSupportEnabled() bool {
