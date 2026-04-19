@@ -373,6 +373,34 @@ func TestDNSLookupResultClassesRender(t *testing.T) {
 	assert.Assert(t, strings.Contains(graphMarkup, `dns-result-mixed`))
 	assert.Assert(t, strings.Contains(graphMarkup, fmt.Sprintf(`stroke="%s"`, nxdomainEdgeStroke)))
 	assert.Assert(t, strings.Contains(graphMarkup, fmt.Sprintf(`stroke="%s"`, mixedDNSEdgeStroke)))
+
+	rankingsMarkup := renderNodeString(t, RankingsPanel(QueryState{
+		FromNs:      10,
+		Granularity: GranularityHostname,
+		Metric:      MetricDNSLookups,
+		Sort:        SortDNSLookups,
+		ToNs:        20,
+	}, GraphData{
+		ActiveMetric: MetricDNSLookups,
+		TopEntities: []Node{
+			{DNSResultState: dnsResultStateNXDOMAIN, ID: "missing.example", Label: "missing.example", Total: 1},
+			{DNSResultState: dnsResultStateMixed, ID: "www.example.com", Label: "www.example.com", Total: 2},
+		},
+		TopEdges: []Edge{
+			{Destination: "missing.example", DNSResultState: dnsResultStateNXDOMAIN, MetricValue: 1, Source: "alpha.lan"},
+			{Destination: "www.example.com", DNSResultState: dnsResultStateMixed, MetricValue: 2, Source: "alpha.lan"},
+		},
+	}))
+
+	nxdomainEntityAnchor := anchorMarkupForLabel(t, rankingsMarkup, "missing.example")
+	mixedEntityAnchor := anchorMarkupForLabel(t, rankingsMarkup, "www.example.com")
+	nxdomainEdgeAnchor := anchorMarkupForLabel(t, rankingsMarkup, "alpha.lan -&gt; missing.example")
+	mixedEdgeAnchor := anchorMarkupForLabel(t, rankingsMarkup, "alpha.lan -&gt; www.example.com")
+
+	assert.Assert(t, strings.Contains(nxdomainEntityAnchor, `dns-result-nxdomain`))
+	assert.Assert(t, strings.Contains(mixedEntityAnchor, `dns-result-mixed`))
+	assert.Assert(t, strings.Contains(nxdomainEdgeAnchor, `dns-result-nxdomain`))
+	assert.Assert(t, strings.Contains(mixedEdgeAnchor, `dns-result-mixed`))
 }
 
 func TestDNSLookupPanelsHideBytes(t *testing.T) {
