@@ -77,6 +77,30 @@ func TestNeighbourIndexSkipsIPv6LLAddrConflicts(t *testing.T) {
 	assert.Assert(t, !ok)
 }
 
+func TestNeighbourIndexTracksObservedIPv6Local64(t *testing.T) {
+	t.Parallel()
+
+	index := loadNeighbourIndexFromContent(t,
+		"{\"line\":\"{\\\"dst\\\":\\\"2001:db8:1:2::10\\\",\\\"lladdr\\\":\\\"aa:bb:cc:dd:ee:ff\\\"}\",\"timestamp\":\"2026-04-10T12:00:01Z\"}\n",
+	)
+
+	assert.Assert(t, index.ContainsIPv6LocalPrefix("2001:db8:1:2::20"))
+	assert.Assert(t, !index.ContainsIPv6LocalPrefix("2001:db8:1:3::20"))
+	assert.Assert(t, !index.ContainsIPv6LocalPrefix("192.168.1.10"))
+}
+
+func TestNeighbourIndexTracksObservedIPv6Local64WithoutLLAddr(t *testing.T) {
+	t.Parallel()
+
+	index := loadNeighbourIndexFromContent(t,
+		"{\"line\":\"{\\\"dst\\\":\\\"2001:db8:1:2::10\\\"}\",\"timestamp\":\"2026-04-10T12:00:01Z\"}\n",
+	)
+
+	assert.Assert(t, index.ContainsIPv6LocalPrefix("2001:db8:1:2::20"))
+	_, ok := index.LookupIPv4("2001:db8:1:2::10", time.Date(2026, 4, 10, 12, 30, 0, 0, time.UTC))
+	assert.Assert(t, !ok)
+}
+
 func loadNeighbourIndexFromContent(t *testing.T, logContents string) *neighbourIndex {
 	t.Helper()
 

@@ -23,6 +23,7 @@ type neighbourObservation struct {
 type neighbourIndex struct {
 	conflictedIPv6        map[string]struct{}
 	ipv4ObservationsByMAC map[string][]neighbourObservation
+	ipv6LocalPrefixes     map[string]struct{}
 	lladdrByIPv6          map[string]string
 	uniqueIPv4ByMAC       map[string]string
 }
@@ -37,6 +38,7 @@ func loadNeighbourIndex(logFiles []model.SourceFile) (*neighbourIndex, error) {
 	index := &neighbourIndex{
 		conflictedIPv6:        make(map[string]struct{}),
 		ipv4ObservationsByMAC: make(map[string][]neighbourObservation),
+		ipv6LocalPrefixes:     make(map[string]struct{}),
 		lladdrByIPv6:          make(map[string]string),
 		uniqueIPv4ByMAC:       make(map[string]string),
 	}
@@ -113,7 +115,7 @@ func (i *neighbourIndex) parseLine(lineBytes []byte, ipv4SeenByMAC map[string]ma
 		return nil //nolint:nilerr
 	}
 
-	if nestedEntry.Dst == "" || nestedEntry.LLAddr == "" {
+	if nestedEntry.Dst == "" {
 		return nil
 	}
 
@@ -139,11 +141,12 @@ func (i *neighbourIndex) addObservation(
 
 	normalizedIP := address.String()
 	normalizedLLAddr := strings.ToLower(strings.TrimSpace(lladdr))
-	if normalizedLLAddr == "" {
-		return
-	}
 
 	if address.Is4() {
+		if normalizedLLAddr == "" {
+			return
+		}
+
 		if _, ok := ipv4SeenByMAC[normalizedLLAddr]; !ok {
 			ipv4SeenByMAC[normalizedLLAddr] = make(map[string]struct{})
 		}
@@ -156,6 +159,12 @@ func (i *neighbourIndex) addObservation(
 	}
 
 	if !address.Is6() {
+		return
+	}
+
+	i.ipv6LocalPrefixes[ipv6Prefix64(address).String()] = struct{}{}
+
+	if normalizedLLAddr == "" {
 		return
 	}
 
@@ -202,4 +211,22 @@ func (i *neighbourIndex) LookupIPv4(ipAddress string, flowStart time.Time) (stri
 
 	ipv4Address, ok := i.uniqueIPv4ByMAC[lladdr]
 	return ipv4Address, ok
+}
+
+func (i *neighbourIndex) ContainsIPv6LocalPrefix(ipAddress string) bool {
+	if i == nil {
+		return false
+	}
+
+	address, err := netip.ParseAddr(ipAddress)
+	if err != nil || !address.Is6() {
+		return false
+	}
+
+	_, ok := i.ipv6LocalPrefixes[ipv6Prefix64(address).String()]
+	return ok
+}
+
+func ipv6Prefix64(address netip.Addr) netip.Prefix {
+	return netip.PrefixFrom(address, 64).Masked()
 }

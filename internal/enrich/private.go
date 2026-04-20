@@ -45,6 +45,10 @@ func isPrivateIPAddress(ipAddress string) bool {
 	return false
 }
 
+func isLocalIPAddress(ipAddress string, neighbourIndex *neighbourIndex) bool {
+	return isPrivateIPAddress(ipAddress) || neighbourIndex.ContainsIPv6LocalPrefix(ipAddress)
+}
+
 func ipVersionForAddress(ipAddress string) int32 {
 	address, err := netip.ParseAddr(ipAddress)
 	if err != nil {

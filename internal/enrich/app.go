@@ -21,7 +21,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const reverseDNSCacheFilename = "reverse_dns_cache.jsonl"
+const (
+	localIPv6Host           = "Local IPv6"
+	reverseDNSCacheFilename = "reverse_dns_cache.jsonl"
+)
 
 type Config struct {
 	DstPath        string
@@ -355,7 +358,7 @@ func dnsLookupRecordForEvent(
 		Answer:          event.answer,
 		ClientIP:        event.clientIP,
 		ClientIPVersion: ipVersionForAddress(event.clientIP),
-		ClientIsPrivate: isPrivateIPAddress(event.clientIP),
+		ClientIsPrivate: isLocalIPAddress(event.clientIP, neighbourIndex),
 		Lookups:         1,
 		Query2LD:        queryNames.two,
 		QueryName:       event.queryName,
@@ -379,8 +382,8 @@ func enrichRecord(
 	skipDNSLookups bool,
 ) (model.FlowRecord, error) {
 	flowStart := time.Unix(0, record.TimeStartNs).UTC()
-	record.SrcIsPrivate = isPrivateIPAddress(record.SrcIP)
-	record.DstIsPrivate = isPrivateIPAddress(record.DstIP)
+	record.SrcIsPrivate = isLocalIPAddress(record.SrcIP, neighbourIndex)
+	record.DstIsPrivate = isLocalIPAddress(record.DstIP, neighbourIndex)
 
 	srcNames, err := resolveNames(record.SrcIP, flowStart, logIndex, neighbourIndex, cache, skipDNSLookups)
 	if err != nil {
@@ -421,6 +424,16 @@ func resolveNames(
 	cache *reverseDNSCache,
 	skipDNSLookups bool,
 ) (*derivedNames, error) {
+	if neighbourIndex.ContainsIPv6LocalPrefix(ipAddress) {
+		if mappedIPv4, ok := neighbourIndex.LookupIPv4(ipAddress, flowStart); ok && isPrivateIPAddress(mappedIPv4) {
+			if names := logIndex.Lookup(mappedIPv4, flowStart); names != nil {
+				return names, nil
+			}
+		}
+
+		return &derivedNames{host: localIPv6Host}, nil
+	}
+
 	if mappedIPv4, ok := neighbourIndex.LookupIPv4(ipAddress, flowStart); ok {
 		names, err := resolveNamesForIP(mappedIPv4, flowStart, logIndex, cache, skipDNSLookups)
 		if err != nil {

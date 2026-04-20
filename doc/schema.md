@@ -133,7 +133,7 @@ Enriched parquet preserves all base flow columns and adds:
 
 Field meaning:
 
-- `_host`: normalized hostname chosen for the IP
+- `_host`: normalized hostname chosen for the IP, or `Local IPv6` for anonymous IPv6 addresses in neighbour-observed local `/64`s
 - `_2ld`: one label above the suffix, such as `iki.fi` from `www.fingon.iki.fi`
 - `_tld`: suffix value, such as `fi` from `www.fingon.iki.fi` or `co.uk` from `foo.bar.co.uk`
 - `_is_private`: whether the IP falls into the private or local ranges recognized by enrichment
@@ -191,7 +191,7 @@ Neighbour-table entries use a nested JSON object in `line` with:
 }
 ```
 
-`dst` is the observed IP address and `lladdr` is the link-layer address. These entries are used to map some IPv6 flows back to a matching IPv4 identity before hostname resolution.
+`dst` is the observed IP address and `lladdr` is the link-layer address. These entries are used to treat IPv6 addresses in observed `/64`s as local and to map some IPv6 flows back to a matching private IPv4 dnsmasq identity before hostname resolution.
 
 ## Reverse DNS Cache Schema
 
