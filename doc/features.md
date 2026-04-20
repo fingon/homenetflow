@@ -45,7 +45,7 @@ User-visible behavior:
 - marks source and destination addresses as private/local or public
 - uses dnsmasq observations first, then cached reverse DNS, then live PTR lookups
 - can use neighbour-table data to mark observed IPv6 `/64`s local and map some IPv6 traffic back to a matching IPv4 dnsmasq identity before resolving names
-- keeps a persistent `reverse_dns_cache.jsonl` so later runs reuse successful PTR results
+- keeps a persistent `reverse_dns_cache.jsonl` so later runs reuse successful public PTR results, while pruning local entries
 - can skip live DNS lookups with `--skip-dns-lookups`
 - shows a progress bar while rebuilding enriched parquet files
 - rebuilds outputs when source parquet, overlapping logs, or enrichment logic change
@@ -83,9 +83,9 @@ User-visible behavior:
 - opens flow-detail views for a selected entity or edge when the time range is 7 days or less
 - serves views over 7 days from UI summaries instead of raw flow rows
 - supports ignored-traffic rules based on entities, host/IP identity, CIDR, protocol, service port, direction, and address family
-- groups overflowed graph nodes into `Other Sources` and `Other Destinations`
+- groups overflowed graph nodes into `Rest`
 - colors nodes by address class so private, mixed, and public traffic are distinguishable
-- splits unresolved `tld` and `2ld` entities into `Unknown private` and `Unknown public`
+- uses local buckets for private/local `tld` and `2ld` entities and `Unknown public` for unresolved public entities
 - refreshes automatically when underlying parquet files change
 - rebuilds its summary parquet files automatically when they are stale
 

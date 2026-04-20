@@ -12,7 +12,6 @@ const (
 	layoutNodePaddingPx         = 44
 	layoutOuterRingCount        = 48
 	layoutRelaxIterations       = 20
-	layoutRestYOffsetRatio      = 0.18
 	layoutRingCapacityFillRatio = 0.9
 )
 
@@ -65,7 +64,6 @@ func computeStableNodePositions(nodes []layoutNode, edges []layoutEdge, widthPx,
 	centerY := float64(heightPx) / 2
 	maxRadiusX := math.Max(80, centerX-float64(layoutNodePaddingPx))
 	maxRadiusY := math.Max(80, centerY-float64(layoutNodePaddingPx))
-	restOffsetY := maxRadiusY * layoutRestYOffsetRatio
 	maxScore := sortedNodes[0].Score
 	if maxScore <= 0 {
 		maxScore = 1
@@ -82,19 +80,12 @@ func computeStableNodePositions(nodes []layoutNode, edges []layoutEdge, widthPx,
 
 	for _, node := range sortedNodes {
 		switch node.ID {
-		case graphRestSourceID:
+		case graphRestID:
 			positions[node.ID] = LayoutPoint{
-				X: float64(layoutNodePaddingPx),
-				Y: centerY - restOffsetY,
+				X: centerX,
+				Y: float64(heightPx - layoutNodePaddingPx),
 			}
-			placedAngles[node.ID] = math.Pi
-			anchoredNodeLookup[node.ID] = struct{}{}
-		case graphRestDestination:
-			positions[node.ID] = LayoutPoint{
-				X: float64(widthPx - layoutNodePaddingPx),
-				Y: centerY + restOffsetY,
-			}
-			placedAngles[node.ID] = 0
+			placedAngles[node.ID] = math.Pi / 2
 			anchoredNodeLookup[node.ID] = struct{}{}
 		default:
 			regularNodes = append(regularNodes, node)

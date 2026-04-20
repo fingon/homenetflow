@@ -95,6 +95,86 @@ func TestRunWritesDNSLookupParquet(t *testing.T) {
 	assert.Assert(t, records[0].ClientIsPrivate)
 }
 
+func TestRunUsesLocalIPv4ForUnresolvedRFC1918Addresses(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, model.FlowRecord{
+		SrcIP:       "192.168.1.10",
+		DstIP:       "10.0.0.2",
+		SrcPort:     123,
+		DstPort:     443,
+		IPVersion:   model.IPVersion4,
+		Protocol:    6,
+		Packets:     1,
+		Bytes:       2,
+		TimeStartNs: time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC).UnixNano(),
+		TimeEndNs:   time.Date(2026, 4, 1, 12, 30, 1, 0, time.UTC).UnixNano(),
+		DurationNs:  int64(time.Second),
+	})
+
+	var lookupCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, len(rows), 1)
+	assert.Equal(t, *rows[0].SrcHost, localIPv4Host)
+	assert.Equal(t, *rows[0].Src2LD, localIPv4Host)
+	assert.Equal(t, *rows[0].SrcTLD, localIPv4Host)
+	assert.Equal(t, *rows[0].DstHost, localIPv4Host)
+	assert.Equal(t, lookupCount.Load(), int32(0))
+}
+
+func TestRunUsesLocalGroupsForNamedRFC1918Addresses(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+	stubReverseLookup(t, nil)
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, model.FlowRecord{
+		SrcIP:       "192.168.1.10",
+		DstIP:       "198.51.100.20",
+		SrcPort:     123,
+		DstPort:     443,
+		IPVersion:   model.IPVersion4,
+		Protocol:    6,
+		Packets:     1,
+		Bytes:       2,
+		TimeStartNs: time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC).UnixNano(),
+		TimeEndNs:   time.Date(2026, 4, 1, 12, 30, 1, 0, time.UTC).UnixNano(),
+		DurationNs:  int64(time.Second),
+	})
+
+	logPath := filepath.Join(srcLogDir, "2026-04-01.jsonl")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"192.168.1.10\\\"],\\\"query_name\\\":\\\"phone.lan\\\",\\\"timestamp_end\\\":\\\"2026-04-01T12:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T12:00:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, len(rows), 1)
+	assert.Equal(t, *rows[0].SrcHost, "phone.lan")
+	assert.Equal(t, *rows[0].Src2LD, "phone")
+	assert.Equal(t, *rows[0].SrcTLD, localEntityTLD)
+	assert.Assert(t, rows[0].SrcIsPrivate)
+}
+
 func TestRunDoesNotRebuildWhenRelevantLogIsDeleted(t *testing.T) {
 	srcParquetDir := t.TempDir()
 	srcLogDir := t.TempDir()
@@ -308,8 +388,8 @@ func TestRunResolvesOlderIPv6FlowThroughNeighbourMappedIPv4LogName(t *testing.T)
 	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
 	assert.Equal(t, len(rows), 1)
 	assert.Equal(t, *rows[0].SrcHost, "mapped.example.net")
-	assert.Equal(t, *rows[0].Src2LD, "example.net")
-	assert.Equal(t, *rows[0].SrcTLD, "net")
+	assert.Equal(t, *rows[0].Src2LD, "mapped")
+	assert.Equal(t, *rows[0].SrcTLD, localEntityTLD)
 }
 
 func TestRunResolvesIPv6ThroughNeighbourMappedIPv4ReverseCache(t *testing.T) {
@@ -356,8 +436,8 @@ func TestRunResolvesIPv6ThroughNeighbourMappedIPv4ReverseCache(t *testing.T) {
 	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
 	assert.Equal(t, len(rows), 1)
 	assert.Equal(t, *rows[0].SrcHost, localIPv6Host)
-	assert.Assert(t, rows[0].Src2LD == nil)
-	assert.Assert(t, rows[0].SrcTLD == nil)
+	assert.Equal(t, *rows[0].Src2LD, localIPv6Host)
+	assert.Equal(t, *rows[0].SrcTLD, localIPv6Host)
 	assert.Assert(t, rows[0].SrcIsPrivate)
 	assert.Equal(t, lookupCount.Load(), int32(0))
 }
@@ -401,10 +481,12 @@ func TestRunFallsBackToLocalIPv6ForObservedPrefixWithoutMappedDNS(t *testing.T) 
 	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
 	assert.Equal(t, len(rows), 1)
 	assert.Equal(t, *rows[0].SrcHost, localIPv6Host)
-	assert.Assert(t, rows[0].Src2LD == nil)
-	assert.Assert(t, rows[0].SrcTLD == nil)
+	assert.Equal(t, *rows[0].Src2LD, localIPv6Host)
+	assert.Equal(t, *rows[0].SrcTLD, localIPv6Host)
 	assert.Assert(t, rows[0].SrcIsPrivate)
 	assert.Equal(t, *rows[0].DstHost, localIPv6Host)
+	assert.Equal(t, *rows[0].Dst2LD, localIPv6Host)
+	assert.Equal(t, *rows[0].DstTLD, localIPv6Host)
 	assert.Equal(t, lookupCount.Load(), int32(0))
 }
 
@@ -441,8 +523,8 @@ func TestRunMarksObservedLocalIPv6DNSLookupClientPrivate(t *testing.T) {
 	assert.Equal(t, len(records), 1)
 	assert.Equal(t, records[0].ClientIP, "2001:db8:1:2::20")
 	assert.Equal(t, *records[0].ClientHost, localIPv6Host)
-	assert.Assert(t, records[0].Client2LD == nil)
-	assert.Assert(t, records[0].ClientTLD == nil)
+	assert.Equal(t, *records[0].Client2LD, localIPv6Host)
+	assert.Equal(t, *records[0].ClientTLD, localIPv6Host)
 	assert.Assert(t, records[0].ClientIsPrivate)
 }
 
@@ -539,6 +621,28 @@ func TestRunDoesNotReportProgressWhenNothingRebuilds(t *testing.T) {
 	}))
 
 	assert.Equal(t, progressCalls.Load(), int32(0))
+}
+
+func TestRunPrunesReverseDNSCacheWhenNothingRebuilds(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+	stubReverseLookup(t, nil)
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+
+	cachePath := filepath.Join(dstDir, reverseDNSCacheFilename)
+	cacheContents := []byte("{\"ip\":\"192.168.1.10\",\"host\":\"local.example\"}\n" +
+		"{\"ip\":\"192.0.2.10\",\"host\":\"public.example\"}\n")
+	assert.NilError(t, os.WriteFile(cachePath, cacheContents, 0o600))
+
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+
+	prunedContents, err := os.ReadFile(cachePath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(prunedContents), "{\"host\":\"public.example\",\"ip\":\"192.0.2.10\"}\n")
 }
 
 func TestIsPrivateIPAddress(t *testing.T) {

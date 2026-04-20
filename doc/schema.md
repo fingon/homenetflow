@@ -133,12 +133,12 @@ Enriched parquet preserves all base flow columns and adds:
 
 Field meaning:
 
-- `_host`: normalized hostname chosen for the IP, or `Local IPv6` for anonymous IPv6 addresses in neighbour-observed local `/64`s
-- `_2ld`: one label above the suffix, such as `iki.fi` from `www.fingon.iki.fi`
-- `_tld`: suffix value, such as `fi` from `www.fingon.iki.fi` or `co.uk` from `foo.bar.co.uk`
+- `_host`: normalized hostname chosen for the IP, `Local IPv4` for anonymous RFC1918 IPv4 addresses, or `Local IPv6` for anonymous local IPv6 addresses
+- `_2ld`: one label above the suffix, such as `iki.fi` from `www.fingon.iki.fi`; for named local addresses this is the first hostname label, and for anonymous local addresses this is `Local IPv4` or `Local IPv6`
+- `_tld`: suffix value, such as `fi` from `www.fingon.iki.fi` or `co.uk` from `foo.bar.co.uk`; for named local addresses this is `Local`, and for anonymous local addresses this is `Local IPv4` or `Local IPv6`
 - `_is_private`: whether the IP falls into the private or local ranges recognized by enrichment
 
-For local names, derivation falls back to labels. For example, `cer.lan` produces `_2ld=cer.lan` and `_tld=lan`.
+For public names outside the ICANN suffix list, derivation falls back to labels. For example, `cer.lan` would produce `_2ld=cer.lan` and `_tld=lan` if it were treated as public.
 
 Each enriched parquet file embeds an enrichment manifest in parquet metadata under key `homenetflow.parquethosts.manifest`.
 
@@ -204,7 +204,7 @@ Each line in `reverse_dns_cache.jsonl` is:
 }
 ```
 
-Only successful PTR lookups are persisted. Misses are cached only in memory for the current run.
+Only successful public PTR lookups are persisted. Misses are cached only in memory for the current run. Local IPv4 entries and entries inside local IPv6 prefixes are pruned before enrichment uses this cache.
 
 ## DNS Lookup Parquet Schema
 

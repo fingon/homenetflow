@@ -9,7 +9,7 @@ import (
 
 const (
 	DNSAnswerNXDOMAIN               = "NXDOMAIN"
-	EnrichmentLogicVersion          = 6
+	EnrichmentLogicVersion          = 7
 	EnrichmentManifestVersion       = 1
 	IPVersionUnknown          int32 = 0
 	IPVersion4                int32 = 4
@@ -18,7 +18,7 @@ const (
 	PeriodHour                      = "hour"
 	PeriodMonth                     = "month"
 	RefreshManifestVersion          = 2
-	UISummaryLogicVersion           = 10
+	UISummaryLogicVersion           = 11
 	UISummaryManifestVersion        = 1
 )
 

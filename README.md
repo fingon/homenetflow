@@ -129,16 +129,16 @@ Flags:
 
 For each `src_ip` and `dst_ip`, `parquethosts` resolves names in this order:
 
-1. for IPv6 addresses in a `/64` seen in neighbour-table logs, try a non-conflicting `lladdr` mapping to a private IPv4 address and use that IPv4 only when dnsmasq logs resolve it
+1. for local IPv6 addresses in a `/64` seen in neighbour-table logs, try a non-conflicting `lladdr` mapping to a private IPv4 address and use that IPv4 only when dnsmasq logs resolve it
 2. newest matching dnsmasq observation for the selected IP where the log timestamp is older than or equal to `time_start_ns`
 3. the dnsmasq observation must also be within one hour before the flow start
-4. if no log match is found, a persistent reverse-DNS cache hit
-5. if no cache hit is found, a live PTR lookup
+4. for public IPs only, if no log match is found, a persistent reverse-DNS cache hit
+5. for public IPs only, if no cache hit is found, a live PTR lookup
 
-Successful PTR results are appended to `<dst>/reverse_dns_cache.jsonl` and reused forever. PTR misses are cached only in memory for the current run. Malformed PTR responses are logged as warnings, treated as misses, and do not stop enrichment.
+Successful public PTR results are appended to `<dst>/reverse_dns_cache.jsonl` and reused forever. Local IPv4 entries and local IPv6 prefix entries are pruned from the cache before enrichment uses it. PTR misses are cached only in memory for the current run. Malformed PTR responses are logged as warnings, treated as misses, and do not stop enrichment.
 When `--skip-dns-lookups` is enabled, step 5 is skipped. Existing `reverse_dns_cache.jsonl` entries and dnsmasq log observations are still used.
 
-Neighbour-table IPv6-to-IPv4 mappings are applied conservatively. If the same IPv6 address is observed with multiple link-layer addresses, the mapping is ignored for that IPv6 address. For flow data older than the neighbour logs, an IPv4 mapping is used only when the link-layer address has one observed IPv4 address. Any IPv6 address in a neighbour-observed `/64` is treated as local; if it cannot be tied to a private IPv4 address with a dnsmasq name, the host is recorded as `Local IPv6`. Future neighbour-log changes do not keep invalidating already rebuilt older parquet outputs.
+Neighbour-table IPv6-to-IPv4 mappings are applied conservatively. If the same IPv6 address is observed with multiple link-layer addresses, the mapping is ignored for that IPv6 address. For flow data older than the neighbour logs, an IPv4 mapping is used only when the link-layer address has one observed IPv4 address. Any IPv6 address in a neighbour-observed `/64` is treated as local; if it cannot be tied to a private IPv4 address with a dnsmasq name, the host, 2LD, and TLD are recorded as `Local IPv6`. Unnamed RFC1918 IPv4 addresses are recorded as `Local IPv4`. Named local addresses use the full hostname, the first hostname label as 2LD, and `Local` as TLD. Future neighbour-log changes do not keep invalidating already rebuilt older parquet outputs.
 
 ### Refresh Behavior
 
@@ -173,7 +173,7 @@ The UI includes:
 - metric scaling by bytes or connections
 - global granularity switching across `tld`, `2ld`, `hostname`, and `ip`
 - entity selection, include/exclude filtering, and a sortable flows table
-- capped node counts at granular levels with explicit `Other Sources` and `Other Destinations` buckets
+- capped node counts at granular levels with a `Rest` bucket
 - private-aware graph coloring: private nodes are green, mixed nodes are yellow, public nodes use the default blue
 
 The UI uses htmx for navigation and filter updates, with only a small amount of custom JavaScript for histogram brushing and request status handling.
@@ -184,7 +184,7 @@ The UI uses htmx for navigation and filter updates, with only a small amount of 
 
 The UI expects enriched parquet files and validates that they carry the enrichment manifest metadata. It also builds summary parquet files; their schema and metadata are documented in [doc/schema.md](doc/schema.md).
 
-At `tld` and `2ld` granularities, unresolved entities are split into `Unknown private` and `Unknown public` instead of a single `Unknown` bucket.
+At `tld` and `2ld` granularities, local entities use `Local IPv4`, `Local IPv6`, or named local buckets. Public unresolved entities use `Unknown public`.
 
 Views over 7 days are served from UI summaries instead of raw flow rows. Ignored-traffic rules use summary-safe dimensions: entities, host/IP identity, CIDR, protocol, service port, direction, and address family.
 

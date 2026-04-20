@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -78,6 +80,103 @@ func loadReverseDNSCache(filePath string) (*reverseDNSCache, error) {
 	}
 
 	return cache, nil
+}
+
+func pruneReverseDNSCache(filePath string, neighbourIndex *neighbourIndex) error {
+	entries, found, err := readReverseDNSCacheEntries(filePath)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+
+	retainedEntries := make([]cacheEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IP == "" || entry.Host == "" {
+			continue
+		}
+		if isLocalIPAddress(entry.IP, neighbourIndex) {
+			continue
+		}
+		retainedEntries = append(retainedEntries, entry)
+	}
+	if len(retainedEntries) == len(entries) {
+		return nil
+	}
+
+	tempFile, err := os.CreateTemp(filepath.Dir(filePath), filepath.Base(filePath)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary reverse DNS cache %q: %w", filePath, err)
+	}
+	tempPath := tempFile.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			if err := os.Remove(tempPath); err != nil && !os.IsNotExist(err) {
+				slog.Warn("remove temporary reverse DNS cache", "path", tempPath, "error", err)
+			}
+		}
+	}()
+
+	writer := bufio.NewWriter(tempFile)
+	for _, entry := range retainedEntries {
+		entryBytes, err := json.Marshal(entry)
+		if err != nil {
+			_ = tempFile.Close()
+			return fmt.Errorf("marshal reverse DNS cache entry: %w", err)
+		}
+		if _, err := writer.Write(append(entryBytes, '\n')); err != nil {
+			_ = tempFile.Close()
+			return fmt.Errorf("write temporary reverse DNS cache %q: %w", tempPath, err)
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		_ = tempFile.Close()
+		return fmt.Errorf("flush temporary reverse DNS cache %q: %w", tempPath, err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("close temporary reverse DNS cache %q: %w", tempPath, err)
+	}
+	if err := os.Chmod(tempPath, 0o600); err != nil {
+		return fmt.Errorf("chmod temporary reverse DNS cache %q: %w", tempPath, err)
+	}
+	if err := os.Rename(tempPath, filePath); err != nil {
+		return fmt.Errorf("replace reverse DNS cache %q: %w", filePath, err)
+	}
+	removeTemp = false
+
+	slog.Info("pruned local reverse DNS cache entries", "path", filePath, "removed", len(entries)-len(retainedEntries), "retained", len(retainedEntries))
+	return nil
+}
+
+func readReverseDNSCacheEntries(filePath string) ([]cacheEntry, bool, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+
+		return nil, false, fmt.Errorf("open reverse DNS cache %q: %w", filePath, err)
+	}
+	defer file.Close()
+
+	entries := make([]cacheEntry, 0)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var entry cacheEntry
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			return nil, true, fmt.Errorf("unmarshal reverse DNS cache entry in %q: %w", filePath, err)
+		}
+
+		entries = append(entries, entry)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, true, fmt.Errorf("scan reverse DNS cache %q: %w", filePath, err)
+	}
+
+	return entries, true, nil
 }
 
 func (c *reverseDNSCache) Lookup(ipAddress string, skipDNSLookups bool) (cacheLookupResult, error) {

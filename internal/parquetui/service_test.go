@@ -75,10 +75,8 @@ func TestServiceGraphAddsRestNodesAtGranularLevels(t *testing.T) {
 	assert.Assert(t, len(graph.Nodes) >= 2)
 	assert.Equal(t, graph.Totals.Connections, int64(3))
 	assert.Equal(t, graph.Totals.Bytes, int64(600))
-	assert.Assert(t, containsNode(graph.Nodes, graphRestSourceID))
-	assert.Assert(t, containsNode(graph.Nodes, graphRestDestination))
-	assert.Assert(t, containsNodeLabel(graph.Nodes, "Other Sources"))
-	assert.Assert(t, containsNodeLabel(graph.Nodes, "Other Destinations"))
+	assert.Assert(t, containsNode(graph.Nodes, graphRestID))
+	assert.Assert(t, containsNodeLabel(graph.Nodes, "Rest"))
 }
 
 func TestServiceGraphHidesIgnoredTrafficByDefault(t *testing.T) {
@@ -623,7 +621,7 @@ func TestServiceFlowDetailsDisplaysHostnamesForCoarseGranularity(t *testing.T) {
 	defer service.Close()
 
 	flows, err := service.FlowDetails(context.Background(), FlowQuery{
-		Entity: "lan",
+		Entity: localEntityLabel,
 		Scope:  FlowScopeEntity,
 		Sort:   FlowSortSource,
 		State: QueryState{
@@ -1507,7 +1505,7 @@ func TestServiceDNSLookupSummaryFastPath(t *testing.T) {
 	graph, err := service.Graph(context.Background(), state)
 	assert.NilError(t, err)
 	assert.Equal(t, graph.Totals.Connections, int64(1))
-	assert.Assert(t, containsNode(graph.Nodes, dnsLookupTestLAN))
+	assert.Assert(t, containsNode(graph.Nodes, localIPv4EntityLabel))
 	assert.Assert(t, containsNode(graph.Nodes, "example.com"))
 
 	cacheKey := summaryGraphSnapshotCacheKey(Granularity2LD, AddressFamilyAll, DirectionBoth, MetricDNSLookups, service.currentRevision()) + summaryFilterCacheSuffix(state)
@@ -1925,6 +1923,31 @@ func TestService2LDUsesUnknownForUnresolvedIPs(t *testing.T) {
 	assert.Assert(t, !containsNode(graph.Nodes, "2001:db8::1"))
 }
 
+func TestServiceLocalNamedHostsUseLocalTLDAndFirstLabel2LD(t *testing.T) {
+	tempDir := t.TempDir()
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+		sampleRecord("192.168.1.10", "8.8.8.8", "phone.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 10, 20),
+	})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	tldGraph, err := service.Graph(context.Background(), QueryState{
+		Granularity: GranularityTLD,
+		Metric:      MetricBytes,
+	})
+	assert.NilError(t, err)
+	assert.Assert(t, containsNode(tldGraph.Nodes, localEntityLabel))
+
+	twoLDGraph, err := service.Graph(context.Background(), QueryState{
+		Granularity: Granularity2LD,
+		Metric:      MetricBytes,
+	})
+	assert.NilError(t, err)
+	assert.Assert(t, containsNode(twoLDGraph.Nodes, "phone"))
+}
+
 func TestServiceTLDSplitsUnknownPrivateAndPublic(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
@@ -1941,7 +1964,7 @@ func TestServiceTLDSplitsUnknownPrivateAndPublic(t *testing.T) {
 		Metric:      MetricBytes,
 	})
 	assert.NilError(t, err)
-	assert.Assert(t, containsNode(graph.Nodes, unknownPrivateEntityLabel))
+	assert.Assert(t, containsNode(graph.Nodes, localIPv4EntityLabel))
 	assert.Assert(t, containsNode(graph.Nodes, unknownPublicEntityLabel))
 }
 

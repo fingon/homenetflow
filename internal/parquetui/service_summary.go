@@ -744,13 +744,9 @@ func buildSummaryVisibleGraph(view summaryMetricView, keepEntities []string, sta
 		visibleNodeMap[row.ID] = row
 	}
 
-	restSourceNode := summaryRestNode(view.nodeTotals, keepLookup, true)
-	restDestinationNode := summaryRestNode(view.nodeTotals, keepLookup, false)
-	if restSourceNode != nil {
-		visibleNodeMap[restSourceNode.ID] = *restSourceNode
-	}
-	if restDestinationNode != nil {
-		visibleNodeMap[restDestinationNode.ID] = *restDestinationNode
+	restNode := summaryRestNode(view.nodeTotals, keepLookup)
+	if restNode != nil {
+		visibleNodeMap[restNode.ID] = *restNode
 	}
 
 	edgesByKey := make(map[string]Edge, len(view.edges))
@@ -759,10 +755,10 @@ func buildSummaryVisibleGraph(view summaryMetricView, keepEntities []string, sta
 		destinationBucket := edge.Destination
 		if state.NodeLimit > 0 && len(keepEntities) > 0 {
 			if _, ok := keepLookup[sourceBucket]; !ok {
-				sourceBucket = graphRestSourceID
+				sourceBucket = graphRestID
 			}
 			if _, ok := keepLookup[destinationBucket]; !ok {
-				destinationBucket = graphRestDestination
+				destinationBucket = graphRestID
 			}
 		}
 
@@ -774,7 +770,7 @@ func buildSummaryVisibleGraph(view summaryMetricView, keepEntities []string, sta
 				FirstSeenNs: edge.FirstSeenNs,
 				LastSeenNs:  edge.LastSeenNs,
 				Source:      sourceBucket,
-				Synthetic:   sourceBucket == graphRestSourceID || destinationBucket == graphRestDestination,
+				Synthetic:   sourceBucket == graphRestID || destinationBucket == graphRestID,
 			}
 		}
 		aggregatedEdge.Bytes += edge.Bytes
@@ -812,51 +808,42 @@ func buildSummaryVisibleGraph(view summaryMetricView, keepEntities []string, sta
 	return edges, visibleNodeMap
 }
 
-func summaryRestNode(nodeTotals []Node, keepLookup map[string]struct{}, sourceRole bool) *Node {
-	nodeID := graphRestSourceID
-	if !sourceRole {
-		nodeID = graphRestDestination
-	}
-
+func summaryRestNode(nodeTotals []Node, keepLookup map[string]struct{}) *Node {
 	var collapsedEntityCount int
+	var egress int64
+	var ingress int64
 	var nxdomainLookups int64
 	var successfulLookups int64
-	var total int64
 	for _, node := range nodeTotals {
 		if _, ok := keepLookup[node.ID]; ok {
 			continue
 		}
-		metricValue := node.Egress
-		if !sourceRole {
-			metricValue = node.Ingress
-		}
-		if metricValue == 0 {
+		if node.Egress == 0 && node.Ingress == 0 {
 			continue
 		}
 		collapsedEntityCount++
 		nxdomainLookups += node.NXDomainLookups
 		successfulLookups += node.SuccessfulLookups
-		total += metricValue
+		egress += node.Egress
+		ingress += node.Ingress
 	}
+	total := egress + ingress
 	if total == 0 {
 		return nil
 	}
 
 	node := &Node{
 		CollapsedEntityCount: collapsedEntityCount,
-		ID:                   nodeID,
-		Label:                nodeID,
+		Egress:               egress,
+		ID:                   graphRestID,
+		Ingress:              ingress,
+		Label:                graphRestID,
 		NXDomainLookups:      nxdomainLookups,
 		Synthetic:            true,
 		SuccessfulLookups:    successfulLookups,
 		Total:                total,
 	}
 	node.DNSResultState = dnsResultStateForCounts(node.NXDomainLookups, node.SuccessfulLookups)
-	if sourceRole {
-		node.Egress = total
-	} else {
-		node.Ingress = total
-	}
 	return node
 }
 

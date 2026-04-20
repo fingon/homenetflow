@@ -22,6 +22,8 @@ import (
 )
 
 const (
+	localEntityTLD          = "Local"
+	localIPv4Host           = "Local IPv4"
 	localIPv6Host           = "Local IPv6"
 	reverseDNSCacheFilename = "reverse_dns_cache.jsonl"
 )
@@ -68,7 +70,17 @@ func Run(config Config) error {
 		return err
 	}
 
-	cache, err := loadReverseDNSCache(filepath.Join(config.DstPath, reverseDNSCacheFilename))
+	neighbourIndex, err := loadNeighbourIndex(logFiles)
+	if err != nil {
+		return err
+	}
+
+	cachePath := filepath.Join(config.DstPath, reverseDNSCacheFilename)
+	if err := pruneReverseDNSCache(cachePath, neighbourIndex); err != nil {
+		return err
+	}
+
+	cache, err := loadReverseDNSCache(cachePath)
 	if err != nil {
 		return err
 	}
@@ -85,11 +97,6 @@ func Run(config Config) error {
 		}
 
 		return nil
-	}
-
-	neighbourIndex, err := loadNeighbourIndex(logFiles)
-	if err != nil {
-		return err
 	}
 
 	if err := rebuildJobs(jobs, logLoader, neighbourIndex, cache, config.Progress, config.SkipDNSLookups); err != nil {
@@ -424,14 +431,21 @@ func resolveNames(
 	cache *reverseDNSCache,
 	skipDNSLookups bool,
 ) (*derivedNames, error) {
-	if neighbourIndex.ContainsIPv6LocalPrefix(ipAddress) {
+	if isLocalIPAddress(ipAddress, neighbourIndex) {
 		if mappedIPv4, ok := neighbourIndex.LookupIPv4(ipAddress, flowStart); ok && isPrivateIPAddress(mappedIPv4) {
 			if names := logIndex.Lookup(mappedIPv4, flowStart); names != nil {
-				return names, nil
+				localNames := localResolvedNames(*names)
+				return &localNames, nil
 			}
 		}
 
-		return &derivedNames{host: localIPv6Host}, nil
+		if names := logIndex.Lookup(ipAddress, flowStart); names != nil {
+			localNames := localResolvedNames(*names)
+			return &localNames, nil
+		}
+
+		localNames := localPlaceholderNames(ipAddress)
+		return &localNames, nil
 	}
 
 	if mappedIPv4, ok := neighbourIndex.LookupIPv4(ipAddress, flowStart); ok {
@@ -446,6 +460,35 @@ func resolveNames(
 	}
 
 	return resolveNamesForIP(ipAddress, flowStart, logIndex, cache, skipDNSLookups)
+}
+
+func localResolvedNames(names derivedNames) derivedNames {
+	host := normalizeHostname(names.host)
+	if host == "" {
+		return names
+	}
+
+	tld := localEntityTLD
+	two := strings.Split(host, hostnameLabelSeparator)[0]
+	return derivedNames{
+		host: host,
+		tld:  &tld,
+		two:  &two,
+	}
+}
+
+func localPlaceholderNames(ipAddress string) derivedNames {
+	host := localIPv4Host
+	if ipVersionForAddress(ipAddress) == model.IPVersion6 {
+		host = localIPv6Host
+	}
+	tld := host
+	two := host
+	return derivedNames{
+		host: host,
+		tld:  &tld,
+		two:  &two,
+	}
 }
 
 func resolveNamesForIP(

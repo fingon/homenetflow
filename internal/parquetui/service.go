@@ -29,8 +29,7 @@ const (
 	breakdownSliceLimit                = 5
 	breakdownRestLabel                 = "Rest"
 	filteredCTEName                    = "filtered_flows"
-	graphRestSourceID                  = "Other Sources"
-	graphRestDestination               = "Other Destinations"
+	graphRestID                        = breakdownRestLabel
 	histogramCacheKind                 = "histogram"
 	histogramBinCount                  = 48
 	layoutCacheKind                    = "layout"
@@ -431,8 +430,7 @@ func (s *Service) graphWithSpan(ctx context.Context, state QueryState, span Time
 	}
 
 	var edges []Edge
-	var restSourceNode *Node
-	var restDestinationNode *Node
+	var restNode *Node
 	group, groupContext := errgroup.WithContext(ctx)
 	group.Go(func() error {
 		var queryErr error
@@ -441,12 +439,7 @@ func (s *Service) graphWithSpan(ctx context.Context, state QueryState, span Time
 	})
 	group.Go(func() error {
 		var queryErr error
-		restSourceNode, queryErr = s.queryRestNode(groupContext, state, keepEntities, true)
-		return queryErr
-	})
-	group.Go(func() error {
-		var queryErr error
-		restDestinationNode, queryErr = s.queryRestNode(groupContext, state, keepEntities, false)
+		restNode, queryErr = s.queryRestNode(groupContext, state, keepEntities)
 		return queryErr
 	})
 	if err := group.Wait(); err != nil {
@@ -464,11 +457,8 @@ func (s *Service) graphWithSpan(ctx context.Context, state QueryState, span Time
 		visibleNodeMap[row.ID] = row
 	}
 
-	if restSourceNode != nil {
-		visibleNodeMap[restSourceNode.ID] = *restSourceNode
-	}
-	if restDestinationNode != nil {
-		visibleNodeMap[restDestinationNode.ID] = *restDestinationNode
+	if restNode != nil {
+		visibleNodeMap[restNode.ID] = *restNode
 	}
 
 	for _, edge := range visibleEdges {
@@ -1340,7 +1330,7 @@ ORDER BY total_metric DESC, entity
 	return nodes, nil
 }
 
-func (s *Service) queryRestNode(ctx context.Context, state QueryState, keepEntities []string, sourceRole bool) (*Node, error) {
+func (s *Service) queryRestNode(ctx context.Context, state QueryState, keepEntities []string) (*Node, error) {
 	if state.NodeLimit == 0 || len(keepEntities) == 0 {
 		return nil, nil
 	}
@@ -1349,54 +1339,65 @@ func (s *Service) queryRestNode(ctx context.Context, state QueryState, keepEntit
 	if err != nil {
 		return nil, err
 	}
-	entityColumn := srcEntityColumn
-	nodeID := graphRestSourceID
-	if !sourceRole {
-		entityColumn = dstEntityColumn
-		nodeID = graphRestDestination
-	}
 	metricExpr := metricValueExpression(state.Metric)
 	inPlaceholders := placeholders(len(keepEntities))
 	query := fmt.Sprintf(`%s
-SELECT COUNT(*), COALESCE(SUM(total_metric), 0), COALESCE(SUM(ignored_metric), 0), COALESCE(SUM(nxdomain_metric), 0), COALESCE(SUM(successful_metric), 0)
+SELECT
+  COALESCE(SUM(entity_count), 0),
+  COALESCE(SUM(egress_metric), 0),
+  COALESCE(SUM(ingress_metric), 0),
+  COALESCE(SUM(ignored_metric), 0),
+  COALESCE(SUM(nxdomain_metric), 0),
+  COALESCE(SUM(successful_metric), 0)
 FROM (
-  SELECT %s AS entity, SUM(%s) AS total_metric, SUM(CASE WHEN is_ignored THEN %s ELSE 0 END) AS ignored_metric, SUM(nxdomain_lookups) AS nxdomain_metric, SUM(successful_lookups) AS successful_metric
-  FROM %s
-  WHERE %s NOT IN (%s)
-  GROUP BY %s
+  SELECT COUNT(*) AS entity_count, COALESCE(SUM(total_metric), 0) AS egress_metric, 0 AS ingress_metric, COALESCE(SUM(ignored_metric), 0) AS ignored_metric, COALESCE(SUM(nxdomain_metric), 0) AS nxdomain_metric, COALESCE(SUM(successful_metric), 0) AS successful_metric
+  FROM (
+    SELECT %s AS entity, SUM(%s) AS total_metric, SUM(CASE WHEN is_ignored THEN %s ELSE 0 END) AS ignored_metric, SUM(nxdomain_lookups) AS nxdomain_metric, SUM(successful_lookups) AS successful_metric
+    FROM %s
+    WHERE %s NOT IN (%s)
+    GROUP BY %s
+  ) collapsed_source_entities
+  UNION ALL
+  SELECT COUNT(*) AS entity_count, 0 AS egress_metric, COALESCE(SUM(total_metric), 0) AS ingress_metric, COALESCE(SUM(ignored_metric), 0) AS ignored_metric, COALESCE(SUM(nxdomain_metric), 0) AS nxdomain_metric, COALESCE(SUM(successful_metric), 0) AS successful_metric
+  FROM (
+    SELECT %s AS entity, SUM(%s) AS total_metric, SUM(CASE WHEN is_ignored THEN %s ELSE 0 END) AS ignored_metric, SUM(nxdomain_lookups) AS nxdomain_metric, SUM(successful_lookups) AS successful_metric
+    FROM %s
+    WHERE %s NOT IN (%s)
+    GROUP BY %s
+  ) collapsed_destination_entities
 ) collapsed_entities
-`, cte, entityColumn, metricExpr, metricExpr, filteredCTEName, entityColumn, inPlaceholders, entityColumn)
+`, cte, srcEntityColumn, metricExpr, metricExpr, filteredCTEName, srcEntityColumn, inPlaceholders, srcEntityColumn, dstEntityColumn, metricExpr, metricExpr, filteredCTEName, dstEntityColumn, inPlaceholders, dstEntityColumn)
 
 	queryArgs := append(append([]any(nil), args...), stringsToAny(keepEntities)...)
+	queryArgs = append(queryArgs, stringsToAny(keepEntities)...)
 	row := s.db.QueryRowContext(ctx, query, queryArgs...)
 	var entityCount int
-	var total int64
+	var egress int64
+	var ingress int64
 	var ignoredMetric int64
 	var nxdomainLookups int64
 	var successfulLookups int64
-	if err := row.Scan(&entityCount, &total, &ignoredMetric, &nxdomainLookups, &successfulLookups); err != nil {
-		return nil, fmt.Errorf("scan rest node %q: %w", nodeID, err)
+	if err := row.Scan(&entityCount, &egress, &ingress, &ignoredMetric, &nxdomainLookups, &successfulLookups); err != nil {
+		return nil, fmt.Errorf("scan rest node %q: %w", graphRestID, err)
 	}
+	total := egress + ingress
 	if total == 0 {
 		return nil, nil
 	}
 
 	node := &Node{
 		CollapsedEntityCount: entityCount,
-		ID:                   nodeID,
+		Egress:               egress,
+		ID:                   graphRestID,
 		Ignored:              ignoredMetric > 0,
-		Label:                nodeID,
+		Ingress:              ingress,
+		Label:                graphRestID,
 		NXDomainLookups:      nxdomainLookups,
 		Synthetic:            true,
 		SuccessfulLookups:    successfulLookups,
 		Total:                total,
 	}
 	node.DNSResultState = dnsResultStateForCounts(node.NXDomainLookups, node.SuccessfulLookups)
-	if sourceRole {
-		node.Egress = total
-	} else {
-		node.Ingress = total
-	}
 	if node.ID == state.SelectedEntity {
 		node.Selected = true
 	}
@@ -1413,8 +1414,8 @@ func (s *Service) queryEdges(ctx context.Context, state QueryState, keepEntities
 	queryArgs := append([]any(nil), args...)
 	if state.NodeLimit > 0 && len(keepEntities) > 0 {
 		inPlaceholders := placeholders(len(keepEntities))
-		srcBucket = fmt.Sprintf("CASE WHEN src_entity IN (%s) THEN src_entity ELSE %s END", inPlaceholders, quoteLiteral(graphRestSourceID))
-		dstBucket = fmt.Sprintf("CASE WHEN dst_entity IN (%s) THEN dst_entity ELSE %s END", inPlaceholders, quoteLiteral(graphRestDestination))
+		srcBucket = fmt.Sprintf("CASE WHEN src_entity IN (%s) THEN src_entity ELSE %s END", inPlaceholders, quoteLiteral(graphRestID))
+		dstBucket = fmt.Sprintf("CASE WHEN dst_entity IN (%s) THEN dst_entity ELSE %s END", inPlaceholders, quoteLiteral(graphRestID))
 		queryArgs = append(queryArgs, stringsToAny(keepEntities)...)
 		queryArgs = append(queryArgs, stringsToAny(keepEntities)...)
 	}
@@ -1450,7 +1451,7 @@ ORDER BY %s DESC, source_bucket, destination_bucket
 		edge.IgnoredMetric = ignoredMetric
 		edge.MetricValue = edgeMetricValue(edge, state.Metric)
 		edge.DNSResultState = dnsResultStateForCounts(edge.NXDomainLookups, edge.SuccessfulLookups)
-		edge.Synthetic = edge.Source == graphRestSourceID || edge.Destination == graphRestDestination
+		edge.Synthetic = edge.Source == graphRestID || edge.Destination == graphRestID
 		edge.Selected = state.SelectedEdgeSrc == edge.Source && state.SelectedEdgeDst == edge.Destination
 		edges = append(edges, edge)
 	}
@@ -1513,7 +1514,7 @@ func (s *Service) selectionDetails(
 	}
 
 	if selectedNode.Synthetic {
-		topEntities, err := s.queryRestTopEntities(ctx, state, keepEntities, selectedNode.ID == graphRestSourceID)
+		topEntities, err := s.queryRestTopEntities(ctx, state, keepEntities)
 		if err != nil {
 			return nil, nil, nil, nil, SelectionBreakdown{}, err
 		}
@@ -1888,7 +1889,7 @@ func (s *Service) nodeSparklineWithSpan(ctx context.Context, state QueryState, s
 	return s.histogramWithSpan(ctx, nodeState, span)
 }
 
-func (s *Service) queryRestTopEntities(ctx context.Context, state QueryState, keepEntities []string, sourceRole bool) ([]Node, error) {
+func (s *Service) queryRestTopEntities(ctx context.Context, state QueryState, keepEntities []string) ([]Node, error) {
 	if len(keepEntities) == 0 {
 		return nil, nil
 	}
@@ -1897,21 +1898,27 @@ func (s *Service) queryRestTopEntities(ctx context.Context, state QueryState, ke
 	if err != nil {
 		return nil, err
 	}
-	entityColumn := "src_entity"
-	if !sourceRole {
-		entityColumn = "dst_entity"
-	}
 	metricExpr := metricValueExpression(state.Metric)
 	query := fmt.Sprintf(`%s
-SELECT %s AS entity, SUM(%s) AS total_metric
-FROM %s
-WHERE %s NOT IN (%s)
-GROUP BY %s
+SELECT entity, SUM(total_metric) AS total_metric
+FROM (
+  SELECT src_entity AS entity, SUM(%s) AS total_metric
+  FROM %s
+  WHERE src_entity NOT IN (%s)
+  GROUP BY src_entity
+  UNION ALL
+  SELECT dst_entity AS entity, SUM(%s) AS total_metric
+  FROM %s
+  WHERE dst_entity NOT IN (%s)
+  GROUP BY dst_entity
+) rest_entities
+GROUP BY entity
 ORDER BY total_metric DESC, entity
 LIMIT %d
-`, cte, entityColumn, metricExpr, filteredCTEName, entityColumn, placeholders(len(keepEntities)), entityColumn, restTopEntityLimit)
+`, cte, metricExpr, filteredCTEName, placeholders(len(keepEntities)), metricExpr, filteredCTEName, placeholders(len(keepEntities)), restTopEntityLimit)
 
 	queryArgs := append(append([]any(nil), args...), stringsToAny(keepEntities)...)
+	queryArgs = append(queryArgs, stringsToAny(keepEntities)...)
 	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query rest top entities: %w", err)
@@ -1936,9 +1943,9 @@ LIMIT %d
 func entityExpressions(granularity Granularity) (string, string) {
 	switch granularity {
 	case GranularityTLD:
-		return coalescedEntityExpressionWithPrivateUnknown("src_is_private", "src_tld"), coalescedEntityExpressionWithPrivateUnknown("dst_is_private", "dst_tld")
+		return localTLDExpression("src_is_private", "ip_version", "src_host", "src_tld"), localTLDExpression("dst_is_private", "ip_version", "dst_host", "dst_tld")
 	case Granularity2LD:
-		return coalescedEntityExpressionWithPrivateUnknown("src_is_private", "src_2ld", "src_tld"), coalescedEntityExpressionWithPrivateUnknown("dst_is_private", "dst_2ld", "dst_tld")
+		return local2LDExpression("src_is_private", "ip_version", "src_host", "src_2ld", "src_tld"), local2LDExpression("dst_is_private", "ip_version", "dst_host", "dst_2ld", "dst_tld")
 	case GranularityHostname:
 		return coalescedEntityExpression("src_host", "src_2ld", "src_tld", "src_ip"), coalescedEntityExpression("dst_host", "dst_2ld", "dst_tld", "dst_ip")
 	case GranularityIP:
@@ -1951,15 +1958,15 @@ func entityExpressions(granularity Granularity) (string, string) {
 func dnsLookupEntityExpressions(granularity Granularity) (string, string) {
 	switch granularity {
 	case GranularityTLD:
-		return coalescedEntityExpressionWithPrivateUnknown("client_is_private", "client_tld"), coalescedEntityExpression("query_tld", "query_name")
+		return localTLDExpression("client_is_private", "client_ip_version", "client_host", "client_tld"), coalescedEntityExpression("query_tld", "query_name")
 	case Granularity2LD:
-		return coalescedEntityExpressionWithPrivateUnknown("client_is_private", "client_2ld", "client_tld"), coalescedEntityExpression("query_2ld", "query_tld", "query_name")
+		return local2LDExpression("client_is_private", "client_ip_version", "client_host", "client_2ld", "client_tld"), coalescedEntityExpression("query_2ld", "query_tld", "query_name")
 	case GranularityHostname:
 		return coalescedEntityExpression("client_host", "client_2ld", "client_tld", "client_ip"), "query_name"
 	case GranularityIP:
 		return "client_ip", "query_name"
 	default:
-		return coalescedEntityExpressionWithPrivateUnknown("client_is_private", "client_2ld", "client_tld"), coalescedEntityExpression("query_2ld", "query_tld", "query_name")
+		return local2LDExpression("client_is_private", "client_ip_version", "client_host", "client_2ld", "client_tld"), coalescedEntityExpression("query_2ld", "query_tld", "query_name")
 	}
 }
 
@@ -1967,13 +1974,64 @@ func coalescedEntityExpression(fields ...string) string {
 	return coalescedEntityExpressionWithDefault("", fields...)
 }
 
-func coalescedEntityExpressionWithPrivateUnknown(privateColumn string, fields ...string) string {
+func localTLDExpression(privateColumn, ipVersionColumn, hostColumn string, fields ...string) string {
 	return fmt.Sprintf(
-		"COALESCE(%s, CASE WHEN %s THEN %s ELSE %s END)",
-		coalescedEntityExpression(fields...),
+		"CASE WHEN %s THEN COALESCE(%s, %s) ELSE COALESCE(%s, %s) END",
 		privateColumn,
-		quoteLiteral(unknownPrivateEntityLabel),
+		localResolvedTLDExpression(hostColumn),
+		localIPVersionExpression(ipVersionColumn),
+		coalescedEntityExpression(fields...),
 		quoteLiteral(unknownPublicEntityLabel),
+	)
+}
+
+func local2LDExpression(privateColumn, ipVersionColumn, hostColumn string, fields ...string) string {
+	return fmt.Sprintf(
+		"CASE WHEN %s THEN COALESCE(%s, %s) ELSE COALESCE(%s, %s) END",
+		privateColumn,
+		localResolved2LDExpression(hostColumn),
+		localIPVersionExpression(ipVersionColumn),
+		coalescedEntityExpression(fields...),
+		quoteLiteral(unknownPublicEntityLabel),
+	)
+}
+
+func localResolvedTLDExpression(hostColumn string) string {
+	return fmt.Sprintf(
+		"CASE WHEN %s THEN %s END",
+		localHostPredicate(hostColumn),
+		quoteLiteral(localEntityLabel),
+	)
+}
+
+func localResolved2LDExpression(hostColumn string) string {
+	return fmt.Sprintf(
+		"CASE WHEN %s THEN SPLIT_PART(%s, '.', 1) END",
+		localHostPredicate(hostColumn),
+		hostColumn,
+	)
+}
+
+func localHostPredicate(hostColumn string) string {
+	return fmt.Sprintf(
+		"NULLIF(%s, '') IS NOT NULL AND %s NOT IN (%s, %s)",
+		hostColumn,
+		hostColumn,
+		quoteLiteral(localIPv4EntityLabel),
+		quoteLiteral(localIPv6EntityLabel),
+	)
+}
+
+func localIPVersionExpression(ipVersionColumn string) string {
+	return fmt.Sprintf(
+		"CASE WHEN %s = %d THEN %s WHEN %s = %d THEN %s ELSE %s END",
+		ipVersionColumn,
+		model.IPVersion4,
+		quoteLiteral(localIPv4EntityLabel),
+		ipVersionColumn,
+		model.IPVersion6,
+		quoteLiteral(localIPv6EntityLabel),
+		quoteLiteral(unknownPrivateEntityLabel),
 	)
 }
 
@@ -2146,7 +2204,7 @@ func chooseKeepEntities(nodeTotals []Node, state QueryState) []string {
 	for _, entity := range state.Include {
 		forcedLookup[entity] = struct{}{}
 	}
-	if state.SelectedEntity != "" && state.SelectedEntity != graphRestSourceID && state.SelectedEntity != graphRestDestination {
+	if state.SelectedEntity != "" && state.SelectedEntity != graphRestID {
 		forcedLookup[state.SelectedEntity] = struct{}{}
 	}
 
@@ -2543,27 +2601,12 @@ func buildSingleMetricLayoutPositions(nodes []Node, edges []Edge) map[string]Lay
 }
 
 func (s *Service) appendRestNodes(ctx context.Context, state QueryState, keepEntities []string, nodes []Node) ([]Node, error) {
-	var restSourceNode *Node
-	var restDestinationNode *Node
-	group, groupContext := errgroup.WithContext(ctx)
-	group.Go(func() error {
-		var queryErr error
-		restSourceNode, queryErr = s.queryRestNode(groupContext, state, keepEntities, true)
-		return queryErr
-	})
-	group.Go(func() error {
-		var queryErr error
-		restDestinationNode, queryErr = s.queryRestNode(groupContext, state, keepEntities, false)
-		return queryErr
-	})
-	if err := group.Wait(); err != nil {
+	restNode, err := s.queryRestNode(ctx, state, keepEntities)
+	if err != nil {
 		return nil, err
 	}
-	if restSourceNode != nil {
-		nodes = append(nodes, *restSourceNode)
-	}
-	if restDestinationNode != nil {
-		nodes = append(nodes, *restDestinationNode)
+	if restNode != nil {
+		nodes = append(nodes, *restNode)
 	}
 	return nodes, nil
 }
@@ -2603,12 +2646,12 @@ func buildStableLayoutPositions(
 		layoutNodesByID[edge.Source] = layoutNode{
 			ID:        edge.Source,
 			Score:     nodeLayoutScore(edge.Source, bytesRank, connectionRank),
-			Synthetic: edge.Source == graphRestSourceID || edge.Source == graphRestDestination,
+			Synthetic: edge.Source == graphRestID,
 		}
 		layoutNodesByID[edge.Destination] = layoutNode{
 			ID:        edge.Destination,
 			Score:     nodeLayoutScore(edge.Destination, bytesRank, connectionRank),
-			Synthetic: edge.Destination == graphRestSourceID || edge.Destination == graphRestDestination,
+			Synthetic: edge.Destination == graphRestID,
 		}
 	}
 	for _, edge := range connectionEdges {
@@ -2616,12 +2659,12 @@ func buildStableLayoutPositions(
 		layoutNodesByID[edge.Source] = layoutNode{
 			ID:        edge.Source,
 			Score:     nodeLayoutScore(edge.Source, bytesRank, connectionRank),
-			Synthetic: edge.Source == graphRestSourceID || edge.Source == graphRestDestination,
+			Synthetic: edge.Source == graphRestID,
 		}
 		layoutNodesByID[edge.Destination] = layoutNode{
 			ID:        edge.Destination,
 			Score:     nodeLayoutScore(edge.Destination, bytesRank, connectionRank),
-			Synthetic: edge.Destination == graphRestSourceID || edge.Destination == graphRestDestination,
+			Synthetic: edge.Destination == graphRestID,
 		}
 		if existing, ok := layoutEdgesByKey[key]; ok {
 			existing.Bytes = max(existing.Bytes, edge.Bytes)

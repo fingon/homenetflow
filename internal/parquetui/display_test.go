@@ -507,13 +507,13 @@ func TestTablePanelRendersRawFlowChevronForEligibleRows(t *testing.T) {
 		TotalPages: 1,
 		VisibleRows: []TableRow{
 			{Destination: "dns.google", Source: "alpha.lan"},
-			{Destination: "Other Destinations", Source: "beta.lan", Synthetic: true},
+			{Destination: graphRestID, Source: "beta.lan", Synthetic: true},
 		},
 	}))
 
 	assert.Assert(t, strings.Contains(markup, `aria-label="Show flows from alpha.lan to dns.google"`))
 	assert.Assert(t, strings.Contains(markup, "flow_scope=edge"))
-	assert.Assert(t, !strings.Contains(markup, `aria-label="Show flows from beta.lan to Other Destinations"`))
+	assert.Assert(t, !strings.Contains(markup, `aria-label="Show flows from beta.lan to Rest"`))
 }
 
 func TestFlowDetailTableRendersRawRows(t *testing.T) {
@@ -1434,10 +1434,9 @@ func TestServiceGraphKeepsNodePositionsStableAcrossMetrics(t *testing.T) {
 		assert.Equal(t, bytesPosition, connectionPosition)
 	}
 
-	restSourcePosition, restSourceOK := bytesGraph.NodePositions[graphRestSourceID]
-	restDestinationPosition, restDestinationOK := bytesGraph.NodePositions[graphRestDestination]
-	if restSourceOK && restDestinationOK {
-		assert.Assert(t, restSourcePosition.X < restDestinationPosition.X)
+	restPosition, restOK := bytesGraph.NodePositions[graphRestID]
+	if restOK {
+		assert.Assert(t, restPosition.Y > graphHeightPx/2)
 	}
 }
 

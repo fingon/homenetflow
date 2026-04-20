@@ -6,6 +6,9 @@ const (
 	nodeAddressClassMixed     nodeAddressClass = "mixed"
 	nodeAddressClassPrivate   nodeAddressClass = "private"
 	nodeAddressClassPublic    nodeAddressClass = "public"
+	localEntityLabel                           = "Local"
+	localIPv4EntityLabel                       = "Local IPv4"
+	localIPv6EntityLabel                       = "Local IPv6"
 	unknownPrivateEntityLabel                  = "Unknown private"
 	unknownPublicEntityLabel                   = "Unknown public"
 )
