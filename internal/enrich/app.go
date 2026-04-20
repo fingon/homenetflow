@@ -431,7 +431,21 @@ func resolveNames(
 	cache *reverseDNSCache,
 	skipDNSLookups bool,
 ) (*derivedNames, error) {
-	if isLocalIPAddress(ipAddress, neighbourIndex) {
+	if isPrivateIPv4IPAddress(ipAddress) {
+		names, err := resolveNamesForIP(ipAddress, flowStart, logIndex, cache, skipDNSLookups)
+		if err != nil {
+			return nil, err
+		}
+		if names != nil {
+			localNames := localResolvedNames(*names)
+			return &localNames, nil
+		}
+
+		localNames := localPlaceholderNames(ipAddress)
+		return &localNames, nil
+	}
+
+	if isLocalIPv6IPAddress(ipAddress, neighbourIndex) {
 		if mappedIPv4, ok := neighbourIndex.LookupIPv4(ipAddress, flowStart); ok && isPrivateIPAddress(mappedIPv4) {
 			if names := logIndex.Lookup(mappedIPv4, flowStart); names != nil {
 				localNames := localResolvedNames(*names)

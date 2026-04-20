@@ -204,7 +204,7 @@ Each line in `reverse_dns_cache.jsonl` is:
 }
 ```
 
-Only successful public PTR lookups are persisted. Misses are cached only in memory for the current run. Local IPv4 entries and entries inside local IPv6 prefixes are pruned before enrichment uses this cache.
+Only successful public and RFC1918 IPv4 PTR lookups are persisted. Misses are cached only in memory for the current run. Entries inside local IPv6 prefixes are pruned before enrichment uses this cache.
 
 ## DNS Lookup Parquet Schema
 

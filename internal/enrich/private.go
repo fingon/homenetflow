@@ -49,6 +49,29 @@ func isLocalIPAddress(ipAddress string, neighbourIndex *neighbourIndex) bool {
 	return isPrivateIPAddress(ipAddress) || neighbourIndex.ContainsIPv6LocalPrefix(ipAddress)
 }
 
+func isPrivateIPv4IPAddress(ipAddress string) bool {
+	address, err := netip.ParseAddr(ipAddress)
+	if err != nil || !address.Is4() {
+		return false
+	}
+
+	for _, prefix := range ipv4PrivatePrefixes {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
+}
+
+func isLocalIPv6IPAddress(ipAddress string, neighbourIndex *neighbourIndex) bool {
+	address, err := netip.ParseAddr(ipAddress)
+	if err != nil || !address.Is6() {
+		return false
+	}
+
+	return isPrivateIPAddress(ipAddress) || neighbourIndex.ContainsIPv6LocalPrefix(ipAddress)
+}
+
 func ipVersionForAddress(ipAddress string) int32 {
 	address, err := netip.ParseAddr(ipAddress)
 	if err != nil {

@@ -95,7 +95,7 @@ func TestRunWritesDNSLookupParquet(t *testing.T) {
 	assert.Assert(t, records[0].ClientIsPrivate)
 }
 
-func TestRunUsesLocalIPv4ForUnresolvedRFC1918Addresses(t *testing.T) {
+func TestRunUsesLocalIPv4ReverseDNSForRFC1918Addresses(t *testing.T) {
 	srcParquetDir := t.TempDir()
 	srcLogDir := t.TempDir()
 	dstDir := t.TempDir()
@@ -118,7 +118,43 @@ func TestRunUsesLocalIPv4ForUnresolvedRFC1918Addresses(t *testing.T) {
 	var lookupCount atomic.Int32
 	stubReverseLookup(t, func(string) ([]string, error) {
 		lookupCount.Add(1)
-		return []string{"live.example.net."}, nil
+		return []string{"phone.lan."}, nil
+	})
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, len(rows), 1)
+	assert.Equal(t, *rows[0].SrcHost, "phone.lan")
+	assert.Equal(t, *rows[0].Src2LD, "phone")
+	assert.Equal(t, *rows[0].SrcTLD, localEntityTLD)
+	assert.Equal(t, *rows[0].DstHost, "phone.lan")
+	assert.Equal(t, lookupCount.Load(), int32(2))
+}
+
+func TestRunUsesLocalIPv4PlaceholderWhenRFC1918ReverseDNSMisses(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+	stubReverseLookup(t, nil)
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, model.FlowRecord{
+		SrcIP:       "192.168.1.10",
+		DstIP:       "198.51.100.20",
+		SrcPort:     123,
+		DstPort:     443,
+		IPVersion:   model.IPVersion4,
+		Protocol:    6,
+		Packets:     1,
+		Bytes:       2,
+		TimeStartNs: time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC).UnixNano(),
+		TimeEndNs:   time.Date(2026, 4, 1, 12, 30, 1, 0, time.UTC).UnixNano(),
+		DurationNs:  int64(time.Second),
 	})
 
 	assert.NilError(t, Run(Config{
@@ -132,8 +168,6 @@ func TestRunUsesLocalIPv4ForUnresolvedRFC1918Addresses(t *testing.T) {
 	assert.Equal(t, *rows[0].SrcHost, localIPv4Host)
 	assert.Equal(t, *rows[0].Src2LD, localIPv4Host)
 	assert.Equal(t, *rows[0].SrcTLD, localIPv4Host)
-	assert.Equal(t, *rows[0].DstHost, localIPv4Host)
-	assert.Equal(t, lookupCount.Load(), int32(0))
 }
 
 func TestRunUsesLocalGroupsForNamedRFC1918Addresses(t *testing.T) {
@@ -642,7 +676,7 @@ func TestRunPrunesReverseDNSCacheWhenNothingRebuilds(t *testing.T) {
 
 	prunedContents, err := os.ReadFile(cachePath)
 	assert.NilError(t, err)
-	assert.Equal(t, string(prunedContents), "{\"host\":\"public.example\",\"ip\":\"192.0.2.10\"}\n")
+	assert.Equal(t, string(prunedContents), string(cacheContents))
 }
 
 func TestIsPrivateIPAddress(t *testing.T) {

@@ -96,7 +96,7 @@ func pruneReverseDNSCache(filePath string, neighbourIndex *neighbourIndex) error
 		if entry.IP == "" || entry.Host == "" {
 			continue
 		}
-		if isLocalIPAddress(entry.IP, neighbourIndex) {
+		if isLocalIPv6IPAddress(entry.IP, neighbourIndex) {
 			continue
 		}
 		retainedEntries = append(retainedEntries, entry)
@@ -146,7 +146,7 @@ func pruneReverseDNSCache(filePath string, neighbourIndex *neighbourIndex) error
 	}
 	removeTemp = false
 
-	slog.Info("pruned local reverse DNS cache entries", "path", filePath, "removed", len(entries)-len(retainedEntries), "retained", len(retainedEntries))
+	slog.Info("pruned local IPv6 reverse DNS cache entries", "path", filePath, "removed", len(entries)-len(retainedEntries), "retained", len(retainedEntries))
 	return nil
 }
 

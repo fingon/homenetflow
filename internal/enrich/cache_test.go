@@ -87,7 +87,7 @@ func TestReverseDNSCacheSkipsLiveLookupButReturnsCachedEntries(t *testing.T) {
 	assert.Equal(t, lookupCallCount.Load(), int32(0))
 }
 
-func TestPruneReverseDNSCacheRemovesLocalEntries(t *testing.T) {
+func TestPruneReverseDNSCacheRemovesLocalIPv6Entries(t *testing.T) {
 	cacheFilePath := filepath.Join(t.TempDir(), reverseDNSCacheFilename)
 	cacheFileBytes := []byte("{\"ip\":\"192.168.1.10\",\"host\":\"local-v4.example\"}\n" +
 		"{\"ip\":\"2001:db8:1:2::20\",\"host\":\"local-v6.example\"}\n" +
@@ -100,5 +100,5 @@ func TestPruneReverseDNSCacheRemovesLocalEntries(t *testing.T) {
 
 	prunedBytes, err := os.ReadFile(cacheFilePath)
 	assert.NilError(t, err)
-	assert.Equal(t, string(prunedBytes), "{\"host\":\"public.example\",\"ip\":\"192.0.2.10\"}\n")
+	assert.Equal(t, string(prunedBytes), "{\"host\":\"local-v4.example\",\"ip\":\"192.168.1.10\"}\n{\"host\":\"public.example\",\"ip\":\"192.0.2.10\"}\n")
 }
