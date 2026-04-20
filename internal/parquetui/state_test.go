@@ -150,7 +150,7 @@ func TestQueryStateNormalizedAppliesSpanAndNodeLimit(t *testing.T) {
 
 	assert.Equal(t, normalized.FromNs, int64(10))
 	assert.Equal(t, normalized.ToNs, int64(100))
-	assert.Equal(t, normalized.NodeLimit, 150)
+	assert.Equal(t, normalized.NodeLimit, 10)
 	assert.Equal(t, normalized.Metric, MetricConnections)
 }
 

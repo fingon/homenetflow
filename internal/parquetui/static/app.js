@@ -15,7 +15,7 @@
   const loadingMessage = "Loading data...";
   const maxGraphScale = 6;
   const minGraphScale = 0.75;
-  const nodeLimitAutoValue = "auto";
+  const nodeLimitDefaultValue = "10";
   const oneDayNs = 24n * 3600n * 1000000000n;
   const entityActionMaxRangeNs = 7n * oneDayNs;
   const oneHourNs = 3600n * 1000000000n;
@@ -27,6 +27,8 @@
   const presetMonthValue = "30d";
   const presetWeekValue = "7d";
   const reloadCheckIntervalMs = 1000;
+  const rankingsTabPanelSelector = ".rankings-tab-panel";
+  const rankingsTabSelector = "[data-rankings-tab]";
   const sceneLabelPaddingPx = 8;
   const searchBehavior = "search";
   const statusErrorMessage = "Request failed.";
@@ -62,6 +64,7 @@
     }
 
     bindSectionToggles(root);
+    bindRankingsTabs(root);
     localizeTimestamps(root);
   }
 
@@ -197,7 +200,7 @@
       }
 
       if (target.getAttribute("name") === granularityName && nodeLimitSelect) {
-        nodeLimitSelect.value = nodeLimitAutoValue;
+        nodeLimitSelect.value = nodeLimitDefaultValue;
       }
 
       submitForm(form);
@@ -647,6 +650,34 @@
   function sectionToggleAriaLabel(toggle, expanded) {
     const sectionTitle = toggle.dataset.sectionTitle || "section";
     return `${expanded ? "Collapse" : "Expand"} ${sectionTitle}`;
+  }
+
+  function bindRankingsTabs(root) {
+    const tabs = root.querySelectorAll(rankingsTabSelector);
+    for (const tab of tabs) {
+      if (!(tab instanceof HTMLButtonElement) || tab.dataset.initialized) {
+        continue;
+      }
+      tab.dataset.initialized = "true";
+      tab.addEventListener("click", () => activateRankingsTab(tab));
+    }
+  }
+
+  function activateRankingsTab(activeTab) {
+    const tabContainer = activeTab.closest(".rankings-panel");
+    if (!tabContainer) {
+      return;
+    }
+
+    const activePanelID = activeTab.getAttribute("aria-controls");
+    for (const tab of tabContainer.querySelectorAll(rankingsTabSelector)) {
+      const selected = tab === activeTab;
+      tab.classList.toggle("active", selected);
+      tab.setAttribute("aria-selected", selected ? "true" : "false");
+    }
+    for (const panel of tabContainer.querySelectorAll(rankingsTabPanelSelector)) {
+      panel.toggleAttribute("hidden", panel.id !== activePanelID);
+    }
   }
 
   function cacheGraphLabels(scene) {

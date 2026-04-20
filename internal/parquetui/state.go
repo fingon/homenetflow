@@ -549,19 +549,8 @@ func (s QueryState) layoutCacheState() QueryState {
 	return state
 }
 
-func defaultNodeLimit(granularity Granularity) int {
-	switch granularity {
-	case GranularityTLD:
-		return 0
-	case Granularity2LD:
-		return 100
-	case GranularityHostname:
-		return 150
-	case GranularityIP:
-		return 200
-	default:
-		return 100
-	}
+func defaultNodeLimit(_ Granularity) int {
+	return 10
 }
 
 func defaultSortForMetric(metric Metric) TableSort {

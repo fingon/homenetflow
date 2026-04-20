@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	layoutInnerRingCount        = 8
+	layoutInnerRingCount        = 9
 	layoutMiddleRingCount       = 24
 	layoutNodeGapPx             = 18
 	layoutNodePaddingPx         = 44
@@ -311,7 +311,7 @@ func layoutRingRadii(ringIndex, ringCount int, maxRadiusX, maxRadiusY float64) (
 		return 0, 0
 	}
 
-	const minFraction = 0.28
+	const minFraction = 0.44
 	const maxFraction = 0.96
 
 	fraction := minFraction
@@ -322,8 +322,8 @@ func layoutRingRadii(ringIndex, ringCount int, maxRadiusX, maxRadiusY float64) (
 }
 
 func layoutEstimatedRingRadii(ringIndex int, maxRadiusX, maxRadiusY float64) (float64, float64) {
-	const ringFractionStep = 0.13
-	const minFraction = 0.28
+	const ringFractionStep = 0.16
+	const minFraction = 0.44
 	const maxFraction = 0.96
 
 	fraction := minFraction + ringFractionStep*float64(ringIndex)

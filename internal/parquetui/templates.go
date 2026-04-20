@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	graphHeightPx                   = 560
+	graphSizePx                     = 720
+	graphHeightPx                   = graphSizePx
 	graphDenseNodeCount             = 36
 	graphPrimaryRingCount           = 12
-	graphWidthPx                    = 960
+	graphWidthPx                    = graphSizePx
 	breakdownChartSizePx            = 136
 	breakdownDonutThicknessPx       = 24
 	fullTimestampFormat             = time.RFC3339
@@ -135,6 +136,14 @@ func FlowDetailIndex(flows FlowDetailData, devMode bool, devSessionToken string)
 
 func AppShell(dashboard DashboardData) g.Node {
 	state := dashboard.State
+	breakdown := BreakdownPanel(state, dashboard.Graph)
+	sidebarClass := "dashboard-sidebar"
+	sidebarNodes := []g.Node(nil)
+	if breakdown != nil {
+		sidebarClass += " has-breakdown"
+		sidebarNodes = append(sidebarNodes, breakdown)
+	}
+	sidebarNodes = append(sidebarNodes, RankingsPanel(state, dashboard.Graph))
 
 	return Div(
 		ID("app-shell"),
@@ -147,69 +156,65 @@ func AppShell(dashboard DashboardData) g.Node {
 			Class("loading-indicator"),
 			g.Attr("aria-live", "polite"),
 		),
-		Section(
-			Class("histogram-panel"),
+		Div(
+			Class("dashboard-main"),
 			Div(
-				Class("panel-heading"),
-				H2(g.Text("Timeline")),
-				Span(Class("panel-subtle hover-help timeline-help"), g.Text("Drag to zoom")),
-			),
-			Div(
-				ID("histogram"),
-				Class("histogram"),
-				Data("span-start-ns", strconv.FormatInt(dashboard.Span.StartNs, 10)),
-				Data("span-end-ns", strconv.FormatInt(dashboard.Span.EndNs, 10)),
-				renderHistogramSVG(state.Metric, dashboard.Histogram),
-			),
-		),
-		Section(
-			Class("section-panel section-block"),
-			ID("graph-section"),
-			sectionHeader("Graph", "graph-section-content", true),
-			Div(
-				Class("content-grid"),
-				ID("graph-section-content"),
+				Class("dashboard-primary"),
 				Section(
-					Class("graph-panel"),
-					ID("graph-panel"),
+					Class("histogram-panel"),
 					Div(
-						Class("legend-line graph-legend"),
-						Span(Class("legend-item"), g.Text("Node size = selected metric")),
-						Span(Class("legend-item"), g.Text("Edge width = selected metric")),
-						Span(Class("legend-item hover-help graph-help"), g.Text("Scroll to zoom, drag to pan")),
-						Span(Class("legend-item hover-help graph-help"), g.Text("Labels expand with zoom and hover")),
+						Class("panel-heading"),
+						H2(g.Text("Timeline")),
+						Span(Class("panel-subtle hover-help timeline-help"), g.Text("Drag to zoom")),
 					),
 					Div(
-						ID("graph-canvas"),
-						Class("graph-canvas"),
-						renderGraphSVG(state, dashboard.Graph),
+						ID("histogram"),
+						Class("histogram"),
+						Data("span-start-ns", strconv.FormatInt(dashboard.Span.StartNs, 10)),
+						Data("span-end-ns", strconv.FormatInt(dashboard.Span.EndNs, 10)),
+						renderHistogramSVG(state.Metric, dashboard.Histogram),
 					),
 				),
-				Aside(
-					Class("side-panel"),
-					ID("summary-panel"),
-					SummaryPanel(state, dashboard.Graph),
+				Section(
+					Class("section-panel section-block"),
+					ID("graph-section"),
+					Div(Class("panel-heading section-heading"), H2(g.Text("Graph"))),
+					Div(
+						Class("content-grid"),
+						ID("graph-section-content"),
+						Section(
+							Class("graph-panel"),
+							ID("graph-panel"),
+							Div(
+								ID("graph-canvas"),
+								Class("graph-canvas"),
+								Div(
+									Class("legend-line graph-legend"),
+									Span(Class("legend-item"), g.Text("Node size = selected metric")),
+									Span(Class("legend-item"), g.Text("Edge width = selected metric")),
+									Span(Class("legend-item hover-help graph-help"), g.Text("Scroll to zoom, drag to pan")),
+									Span(Class("legend-item hover-help graph-help"), g.Text("Labels expand with zoom and hover")),
+								),
+								renderGraphSVG(state, dashboard.Graph),
+							),
+						),
+						Aside(
+							Class("side-panel"),
+							ID("summary-panel"),
+							SummaryPanel(state, dashboard.Graph),
+						),
+					),
 				),
 			),
-		),
-		BreakdownPanel(state, dashboard.Graph),
-		Section(
-			Class("section-panel section-block"),
-			ID("rankings-section"),
-			sectionHeader("Rankings", "rankings-content", true),
-			Div(
-				Class("rankings-section"),
-				ID("rankings-content"),
-				RankingsPanel(state, dashboard.Graph),
-			),
+			Div(append([]g.Node{Class(sidebarClass)}, sidebarNodes...)...),
 		),
 		Section(
 			Class("section-panel section-block"),
 			ID("table-panel"),
-			sectionHeader("Flows Table", "table-content", true),
+			sectionHeader("Flows Table", "table-content", false),
 			Div(
 				ID("table-content"),
-				Class("section-content"),
+				Class("section-content is-collapsed"),
 				TablePanel(state, dashboard.Table),
 			),
 		),
@@ -305,10 +310,39 @@ func totalStatBlocks(state QueryState, graph GraphData) []g.Node {
 }
 
 func RankingsPanel(state QueryState, graph GraphData) g.Node {
-	return g.Group([]g.Node{
-		Section(
-			Class("rankings-panel"),
-			sectionTitle("Top Entities"),
+	return Section(
+		Class("section-panel section-block rankings-panel"),
+		ID("rankings-section"),
+		Div(Class("panel-heading section-heading"), H2(g.Text("Rankings"))),
+		Div(
+			Class("rankings-tabs"),
+			g.Attr("role", "tablist"),
+			Button(
+				Type("button"),
+				Class("list-button rankings-tab active"),
+				ID("rankings-tab-entities"),
+				g.Attr("role", "tab"),
+				g.Attr("aria-selected", "true"),
+				g.Attr("aria-controls", "rankings-panel-entities"),
+				Data("rankings-tab", "entities"),
+				g.Text("Top Entities"),
+			),
+			Button(
+				Type("button"),
+				Class("list-button rankings-tab"),
+				ID("rankings-tab-flows"),
+				g.Attr("role", "tab"),
+				g.Attr("aria-selected", "false"),
+				g.Attr("aria-controls", "rankings-panel-flows"),
+				Data("rankings-tab", "flows"),
+				g.Text(topEdgesTitle(state.Metric)),
+			),
+		),
+		Div(
+			Class("rankings-tab-panel"),
+			ID("rankings-panel-entities"),
+			g.Attr("role", "tabpanel"),
+			g.Attr("aria-labelledby", "rankings-tab-entities"),
 			Ul(
 				Class("rank-list"),
 				renderNodes(graph.TopEntities, func(node Node) g.Node {
@@ -316,9 +350,12 @@ func RankingsPanel(state QueryState, graph GraphData) g.Node {
 				}),
 			),
 		),
-		Section(
-			Class("rankings-panel"),
-			sectionTitle(topEdgesTitle(state.Metric)),
+		Div(
+			Class("rankings-tab-panel"),
+			ID("rankings-panel-flows"),
+			g.Attr("role", "tabpanel"),
+			g.Attr("aria-labelledby", "rankings-tab-flows"),
+			g.Attr("hidden", ""),
 			Ul(
 				Class("rank-list"),
 				renderNodes(graph.TopEdges, func(edge Edge) g.Node {
@@ -326,7 +363,7 @@ func RankingsPanel(state QueryState, graph GraphData) g.Node {
 				}),
 			),
 		),
-	})
+	)
 }
 
 func topEdgesTitle(metric Metric) string {
@@ -485,15 +522,11 @@ func BreakdownPanel(state QueryState, graph GraphData) g.Node {
 	if panel == nil {
 		return nil
 	}
-	return Section(
-		Class("section-panel section-block"),
+	return Aside(
+		Class("section-panel section-block breakdown-sidebar"),
 		ID("breakdown-section"),
-		sectionHeader("Breakdown", "breakdown-content", true),
-		Div(
-			ID("breakdown-content"),
-			Class("section-content"),
-			panel,
-		),
+		Div(Class("panel-heading"), H2(g.Text("Breakdown"))),
+		panel,
 	)
 }
 
@@ -869,11 +902,10 @@ func topBar(dashboard DashboardData) g.Node {
 					Select(
 						ID("node-limit"),
 						Name("node_limit"),
-						optionValue("auto", "Auto", state.NodeLimit == defaultNodeLimit(state.Granularity) || state.NodeLimit == 0),
-						optionValue("100", "Top 100", state.NodeLimit == 100),
-						optionValue("150", "Top 150", state.NodeLimit == 150),
+						optionValue("10", "Top 10", state.NodeLimit == 10 || state.NodeLimit == 0),
+						optionValue("50", "Top 50", state.NodeLimit == 50),
 						optionValue("200", "Top 200", state.NodeLimit == 200),
-						optionValue("400", "Top 400", state.NodeLimit == 400),
+						optionValue("500", "Top 500", state.NodeLimit == 500),
 					),
 				),
 				Div(

@@ -899,6 +899,12 @@ func TestBreakdownPanelRendersTrafficBreakdown(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, "17 (UDP)"))
 	assert.Assert(t, strings.Contains(markup, `class="breakdown-svg"`))
 	assert.Assert(t, strings.Contains(markup, `protocol=6`))
+	assert.Assert(t, strings.Contains(markup, `id="breakdown-section"`))
+	assert.Assert(t, strings.Contains(markup, `class="section-panel section-block breakdown-sidebar"`))
+	assert.Assert(t, !strings.Contains(markup, `data-collapses-with="graph-section-content"`))
+	assert.Assert(t, !strings.Contains(markup, `aria-label="Collapse Breakdown"`))
+	assert.Assert(t, !strings.Contains(markup, `id="breakdown-content"`))
+	assert.Assert(t, !strings.Contains(markup, `aria-controls="breakdown-content"`))
 }
 
 func TestBreakdownPanelRendersFamilyLinks(t *testing.T) {
@@ -1215,7 +1221,7 @@ func TestSummaryPanelRendersAddressFamilyFilterChip(t *testing.T) {
 	assert.Assert(t, strings.Contains(summaryMarkup, "Address Family: IPv6"))
 }
 
-func TestAppShellRendersSeparateRankingsSection(t *testing.T) {
+func TestAppShellRendersRankingsInSidebar(t *testing.T) {
 	t.Parallel()
 
 	markup := renderNodeString(t, AppShell(DashboardData{
@@ -1238,16 +1244,18 @@ func TestAppShellRendersSeparateRankingsSection(t *testing.T) {
 	}))
 
 	assert.Assert(t, strings.Contains(markup, `id="rankings-section"`))
-	assert.Assert(t, strings.Contains(markup, `class="section-panel section-block"`))
-	assert.Assert(t, strings.Contains(markup, `class="rankings-section"`))
-	assert.Assert(t, strings.Contains(markup, `class="rankings-panel"`))
-	assert.Assert(t, strings.Contains(markup, `data-collapsible-toggle`))
-	assert.Assert(t, strings.Contains(markup, `class="section-toggle-icon"`))
-	assert.Assert(t, strings.Contains(markup, `aria-label="Collapse Graph"`))
-	assert.Assert(t, strings.Contains(markup, `aria-label="Collapse Rankings"`))
-	assert.Assert(t, strings.Contains(markup, `aria-label="Collapse Flows Table"`))
-	assert.Assert(t, strings.Contains(markup, `aria-controls="graph-section-content"`))
-	assert.Assert(t, strings.Contains(markup, `aria-controls="rankings-content"`))
+	assert.Assert(t, strings.Contains(markup, `class="dashboard-sidebar"`))
+	assert.Assert(t, strings.Contains(markup, `class="section-panel section-block rankings-panel"`))
+	assert.Assert(t, strings.Contains(markup, `class="rankings-tabs"`))
+	assert.Assert(t, strings.Contains(markup, `data-rankings-tab="entities"`))
+	assert.Assert(t, strings.Contains(markup, `data-rankings-tab="flows"`))
+	assert.Assert(t, strings.Contains(markup, `id="rankings-panel-entities"`))
+	assert.Assert(t, strings.Contains(markup, `id="rankings-panel-flows"`))
+	assert.Assert(t, !strings.Contains(markup, `aria-label="Collapse Graph"`))
+	assert.Assert(t, !strings.Contains(markup, `aria-label="Collapse Rankings"`))
+	assert.Assert(t, strings.Contains(markup, `aria-label="Expand Flows Table"`))
+	assert.Assert(t, !strings.Contains(markup, `aria-controls="graph-section-content"`))
+	assert.Assert(t, !strings.Contains(markup, `aria-controls="rankings-content"`))
 	assert.Assert(t, strings.Contains(markup, `aria-controls="table-content"`))
 	assert.Assert(t, !strings.Contains(markup, `class="section-toggle-label"`))
 	assert.Assert(t, strings.Contains(markup, "Top Entities"))
@@ -1286,8 +1294,91 @@ func TestAppShellRendersRankingsVisibleByDefault(t *testing.T) {
 	}))
 
 	assert.Assert(t, strings.Contains(markup, `id="rankings-section"`))
-	assert.Assert(t, strings.Contains(markup, `id="rankings-content"`))
-	assert.Assert(t, !strings.Contains(markup, `class="rankings-section is-collapsed"`))
+	assert.Assert(t, strings.Contains(markup, `id="rankings-panel-entities"`))
+	assert.Assert(t, strings.Contains(markup, `id="rankings-panel-flows"`))
+	assert.Assert(t, strings.Contains(markup, `aria-selected="true"`))
+	assert.Assert(t, strings.Contains(markup, `id="rankings-panel-flows" role="tabpanel" aria-labelledby="rankings-tab-flows" hidden`))
+	assert.Assert(t, !strings.Contains(markup, `aria-label="Collapse Graph"`))
+	assert.Assert(t, !strings.Contains(markup, `aria-label="Collapse Rankings"`))
+	assert.Assert(t, !strings.Contains(markup, `class="content-grid is-collapsed"`))
+	assert.Assert(t, !strings.Contains(markup, `class="rankings-panel is-collapsed"`))
+}
+
+func TestAppShellRendersBreakdownBesideTimelineAndGraph(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, AppShell(DashboardData{
+		State: QueryState{
+			FromNs:      10,
+			ToNs:        20,
+			Metric:      MetricBytes,
+			Granularity: Granularity2LD,
+		},
+		Span: TimeSpan{StartNs: 10, EndNs: 20},
+		Graph: GraphData{
+			ActiveMetric: MetricBytes,
+			Breakdown: SelectionBreakdown{
+				Protocols: &BreakdownChart{
+					Label: "Protocols",
+					Slices: []BreakdownSlice{
+						{FilterParam: "protocol", FilterValue: "6", Label: "6 (TCP)", Value: 120},
+						{FilterParam: "protocol", FilterValue: "17", Label: "17 (UDP)", Value: 80},
+					},
+				},
+			},
+		},
+	}))
+
+	assert.Assert(t, strings.Contains(markup, `class="dashboard-main"`))
+	assert.Assert(t, strings.Contains(markup, `class="dashboard-primary"`))
+	assert.Assert(t, strings.Contains(markup, `class="dashboard-sidebar has-breakdown"`))
+	assert.Assert(t, strings.Contains(markup, `id="histogram"`))
+	assert.Assert(t, strings.Contains(markup, `id="graph-section"`))
+	assert.Assert(t, strings.Contains(markup, `id="breakdown-section"`))
+	assert.Assert(t, !strings.Contains(markup, `data-collapses-with="graph-section-content"`))
+	assert.Assert(t, strings.Contains(markup, "Protocols"))
+	assert.Assert(t, !strings.Contains(markup, `aria-label="Collapse Breakdown"`))
+}
+
+func TestAppShellOmitsBreakdownSidebarWhenBreakdownUnavailable(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, AppShell(DashboardData{
+		State: QueryState{
+			FromNs:      10,
+			ToNs:        20,
+			Metric:      MetricDNSLookups,
+			Granularity: Granularity2LD,
+		},
+		Span: TimeSpan{StartNs: 10, EndNs: 20},
+		Graph: GraphData{
+			ActiveMetric: MetricDNSLookups,
+		},
+	}))
+
+	assert.Assert(t, strings.Contains(markup, `class="dashboard-main"`))
+	assert.Assert(t, strings.Contains(markup, `class="dashboard-sidebar"`))
+	assert.Assert(t, !strings.Contains(markup, `class="dashboard-sidebar has-breakdown"`))
+	assert.Assert(t, !strings.Contains(markup, `id="breakdown-section"`))
+	assert.Assert(t, strings.Contains(markup, `id="rankings-section"`))
+}
+
+func TestAppShellRendersFlowsTableCollapsedByDefault(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, AppShell(DashboardData{
+		State: QueryState{
+			FromNs:      10,
+			ToNs:        20,
+			Metric:      MetricBytes,
+			Granularity: Granularity2LD,
+		},
+		Span: TimeSpan{StartNs: 10, EndNs: 20},
+	}))
+
+	assert.Assert(t, strings.Contains(markup, `aria-label="Expand Flows Table"`))
+	assert.Assert(t, strings.Contains(markup, `aria-controls="table-content"`))
+	assert.Assert(t, strings.Contains(markup, `id="table-content" class="section-content is-collapsed"`))
 }
 
 func TestServiceGraphKeepsNodePositionsStableAcrossMetrics(t *testing.T) {
@@ -1399,6 +1490,28 @@ func TestBuildLayoutRings(t *testing.T) {
 	assert.Assert(t, len(rings[1]) <= layoutMiddleRingCount)
 	assert.Assert(t, len(rings[2]) > 0)
 	assert.Equal(t, totalNodes, len(nodes))
+}
+
+func TestBuildLayoutRingsKeepsDefaultGraphOnOneRing(t *testing.T) {
+	t.Parallel()
+
+	nodes := make([]layoutNode, 0, 9)
+	for index := range 9 {
+		nodes = append(nodes, layoutNode{
+			ID:    fmt.Sprintf("node-%d", index),
+			Score: int64(100 - index),
+		})
+	}
+
+	nodeRadiiByID := make(map[string]float64, len(nodes))
+	for _, node := range nodes {
+		nodeRadiiByID[node.ID] = nodeRadius(node.Score, 100)
+	}
+
+	rings := buildLayoutRings(nodes, nodeRadiiByID, graphWidthPx/2-float64(layoutNodePaddingPx), graphHeightPx/2-float64(layoutNodePaddingPx))
+
+	assert.Equal(t, len(rings), 1)
+	assert.Equal(t, len(rings[0]), len(nodes))
 }
 
 func TestOrderLayoutRingUsesPlacedNeighborAngles(t *testing.T) {
