@@ -15,13 +15,16 @@ import (
 )
 
 const (
+	dnsQueryTypeA     = "A"
+	dnsQueryTypeAAAA  = "AAAA"
 	logWindowDuration = time.Hour
 	messageFieldCount = 6
 )
 
 type dnsObservation struct {
-	host string
-	time time.Time
+	host               string
+	reverseCacheSource bool
+	time               time.Time
 }
 
 type dnsLookupEvent struct {
@@ -178,7 +181,7 @@ func (i *dnsIndex) parseLine(lineBytes []byte) error {
 				continue
 			}
 
-			i.addObservation(ipAddress.String(), nestedEntry.QueryName, entryTime)
+			i.addObservation(ipAddress.String(), nestedEntry.QueryName, entryTime, isReverseCacheQueryType(nestedEntry.QueryType))
 		}
 
 		return nil
@@ -212,18 +215,19 @@ func (i *dnsIndex) parseLegacyMessage(message string, entryTime time.Time) {
 		return
 	}
 
-	i.addObservation(answer, fields[len(fields)-3], entryTime)
+	i.addObservation(answer, fields[len(fields)-3], entryTime, false)
 }
 
-func (i *dnsIndex) addObservation(ipAddress, host string, entryTime time.Time) {
+func (i *dnsIndex) addObservation(ipAddress, host string, entryTime time.Time, reverseCacheSource bool) {
 	normalizedHost := normalizeHostname(host)
 	if normalizedHost == "" {
 		return
 	}
 
 	i.observationsByIP[ipAddress] = append(i.observationsByIP[ipAddress], dnsObservation{
-		host: normalizedHost,
-		time: entryTime.UTC(),
+		host:               normalizedHost,
+		reverseCacheSource: reverseCacheSource,
+		time:               entryTime.UTC(),
 	})
 }
 
@@ -281,6 +285,15 @@ func (i *dnsIndex) Lookup(ipAddress string, flowStart time.Time) *derivedNames {
 	return nil
 }
 
+func (i *dnsIndex) LookupForReverseCache(ipAddress string, lookupTime time.Time) (string, bool) {
+	observation, found := i.lookupReverseCacheObservation(ipAddress, lookupTime)
+	if !found {
+		return "", false
+	}
+
+	return observation.host, true
+}
+
 func (i *dnsIndex) LookupNewerThan(ipAddress string, afterTime, flowStart time.Time) (string, bool) {
 	observations := i.observationsByIP[ipAddress]
 	for index := len(observations) - 1; index >= 0; index-- {
@@ -299,12 +312,53 @@ func (i *dnsIndex) LookupNewerThan(ipAddress string, afterTime, flowStart time.T
 	return "", false
 }
 
+func (i *dnsIndex) LookupNewerThanForReverseCache(ipAddress string, afterTime, lookupTime time.Time) (string, bool) {
+	observations := i.observationsByIP[ipAddress]
+	for index := len(observations) - 1; index >= 0; index-- {
+		observation := observations[index]
+		if observation.time.After(lookupTime) || !observation.reverseCacheSource {
+			continue
+		}
+
+		if !observation.time.After(afterTime) {
+			return "", false
+		}
+
+		return observation.host, true
+	}
+
+	return "", false
+}
+
+func (i *dnsIndex) lookupReverseCacheObservation(ipAddress string, lookupTime time.Time) (dnsObservation, bool) {
+	observations := i.observationsByIP[ipAddress]
+	for index := len(observations) - 1; index >= 0; index-- {
+		observation := observations[index]
+		if observation.time.After(lookupTime) || !observation.reverseCacheSource {
+			continue
+		}
+
+		return observation, true
+	}
+
+	return dnsObservation{}, false
+}
+
 func isPositiveLegacyKind(kind string) bool {
 	switch kind {
 	case "cached", "config", "reply":
 		return true
 	default:
 		return strings.Contains(kind, "/hosts/")
+	}
+}
+
+func isReverseCacheQueryType(queryType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(queryType)) {
+	case dnsQueryTypeA, dnsQueryTypeAAAA:
+		return true
+	default:
+		return false
 	}
 }
 

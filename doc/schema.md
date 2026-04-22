@@ -222,7 +222,7 @@ Negative entries use:
 }
 ```
 
-Only the new schema is loaded; legacy cache lines are ignored. Misses are persisted with the lookup time, and a later dnsmasq observation for the same IP can promote a cached miss into a positive cache entry. Entries inside local IPv6 prefixes are pruned before enrichment uses this cache.
+Only the new schema is loaded; legacy cache lines are ignored. Missing cache entries are seeded from structured dnsmasq `A` and `AAAA` answers before a live PTR lookup is attempted. Misses are persisted with the lookup time, and a later eligible dnsmasq `A` or `AAAA` answer for the same IP can promote a cached miss into a positive cache entry. Entries inside local IPv6 prefixes are pruned before enrichment uses this cache.
 
 ## DNS Lookup Parquet Schema
 

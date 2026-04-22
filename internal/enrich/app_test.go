@@ -337,6 +337,39 @@ func TestRunSkipsLiveDNSLookupsButUsesExistingCache(t *testing.T) {
 	assert.Equal(t, lookupCount.Load(), int32(0))
 }
 
+func TestRunSeedsReverseCacheFromStructuredLogsBeforePTR(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
+
+	logPath := filepath.Join(srcLogDir, "2026-04-01.jsonl")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"192.0.2.10\\\"],\\\"query_name\\\":\\\"seeded.example.net\\\",\\\"query_type\\\":\\\"A\\\",\\\"timestamp_end\\\":\\\"2026-04-01T08:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T08:00:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	var lookupCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, len(rows), 1)
+	assert.Equal(t, *rows[0].SrcHost, "seeded.example.net")
+	assert.Equal(t, *rows[0].Src2LD, "example.net")
+	assert.Equal(t, *rows[0].SrcTLD, "net")
+	assert.Equal(t, *rows[0].DstHost, "live.example.net")
+	assert.Equal(t, lookupCount.Load(), int32(1))
+
+	cacheBytes, err := os.ReadFile(filepath.Join(dstDir, reverseDNSCacheFilename))
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(cacheBytes), "{\"host\":\"seeded.example.net\",\"ip\":\"192.0.2.10\",\"resolvedAtNs\":1775046600000000000}"))
+}
+
 func TestRunPromotesNegativeCacheEntryFromLaterLogObservation(t *testing.T) {
 	srcParquetDir := t.TempDir()
 	srcLogDir := t.TempDir()
@@ -380,7 +413,7 @@ func TestRunPromotesNegativeCacheEntryFromLaterLogObservation(t *testing.T) {
 	})
 
 	logPath := filepath.Join(srcLogDir, "2026-04-01.jsonl")
-	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"192.0.2.10\\\"],\\\"query_name\\\":\\\"promoted.example.net\\\",\\\"timestamp_end\\\":\\\"2026-04-01T13:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T13:00:00Z\"}\n")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"192.0.2.10\\\"],\\\"query_name\\\":\\\"promoted.example.net\\\",\\\"query_type\\\":\\\"A\\\",\\\"timestamp_end\\\":\\\"2026-04-01T13:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T13:00:00Z\"}\n")
 	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
 
 	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))

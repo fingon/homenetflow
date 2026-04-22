@@ -94,6 +94,54 @@ func TestReverseDNSCacheSkipsLiveLookupButReturnsCachedEntries(t *testing.T) {
 	assert.Equal(t, lookupCallCount.Load(), int32(0))
 }
 
+func TestReverseDNSCacheSeedsMissingEntryFromStructuredLogs(t *testing.T) {
+	cacheFilePath := filepath.Join(t.TempDir(), reverseDNSCacheFilename)
+	cache, err := loadReverseDNSCache(cacheFilePath)
+	assert.NilError(t, err)
+
+	logIndex := testDNSIndex()
+	logIndex.addObservation("192.0.2.10", "seeded.example.net", time.Date(2026, 4, 1, 8, 0, 0, 0, time.UTC), true)
+
+	var lookupCallCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCallCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	lookupTime := time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC)
+	result, err := cache.Lookup("192.0.2.10", lookupTime, logIndex, true)
+	assert.NilError(t, err)
+	assert.Equal(t, result.names.host, "seeded.example.net")
+	assert.Assert(t, result.warning == nil)
+	assert.Equal(t, lookupCallCount.Load(), int32(0))
+
+	fileBytes, err := os.ReadFile(cacheFilePath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(fileBytes), "{\"host\":\"seeded.example.net\",\"ip\":\"192.0.2.10\",\"resolvedAtNs\":1775046600000000000}\n")
+}
+
+func TestReverseDNSCacheDoesNotSeedMissingEntryFromLegacyLogs(t *testing.T) {
+	cacheFilePath := filepath.Join(t.TempDir(), reverseDNSCacheFilename)
+	cache, err := loadReverseDNSCache(cacheFilePath)
+	assert.NilError(t, err)
+
+	logIndex := testDNSIndex()
+	logIndex.addObservation("192.0.2.10", "legacy.example.net", time.Date(2026, 4, 1, 8, 0, 0, 0, time.UTC), false)
+
+	var lookupCallCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCallCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	lookupTime := time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC)
+	result, err := cache.Lookup("192.0.2.10", lookupTime, logIndex, false)
+	assert.NilError(t, err)
+	assert.Equal(t, result.names.host, "live.example.net")
+	assert.Assert(t, result.warning == nil)
+	assert.Equal(t, lookupCallCount.Load(), int32(1))
+}
+
 func TestReverseDNSCacheIgnoresLegacyEntries(t *testing.T) {
 	cacheFilePath := filepath.Join(t.TempDir(), reverseDNSCacheFilename)
 	cacheFileBytes := []byte("{\"ip\":\"192.0.2.10\",\"host\":\"legacy.example.net\"}\n")
@@ -106,14 +154,14 @@ func TestReverseDNSCacheIgnoresLegacyEntries(t *testing.T) {
 
 func TestReverseDNSCachePromotesNegativeEntryFromLogs(t *testing.T) {
 	cacheFilePath := filepath.Join(t.TempDir(), reverseDNSCacheFilename)
-	cacheFileBytes := []byte("{\"ip\":\"192.0.2.10\",\"miss\":true,\"resolvedAtNs\":1775044800000000000}\n")
+	cacheFileBytes := []byte("{\"ip\":\"192.0.2.10\",\"miss\":true,\"resolvedAtNs\":1775023200000000000}\n")
 	assert.NilError(t, os.WriteFile(cacheFilePath, cacheFileBytes, 0o600))
 
 	cache, err := loadReverseDNSCache(cacheFilePath)
 	assert.NilError(t, err)
 
 	logIndex := testDNSIndex()
-	logIndex.addObservation("192.0.2.10", "promoted.example.net", time.Date(2026, 4, 1, 12, 20, 0, 0, time.UTC))
+	logIndex.addObservation("192.0.2.10", "promoted.example.net", time.Date(2026, 4, 1, 12, 20, 0, 0, time.UTC), true)
 
 	var lookupCallCount atomic.Int32
 	stubReverseLookup(t, func(string) ([]string, error) {
@@ -128,7 +176,7 @@ func TestReverseDNSCachePromotesNegativeEntryFromLogs(t *testing.T) {
 
 	fileBytes, err := os.ReadFile(cacheFilePath)
 	assert.NilError(t, err)
-	assert.Equal(t, string(fileBytes), "{\"ip\":\"192.0.2.10\",\"miss\":true,\"resolvedAtNs\":1775044800000000000}\n{\"host\":\"promoted.example.net\",\"ip\":\"192.0.2.10\",\"resolvedAtNs\":1775046600000000000}\n")
+	assert.Equal(t, string(fileBytes), "{\"ip\":\"192.0.2.10\",\"miss\":true,\"resolvedAtNs\":1775023200000000000}\n{\"host\":\"promoted.example.net\",\"ip\":\"192.0.2.10\",\"resolvedAtNs\":1775046600000000000}\n")
 }
 
 func TestReverseDNSCacheDoesNotPromoteFromFutureLogs(t *testing.T) {
@@ -140,7 +188,7 @@ func TestReverseDNSCacheDoesNotPromoteFromFutureLogs(t *testing.T) {
 	assert.NilError(t, err)
 
 	logIndex := testDNSIndex()
-	logIndex.addObservation("192.0.2.10", "future.example.net", time.Date(2026, 4, 1, 12, 40, 0, 0, time.UTC))
+	logIndex.addObservation("192.0.2.10", "future.example.net", time.Date(2026, 4, 1, 12, 40, 0, 0, time.UTC), true)
 
 	var lookupCallCount atomic.Int32
 	stubReverseLookup(t, func(string) ([]string, error) {
@@ -151,6 +199,29 @@ func TestReverseDNSCacheDoesNotPromoteFromFutureLogs(t *testing.T) {
 	result, err := cache.Lookup("192.0.2.10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC), logIndex, true)
 	assert.NilError(t, err)
 	assert.Assert(t, result.names == nil)
+	assert.Equal(t, lookupCallCount.Load(), int32(0))
+}
+
+func TestReverseDNSCachePromotesNegativeEntryFromOlderStructuredLogs(t *testing.T) {
+	cacheFilePath := filepath.Join(t.TempDir(), reverseDNSCacheFilename)
+	cacheFileBytes := []byte("{\"ip\":\"192.0.2.10\",\"miss\":true,\"resolvedAtNs\":1775023200000000000}\n")
+	assert.NilError(t, os.WriteFile(cacheFilePath, cacheFileBytes, 0o600))
+
+	cache, err := loadReverseDNSCache(cacheFilePath)
+	assert.NilError(t, err)
+
+	logIndex := testDNSIndex()
+	logIndex.addObservation("192.0.2.10", "promoted.example.net", time.Date(2026, 4, 1, 8, 0, 0, 0, time.UTC), true)
+
+	var lookupCallCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCallCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	result, err := cache.Lookup("192.0.2.10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC), logIndex, true)
+	assert.NilError(t, err)
+	assert.Equal(t, result.names.host, "promoted.example.net")
 	assert.Equal(t, lookupCallCount.Load(), int32(0))
 }
 

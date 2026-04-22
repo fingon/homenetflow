@@ -135,10 +135,11 @@ For each `src_ip` and `dst_ip`, `parquethosts` resolves names in this order:
 4. newest matching dnsmasq observation for the selected IP where the log timestamp is older than or equal to `time_start_ns`
 5. the dnsmasq observation must also be within one hour before the flow start
 6. for public IPs and RFC1918 IPv4 only, if no log match is found, a persistent reverse-DNS cache hit
-7. for public IPs and RFC1918 IPv4 only, if no cache hit is found, a live PTR lookup
+7. for public IPs and RFC1918 IPv4 only, if no cache hit is found, seed the reverse-DNS cache from the newest matching dnsmasq `A` or `AAAA` answer at or before `time_start_ns`
+8. for public IPs and RFC1918 IPv4 only, if neither logs nor cache provide a cache entry, perform a live PTR lookup
 
-Successful public and RFC1918 IPv4 PTR results are appended to `<dst>/reverse_dns_cache.jsonl` and reused forever. PTR misses are also persisted with their lookup time so later runs skip re-querying those IPs, but a newer dnsmasq observation for the same IP can promote a cached miss into a positive cache entry. Local IPv6 prefix entries are pruned from the cache before enrichment uses it. Malformed PTR responses are logged as warnings, treated as misses, and do not stop enrichment.
-When `--skip-dns-lookups` is enabled, step 5 is skipped. Existing `reverse_dns_cache.jsonl` entries and dnsmasq log observations are still used.
+Successful public and RFC1918 IPv4 PTR results are appended to `<dst>/reverse_dns_cache.jsonl` and reused forever. When a cache entry is missing, the cache is first seeded from structured dnsmasq `A` and `AAAA` answers already present in the loaded logs, using the newest eligible answer at or before the lookup time even if it is older than the one-hour direct-resolution window. PTR misses are also persisted with their lookup time so later runs skip re-querying those IPs, and a newer eligible dnsmasq `A` or `AAAA` answer for the same IP can promote a cached miss into a positive cache entry. Local IPv6 prefix entries are pruned from the cache before enrichment uses it. Malformed PTR responses are logged as warnings, treated as misses, and do not stop enrichment.
+When `--skip-dns-lookups` is enabled, step 8 is skipped. Existing `reverse_dns_cache.jsonl` entries and dnsmasq log observations are still used, including log-based cache seeding.
 
 The base and enriched flow parquet files now preserve the raw nfdump MAC fields as optional `in_src_mac`, `in_dst_mac`, `out_src_mac`, and `out_dst_mac` columns when the source record exposes non-zero values.
 

@@ -215,10 +215,6 @@ func (c *reverseDNSCache) Lookup(ipAddress string, lookupTime time.Time, logInde
 		return cacheLookupResult{}, nil
 	}
 
-	if skipDNSLookups {
-		return cacheLookupResult{}, nil
-	}
-
 	c.mu.Lock()
 	if pendingState, ok := c.pendingByIP[ipAddress]; ok {
 		c.mu.Unlock()
@@ -238,6 +234,20 @@ func (c *reverseDNSCache) Lookup(ipAddress string, lookupTime time.Time, logInde
 	pendingState := &lookupState{done: make(chan struct{})}
 	c.pendingByIP[ipAddress] = pendingState
 	c.mu.Unlock()
+
+	if names, seeded, err := c.seedMissingEntryFromLogs(ipAddress, lookupTime, logIndex, pendingState); err != nil {
+		return cacheLookupResult{}, err
+	} else if seeded {
+		return cacheLookupResult{names: names}, nil
+	}
+
+	if skipDNSLookups {
+		c.mu.Lock()
+		delete(c.pendingByIP, ipAddress)
+		close(pendingState.done)
+		c.mu.Unlock()
+		return cacheLookupResult{}, nil
+	}
 
 	host, warning, err := lookupAddress(ipAddress)
 	entry = cacheEntry{
@@ -277,12 +287,43 @@ func (c *reverseDNSCache) Lookup(ipAddress string, lookupTime time.Time, logInde
 	return cacheLookupResult{names: &names, warning: warning}, nil
 }
 
+func (c *reverseDNSCache) seedMissingEntryFromLogs(ipAddress string, lookupTime time.Time, logIndex *dnsIndex, pendingState *lookupState) (*derivedNames, bool, error) {
+	if logIndex == nil {
+		return nil, false, nil
+	}
+
+	host, found := logIndex.LookupForReverseCache(ipAddress, lookupTime)
+	if !found {
+		return nil, false, nil
+	}
+
+	entry := cacheEntry{
+		Host:         host,
+		IP:           ipAddress,
+		ResolvedAtNs: lookupTime.UnixNano(),
+	}
+
+	c.mu.Lock()
+	delete(c.pendingByIP, ipAddress)
+	c.entryByIP[ipAddress] = entry
+	pendingState.host = host
+	close(pendingState.done)
+	c.mu.Unlock()
+
+	if err := c.appendEntry(entry); err != nil {
+		return nil, false, err
+	}
+
+	names := deriveNames(host)
+	return &names, true, nil
+}
+
 func (c *reverseDNSCache) promoteNegativeEntry(ipAddress string, entry cacheEntry, lookupTime time.Time, logIndex *dnsIndex) (*derivedNames, bool, error) {
 	if logIndex == nil {
 		return nil, false, nil
 	}
 
-	host, found := logIndex.LookupNewerThan(ipAddress, entry.resolvedAt(), lookupTime)
+	host, found := logIndex.LookupNewerThanForReverseCache(ipAddress, entry.resolvedAt(), lookupTime)
 	if !found {
 		return nil, false, nil
 	}

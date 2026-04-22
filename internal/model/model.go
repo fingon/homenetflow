@@ -9,7 +9,7 @@ import (
 
 const (
 	DNSAnswerNXDOMAIN               = "NXDOMAIN"
-	EnrichmentLogicVersion          = 8
+	EnrichmentLogicVersion          = 9
 	EnrichmentManifestVersion       = 1
 	IPVersionUnknown          int32 = 0
 	IPVersion4                int32 = 4
