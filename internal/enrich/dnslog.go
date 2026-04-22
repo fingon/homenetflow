@@ -281,6 +281,24 @@ func (i *dnsIndex) Lookup(ipAddress string, flowStart time.Time) *derivedNames {
 	return nil
 }
 
+func (i *dnsIndex) LookupNewerThan(ipAddress string, afterTime, flowStart time.Time) (string, bool) {
+	observations := i.observationsByIP[ipAddress]
+	for index := len(observations) - 1; index >= 0; index-- {
+		observation := observations[index]
+		if observation.time.After(flowStart) {
+			continue
+		}
+
+		if !observation.time.After(afterTime) {
+			return "", false
+		}
+
+		return observation.host, true
+	}
+
+	return "", false
+}
+
 func isPositiveLegacyKind(kind string) bool {
 	switch kind {
 	case "cached", "config", "reply":

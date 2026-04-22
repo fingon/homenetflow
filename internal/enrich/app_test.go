@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -313,7 +314,7 @@ func TestRunSkipsLiveDNSLookupsButUsesExistingCache(t *testing.T) {
 	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
 
 	cachePath := filepath.Join(dstDir, reverseDNSCacheFilename)
-	cacheContents := []byte("{\"ip\":\"192.0.2.10\",\"host\":\"cached.example.net\"}\n")
+	cacheContents := []byte("{\"host\":\"cached.example.net\",\"ip\":\"192.0.2.10\",\"resolvedAtNs\":1775044800000000000}\n")
 	assert.NilError(t, os.WriteFile(cachePath, cacheContents, 0o600))
 
 	var lookupCount atomic.Int32
@@ -334,6 +335,65 @@ func TestRunSkipsLiveDNSLookupsButUsesExistingCache(t *testing.T) {
 	assert.Equal(t, *rows[0].SrcHost, "cached.example.net")
 	assert.Assert(t, rows[0].DstHost == nil)
 	assert.Equal(t, lookupCount.Load(), int32(0))
+}
+
+func TestRunPromotesNegativeCacheEntryFromLaterLogObservation(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	writeSourceParquet(t, filepath.Join(srcParquetDir, "nfcap_2026040112.parquet"), model.FlowRecord{
+		SrcIP:       "192.0.2.10",
+		DstIP:       "198.51.100.20",
+		SrcPort:     123,
+		DstPort:     443,
+		IPVersion:   model.IPVersion4,
+		Protocol:    6,
+		Packets:     1,
+		Bytes:       2,
+		TimeStartNs: time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC).UnixNano(),
+		TimeEndNs:   time.Date(2026, 4, 1, 12, 30, 1, 0, time.UTC).UnixNano(),
+		DurationNs:  int64(time.Second),
+	})
+
+	var lookupCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCount.Add(1)
+		return nil, &net.DNSError{IsNotFound: true}
+	})
+
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+	assert.Equal(t, lookupCount.Load(), int32(2))
+
+	writeSourceParquet(t, filepath.Join(srcParquetDir, "nfcap_2026040114.parquet"), model.FlowRecord{
+		SrcIP:       "192.0.2.10",
+		DstIP:       "198.51.100.20",
+		SrcPort:     123,
+		DstPort:     443,
+		IPVersion:   model.IPVersion4,
+		Protocol:    6,
+		Packets:     1,
+		Bytes:       2,
+		TimeStartNs: time.Date(2026, 4, 1, 14, 30, 0, 0, time.UTC).UnixNano(),
+		TimeEndNs:   time.Date(2026, 4, 1, 14, 30, 1, 0, time.UTC).UnixNano(),
+		DurationNs:  int64(time.Second),
+	})
+
+	logPath := filepath.Join(srcLogDir, "2026-04-01.jsonl")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"192.0.2.10\\\"],\\\"query_name\\\":\\\"promoted.example.net\\\",\\\"timestamp_end\\\":\\\"2026-04-01T13:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T13:00:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
+	assert.Equal(t, lookupCount.Load(), int32(2))
+
+	secondRows := readRows(t, filepath.Join(dstDir, "nfcap_2026040114.parquet"))
+	assert.Equal(t, len(secondRows), 1)
+	assert.Equal(t, *secondRows[0].SrcHost, "promoted.example.net")
+
+	cacheBytes, err := os.ReadFile(filepath.Join(dstDir, reverseDNSCacheFilename))
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(cacheBytes), "{\"ip\":\"192.0.2.10\",\"miss\":true,\"resolvedAtNs\":1775046600000000000}"))
+	assert.Assert(t, strings.Contains(string(cacheBytes), "{\"host\":\"promoted.example.net\",\"ip\":\"192.0.2.10\",\"resolvedAtNs\":1775053800000000000}"))
 }
 
 func TestRunRebuildsSkippedDNSLookupOutputWhenLiveDNSIsEnabled(t *testing.T) {
@@ -564,7 +624,7 @@ func TestRunResolvesIPv6ThroughNeighbourMappedIPv4ReverseCache(t *testing.T) {
 	})
 
 	cachePath := filepath.Join(dstDir, reverseDNSCacheFilename)
-	cacheContents := []byte("{\"ip\":\"192.168.1.10\",\"host\":\"cached.example.net\"}\n")
+	cacheContents := []byte("{\"host\":\"cached.example.net\",\"ip\":\"192.168.1.10\",\"resolvedAtNs\":1775044800000000000}\n")
 	assert.NilError(t, os.WriteFile(cachePath, cacheContents, 0o600))
 
 	neighbourLogPath := filepath.Join(srcLogDir, "2026-04-10.jsonl")
@@ -785,8 +845,8 @@ func TestRunPrunesReverseDNSCacheWhenNothingRebuilds(t *testing.T) {
 	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))
 
 	cachePath := filepath.Join(dstDir, reverseDNSCacheFilename)
-	cacheContents := []byte("{\"ip\":\"192.168.1.10\",\"host\":\"local.example\"}\n" +
-		"{\"ip\":\"192.0.2.10\",\"host\":\"public.example\"}\n")
+	cacheContents := []byte("{\"host\":\"local.example\",\"ip\":\"192.168.1.10\",\"resolvedAtNs\":1775044800000000000}\n" +
+		"{\"host\":\"public.example\",\"ip\":\"192.0.2.10\",\"resolvedAtNs\":1775044800000000000}\n")
 	assert.NilError(t, os.WriteFile(cachePath, cacheContents, 0o600))
 
 	assert.NilError(t, Run(Config{DstPath: dstDir, SrcLogPath: srcLogDir, SrcParquetPath: srcParquetDir}))

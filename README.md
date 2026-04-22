@@ -137,7 +137,7 @@ For each `src_ip` and `dst_ip`, `parquethosts` resolves names in this order:
 6. for public IPs and RFC1918 IPv4 only, if no log match is found, a persistent reverse-DNS cache hit
 7. for public IPs and RFC1918 IPv4 only, if no cache hit is found, a live PTR lookup
 
-Successful public and RFC1918 IPv4 PTR results are appended to `<dst>/reverse_dns_cache.jsonl` and reused forever. Local IPv6 prefix entries are pruned from the cache before enrichment uses it. PTR misses are cached only in memory for the current run. Malformed PTR responses are logged as warnings, treated as misses, and do not stop enrichment.
+Successful public and RFC1918 IPv4 PTR results are appended to `<dst>/reverse_dns_cache.jsonl` and reused forever. PTR misses are also persisted with their lookup time so later runs skip re-querying those IPs, but a newer dnsmasq observation for the same IP can promote a cached miss into a positive cache entry. Local IPv6 prefix entries are pruned from the cache before enrichment uses it. Malformed PTR responses are logged as warnings, treated as misses, and do not stop enrichment.
 When `--skip-dns-lookups` is enabled, step 5 is skipped. Existing `reverse_dns_cache.jsonl` entries and dnsmasq log observations are still used.
 
 The base and enriched flow parquet files now preserve the raw nfdump MAC fields as optional `in_src_mac`, `in_dst_mac`, `out_src_mac`, and `out_dst_mac` columns when the source record exposes non-zero values.

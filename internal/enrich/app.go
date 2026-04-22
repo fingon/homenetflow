@@ -543,7 +543,7 @@ func resolveNamesForIP(
 		return names, nil
 	}
 
-	result, err := cache.Lookup(ipAddress, skipDNSLookups)
+	result, err := cache.Lookup(ipAddress, flowStart, logIndex, skipDNSLookups)
 	if err != nil {
 		return nil, err
 	}

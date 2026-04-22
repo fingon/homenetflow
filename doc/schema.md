@@ -207,11 +207,22 @@ Each line in `reverse_dns_cache.jsonl` is:
 ```json
 {
   "host": "device.example",
-  "ip": "192.0.2.10"
+  "ip": "192.0.2.10",
+  "resolvedAtNs": 1775046600000000000
 }
 ```
 
-Only successful public and RFC1918 IPv4 PTR lookups are persisted. Misses are cached only in memory for the current run. Entries inside local IPv6 prefixes are pruned before enrichment uses this cache.
+Negative entries use:
+
+```json
+{
+  "ip": "192.0.2.10",
+  "miss": true,
+  "resolvedAtNs": 1775046600000000000
+}
+```
+
+Only the new schema is loaded; legacy cache lines are ignored. Misses are persisted with the lookup time, and a later dnsmasq observation for the same IP can promote a cached miss into a positive cache entry. Entries inside local IPv6 prefixes are pruned before enrichment uses this cache.
 
 ## DNS Lookup Parquet Schema
 

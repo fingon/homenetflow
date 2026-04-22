@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 var reverseLookupAddr = net.LookupAddr
@@ -20,8 +21,7 @@ const invalidPTRNameErrorFragment = "DNS response contained records which contai
 
 type reverseDNSCache struct {
 	filePath    string
-	hostByIP    map[string]string
-	missByIP    map[string]struct{}
+	entryByIP   map[string]cacheEntry
 	mu          sync.Mutex
 	pendingByIP map[string]*lookupState
 }
@@ -34,8 +34,10 @@ type lookupState struct {
 }
 
 type cacheEntry struct {
-	Host string `json:"host"`
-	IP   string `json:"ip"`
+	Host         string `json:"host,omitempty"`
+	IP           string `json:"ip"`
+	Miss         bool   `json:"miss,omitempty"`
+	ResolvedAtNs int64  `json:"resolvedAtNs"`
 }
 
 type cacheLookupResult struct {
@@ -46,8 +48,7 @@ type cacheLookupResult struct {
 func loadReverseDNSCache(filePath string) (*reverseDNSCache, error) {
 	cache := &reverseDNSCache{
 		filePath:    filePath,
-		hostByIP:    make(map[string]string),
-		missByIP:    make(map[string]struct{}),
+		entryByIP:   make(map[string]cacheEntry),
 		pendingByIP: make(map[string]*lookupState),
 	}
 
@@ -68,11 +69,11 @@ func loadReverseDNSCache(filePath string) (*reverseDNSCache, error) {
 			return nil, fmt.Errorf("unmarshal reverse DNS cache entry in %q: %w", filePath, err)
 		}
 
-		if entry.IP == "" || entry.Host == "" {
+		if !entry.valid() {
 			continue
 		}
 
-		cache.hostByIP[entry.IP] = entry.Host
+		cache.entryByIP[entry.IP] = entry
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -93,7 +94,7 @@ func pruneReverseDNSCache(filePath string, neighbourIndex *neighbourIndex) error
 
 	retainedEntries := make([]cacheEntry, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IP == "" || entry.Host == "" {
+		if !entry.valid() {
 			continue
 		}
 		if isLocalIPv6IPAddress(entry.IP, neighbourIndex) {
@@ -179,24 +180,46 @@ func readReverseDNSCacheEntries(filePath string) ([]cacheEntry, bool, error) {
 	return entries, true, nil
 }
 
-func (c *reverseDNSCache) Lookup(ipAddress string, skipDNSLookups bool) (cacheLookupResult, error) {
-	c.mu.Lock()
-	if host, ok := c.hostByIP[ipAddress]; ok {
-		c.mu.Unlock()
-		names := deriveNames(host)
-		return cacheLookupResult{names: &names}, nil
+func (entry cacheEntry) valid() bool {
+	if entry.IP == "" || entry.ResolvedAtNs <= 0 {
+		return false
 	}
 
-	if _, ok := c.missByIP[ipAddress]; ok {
-		c.mu.Unlock()
+	if entry.Miss {
+		return entry.Host == ""
+	}
+
+	return entry.Host != ""
+}
+
+func (entry cacheEntry) resolvedAt() time.Time {
+	return time.Unix(0, entry.ResolvedAtNs).UTC()
+}
+
+func (c *reverseDNSCache) Lookup(ipAddress string, lookupTime time.Time, logIndex *dnsIndex, skipDNSLookups bool) (cacheLookupResult, error) {
+	c.mu.Lock()
+	entry, ok := c.entryByIP[ipAddress]
+	c.mu.Unlock()
+	if ok {
+		if !entry.Miss {
+			names := deriveNames(entry.Host)
+			return cacheLookupResult{names: &names}, nil
+		}
+
+		if names, promoted, err := c.promoteNegativeEntry(ipAddress, entry, lookupTime, logIndex); err != nil {
+			return cacheLookupResult{}, err
+		} else if promoted {
+			return cacheLookupResult{names: names}, nil
+		}
+
 		return cacheLookupResult{}, nil
 	}
 
 	if skipDNSLookups {
-		c.mu.Unlock()
 		return cacheLookupResult{}, nil
 	}
 
+	c.mu.Lock()
 	if pendingState, ok := c.pendingByIP[ipAddress]; ok {
 		c.mu.Unlock()
 		<-pendingState.done
@@ -217,18 +240,20 @@ func (c *reverseDNSCache) Lookup(ipAddress string, skipDNSLookups bool) (cacheLo
 	c.mu.Unlock()
 
 	host, warning, err := lookupAddress(ipAddress)
+	entry = cacheEntry{
+		Host:         host,
+		IP:           ipAddress,
+		Miss:         host == "",
+		ResolvedAtNs: lookupTime.UnixNano(),
+	}
 
 	c.mu.Lock()
 	delete(c.pendingByIP, ipAddress)
 	pendingState.err = err
 	pendingState.host = host
 	pendingState.warning = warning
-	if err == nil {
-		if host == "" {
-			c.missByIP[ipAddress] = struct{}{}
-		} else {
-			c.hostByIP[ipAddress] = host
-		}
+	if err == nil && entry.valid() {
+		c.entryByIP[ipAddress] = entry
 	}
 	close(pendingState.done)
 	c.mu.Unlock()
@@ -238,10 +263,13 @@ func (c *reverseDNSCache) Lookup(ipAddress string, skipDNSLookups bool) (cacheLo
 	}
 
 	if host == "" {
+		if err := c.appendEntry(entry); err != nil {
+			return cacheLookupResult{}, err
+		}
 		return cacheLookupResult{warning: warning}, nil
 	}
 
-	if err := c.append(ipAddress, host); err != nil {
+	if err := c.appendEntry(entry); err != nil {
 		return cacheLookupResult{}, err
 	}
 
@@ -249,14 +277,42 @@ func (c *reverseDNSCache) Lookup(ipAddress string, skipDNSLookups bool) (cacheLo
 	return cacheLookupResult{names: &names, warning: warning}, nil
 }
 
-func (c *reverseDNSCache) append(ipAddress, host string) error {
+func (c *reverseDNSCache) promoteNegativeEntry(ipAddress string, entry cacheEntry, lookupTime time.Time, logIndex *dnsIndex) (*derivedNames, bool, error) {
+	if logIndex == nil {
+		return nil, false, nil
+	}
+
+	host, found := logIndex.LookupNewerThan(ipAddress, entry.resolvedAt(), lookupTime)
+	if !found {
+		return nil, false, nil
+	}
+
+	promotedEntry := cacheEntry{
+		Host:         host,
+		IP:           ipAddress,
+		ResolvedAtNs: lookupTime.UnixNano(),
+	}
+
+	c.mu.Lock()
+	c.entryByIP[ipAddress] = promotedEntry
+	c.mu.Unlock()
+
+	if err := c.appendEntry(promotedEntry); err != nil {
+		return nil, false, err
+	}
+
+	names := deriveNames(host)
+	return &names, true, nil
+}
+
+func (c *reverseDNSCache) appendEntry(entry cacheEntry) error {
 	file, err := os.OpenFile(c.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("open reverse DNS cache %q for append: %w", c.filePath, err)
 	}
 	defer file.Close()
 
-	entryBytes, err := json.Marshal(cacheEntry{Host: host, IP: ipAddress})
+	entryBytes, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal reverse DNS cache entry: %w", err)
 	}
