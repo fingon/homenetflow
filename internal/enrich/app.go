@@ -256,6 +256,11 @@ func rebuildJob(
 		return err
 	}
 
+	macIndex, err := loadMACIndex(job.sourceFile.AbsPath)
+	if err != nil {
+		return fmt.Errorf("load MAC index for %q: %w", job.sourceFile.AbsPath, err)
+	}
+
 	writer, finalize, err := parquetout.CreateEnriched(job.dstPath, model.NewEnrichmentManifest(job.sourceFile, job.logFiles, skipDNSLookups))
 	if err != nil {
 		return err
@@ -268,7 +273,7 @@ func rebuildJob(
 
 		enrichedRecords := make([]model.FlowRecord, 0, len(records))
 		for _, record := range records {
-			enrichedRecord, enrichErr := enrichRecord(record, logIndex, neighbourIndex, cache, skipDNSLookups)
+			enrichedRecord, enrichErr := enrichRecord(record, logIndex, neighbourIndex, macIndex, cache, skipDNSLookups)
 			if enrichErr != nil {
 				return enrichErr
 			}
@@ -355,7 +360,7 @@ func dnsLookupRecordForEvent(
 	cache *reverseDNSCache,
 	skipDNSLookups bool,
 ) (model.DNSLookupRecord, error) {
-	clientNames, err := resolveNames(event.clientIP, event.time, logIndex, neighbourIndex, cache, skipDNSLookups)
+	clientNames, err := resolveNames(event.clientIP, event.time, nil, logIndex, neighbourIndex, nil, cache, skipDNSLookups)
 	if err != nil {
 		return model.DNSLookupRecord{}, err
 	}
@@ -385,19 +390,21 @@ func enrichRecord(
 	record model.FlowRecord,
 	logIndex *dnsIndex,
 	neighbourIndex *neighbourIndex,
+	macIndex *macIndex,
 	cache *reverseDNSCache,
 	skipDNSLookups bool,
 ) (model.FlowRecord, error) {
 	flowStart := time.Unix(0, record.TimeStartNs).UTC()
 	record.SrcIsPrivate = isLocalIPAddress(record.SrcIP, neighbourIndex)
 	record.DstIsPrivate = isLocalIPAddress(record.DstIP, neighbourIndex)
+	macCandidates := flowMACCandidates(record)
 
-	srcNames, err := resolveNames(record.SrcIP, flowStart, logIndex, neighbourIndex, cache, skipDNSLookups)
+	srcNames, err := resolveNames(record.SrcIP, flowStart, macCandidates, logIndex, neighbourIndex, macIndex, cache, skipDNSLookups)
 	if err != nil {
 		return model.FlowRecord{}, err
 	}
 
-	dstNames, err := resolveNames(record.DstIP, flowStart, logIndex, neighbourIndex, cache, skipDNSLookups)
+	dstNames, err := resolveNames(record.DstIP, flowStart, macCandidates, logIndex, neighbourIndex, macIndex, cache, skipDNSLookups)
 	if err != nil {
 		return model.FlowRecord{}, err
 	}
@@ -426,8 +433,10 @@ func enrichRecord(
 func resolveNames(
 	ipAddress string,
 	flowStart time.Time,
+	macCandidates []string,
 	logIndex *dnsIndex,
 	neighbourIndex *neighbourIndex,
+	macIndex *macIndex,
 	cache *reverseDNSCache,
 	skipDNSLookups bool,
 ) (*derivedNames, error) {
@@ -446,7 +455,7 @@ func resolveNames(
 	}
 
 	if isLocalIPv6IPAddress(ipAddress, neighbourIndex) {
-		if mappedIPv4, ok := neighbourIndex.LookupIPv4(ipAddress, flowStart); ok && isPrivateIPAddress(mappedIPv4) {
+		if mappedIPv4, ok := lookupIPv4ForIPv6(ipAddress, flowStart, macCandidates, neighbourIndex, macIndex); ok && isPrivateIPAddress(mappedIPv4) {
 			if names := logIndex.Lookup(mappedIPv4, flowStart); names != nil {
 				localNames := localResolvedNames(*names)
 				return &localNames, nil
@@ -462,7 +471,7 @@ func resolveNames(
 		return &localNames, nil
 	}
 
-	if mappedIPv4, ok := neighbourIndex.LookupIPv4(ipAddress, flowStart); ok {
+	if mappedIPv4, ok := lookupIPv4ForIPv6(ipAddress, flowStart, macCandidates, neighbourIndex, macIndex); ok {
 		names, err := resolveNamesForIP(mappedIPv4, flowStart, logIndex, cache, skipDNSLookups)
 		if err != nil {
 			return nil, err
@@ -474,6 +483,24 @@ func resolveNames(
 	}
 
 	return resolveNamesForIP(ipAddress, flowStart, logIndex, cache, skipDNSLookups)
+}
+
+func lookupIPv4ForIPv6(
+	ipAddress string,
+	flowStart time.Time,
+	macCandidates []string,
+	neighbourIndex *neighbourIndex,
+	macIndex *macIndex,
+) (string, bool) {
+	if ipVersionForAddress(ipAddress) != model.IPVersion6 {
+		return "", false
+	}
+
+	if mappedIPv4, ok := macIndex.LookupIPv4(macCandidates, flowStart); ok {
+		return mappedIPv4, true
+	}
+
+	return neighbourIndex.LookupIPv4(ipAddress, flowStart)
 }
 
 func localResolvedNames(names derivedNames) derivedNames {

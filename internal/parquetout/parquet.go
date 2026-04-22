@@ -33,7 +33,11 @@ type Row struct {
 	DstPort      int32   `parquet:"dst_port"`
 	DstTLD       *string `parquet:"dst_tld,optional"`
 	IPVersion    int32   `parquet:"ip_version"`
+	InDstMAC     *string `parquet:"in_dst_mac,optional"`
+	InSrcMAC     *string `parquet:"in_src_mac,optional"`
 	NextHopIP    *string `parquet:"next_hop_ip,optional"`
+	OutDstMAC    *string `parquet:"out_dst_mac,optional"`
+	OutSrcMAC    *string `parquet:"out_src_mac,optional"`
 	Packets      int64   `parquet:"packets"`
 	Protocol     int32   `parquet:"protocol"`
 	RouterIP     *string `parquet:"router_ip,optional"`
@@ -142,7 +146,11 @@ func (w *FileWriter) WriteBatch(records []model.FlowRecord) error {
 			DstPort:      record.DstPort,
 			DstTLD:       record.DstTLD,
 			IPVersion:    record.IPVersion,
+			InDstMAC:     record.InDstMAC,
+			InSrcMAC:     record.InSrcMAC,
 			NextHopIP:    record.NextHopIP,
+			OutDstMAC:    record.OutDstMAC,
+			OutSrcMAC:    record.OutSrcMAC,
 			Packets:      record.Packets,
 			Protocol:     record.Protocol,
 			RouterIP:     record.RouterIP,
@@ -274,7 +282,11 @@ func (r Row) toFlowRecord() model.FlowRecord {
 		DstPort:      r.DstPort,
 		DstTLD:       r.DstTLD,
 		IPVersion:    r.IPVersion,
+		InDstMAC:     r.InDstMAC,
+		InSrcMAC:     r.InSrcMAC,
 		NextHopIP:    r.NextHopIP,
+		OutDstMAC:    r.OutDstMAC,
+		OutSrcMAC:    r.OutSrcMAC,
 		Packets:      r.Packets,
 		Protocol:     r.Protocol,
 		RouterIP:     r.RouterIP,

@@ -426,6 +426,123 @@ func TestRunResolvesOlderIPv6FlowThroughNeighbourMappedIPv4LogName(t *testing.T)
 	assert.Equal(t, *rows[0].SrcTLD, localEntityTLD)
 }
 
+func TestRunResolvesOlderIPv6FlowThroughSameFileMACMappedIPv4LogName(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+	stubReverseLookup(t, nil)
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	srcMAC := "aa:bb:cc:dd:ee:ff"
+	writeSourceParquetRecords(t, sourcePath, []model.FlowRecord{
+		{
+			SrcIP:       "192.168.1.10",
+			DstIP:       "198.51.100.20",
+			SrcPort:     123,
+			DstPort:     443,
+			IPVersion:   model.IPVersion4,
+			Protocol:    6,
+			Packets:     1,
+			Bytes:       2,
+			InSrcMAC:    &srcMAC,
+			TimeStartNs: time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC).UnixNano(),
+			TimeEndNs:   time.Date(2026, 4, 1, 12, 0, 1, 0, time.UTC).UnixNano(),
+			DurationNs:  int64(time.Second),
+		},
+		{
+			SrcIP:       "2001:db8::10",
+			DstIP:       "198.51.100.20",
+			SrcPort:     123,
+			DstPort:     443,
+			IPVersion:   model.IPVersion6,
+			Protocol:    6,
+			Packets:     1,
+			Bytes:       2,
+			OutDstMAC:   &srcMAC,
+			TimeStartNs: time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC).UnixNano(),
+			TimeEndNs:   time.Date(2026, 4, 1, 12, 30, 1, 0, time.UTC).UnixNano(),
+			DurationNs:  int64(time.Second),
+		},
+	})
+
+	logPath := filepath.Join(srcLogDir, "2026-04-01.jsonl")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"192.168.1.10\\\"],\\\"query_name\\\":\\\"mapped.example.net\\\",\\\"timestamp_end\\\":\\\"2026-04-01T12:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T12:00:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, len(rows), 2)
+	assert.Equal(t, *rows[1].SrcHost, "mapped.example.net")
+	assert.Equal(t, *rows[1].Src2LD, "example.net")
+	assert.Equal(t, *rows[1].SrcTLD, "net")
+}
+
+func TestRunPrefersMACMappingOverNeighbourMapping(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+	stubReverseLookup(t, nil)
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	macAddress := "aa:bb:cc:dd:ee:ff"
+	writeSourceParquetRecords(t, sourcePath, []model.FlowRecord{
+		{
+			SrcIP:       "192.168.1.20",
+			DstIP:       "198.51.100.20",
+			SrcPort:     123,
+			DstPort:     443,
+			IPVersion:   model.IPVersion4,
+			Protocol:    6,
+			Packets:     1,
+			Bytes:       2,
+			InSrcMAC:    &macAddress,
+			TimeStartNs: time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC).UnixNano(),
+			TimeEndNs:   time.Date(2026, 4, 1, 12, 0, 1, 0, time.UTC).UnixNano(),
+			DurationNs:  int64(time.Second),
+		},
+		{
+			SrcIP:       "2001:db8::10",
+			DstIP:       "198.51.100.20",
+			SrcPort:     123,
+			DstPort:     443,
+			IPVersion:   model.IPVersion6,
+			Protocol:    6,
+			Packets:     1,
+			Bytes:       2,
+			OutDstMAC:   &macAddress,
+			TimeStartNs: time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC).UnixNano(),
+			TimeEndNs:   time.Date(2026, 4, 1, 12, 30, 1, 0, time.UTC).UnixNano(),
+			DurationNs:  int64(time.Second),
+		},
+	})
+
+	logPath := filepath.Join(srcLogDir, "2026-04-01.jsonl")
+	logContents := []byte(
+		"{\"line\":\"{\\\"answers\\\":[\\\"192.168.1.20\\\"],\\\"query_name\\\":\\\"mac.example.net\\\",\\\"timestamp_end\\\":\\\"2026-04-01T12:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T12:00:00Z\"}\n" +
+			"{\"line\":\"{\\\"answers\\\":[\\\"192.168.1.10\\\"],\\\"query_name\\\":\\\"neighbour.example.net\\\",\\\"timestamp_end\\\":\\\"2026-04-01T12:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T12:00:00Z\"}\n",
+	)
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	neighbourLogPath := filepath.Join(srcLogDir, "2026-04-10.jsonl")
+	neighbourLogContents := []byte("{\"line\":\"{\\\"dst\\\":\\\"192.168.1.10\\\",\\\"lladdr\\\":\\\"aa:bb:cc:dd:ee:ff\\\"}\",\"timestamp\":\"2026-04-10T12:00:00Z\"}\n" +
+		"{\"line\":\"{\\\"dst\\\":\\\"2001:db8::10\\\",\\\"lladdr\\\":\\\"aa:bb:cc:dd:ee:ff\\\"}\",\"timestamp\":\"2026-04-10T12:00:01Z\"}\n")
+	assert.NilError(t, os.WriteFile(neighbourLogPath, neighbourLogContents, 0o600))
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, *rows[1].SrcHost, "mac.example.net")
+}
+
 func TestRunResolvesIPv6ThroughNeighbourMappedIPv4ReverseCache(t *testing.T) {
 	srcParquetDir := t.TempDir()
 	srcLogDir := t.TempDir()
@@ -750,6 +867,15 @@ func writeSourceParquet(t *testing.T, path string, record model.FlowRecord) {
 	assert.NilError(t, finalize())
 }
 
+func writeSourceParquetRecords(t *testing.T, path string, records []model.FlowRecord) {
+	t.Helper()
+
+	writer, finalize, err := parquetout.Create(path, model.RefreshManifest{Version: 1})
+	assert.NilError(t, err)
+	assert.NilError(t, writer.WriteBatch(records))
+	assert.NilError(t, finalize())
+}
+
 func readRows(t *testing.T, path string) []parquetout.Row {
 	t.Helper()
 
@@ -760,9 +886,13 @@ func readRows(t *testing.T, path string) []parquetout.Row {
 			DstHost:      record.DstHost,
 			DstIP:        record.DstIP,
 			DstIsPrivate: record.DstIsPrivate,
+			InDstMAC:     record.InDstMAC,
+			InSrcMAC:     record.InSrcMAC,
 			DstPort:      record.DstPort,
 			DstTLD:       record.DstTLD,
 			IPVersion:    record.IPVersion,
+			OutDstMAC:    record.OutDstMAC,
+			OutSrcMAC:    record.OutSrcMAC,
 			Src2LD:       record.Src2LD,
 			SrcHost:      record.SrcHost,
 			SrcIP:        record.SrcIP,

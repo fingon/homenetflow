@@ -129,16 +129,20 @@ Flags:
 
 For each `src_ip` and `dst_ip`, `parquethosts` resolves names in this order:
 
-1. for local IPv6 addresses in a `/64` seen in neighbour-table logs, try a non-conflicting `lladdr` mapping to a private IPv4 address and use that IPv4 only when dnsmasq logs resolve it
-2. newest matching dnsmasq observation for the selected IP where the log timestamp is older than or equal to `time_start_ns`
-3. the dnsmasq observation must also be within one hour before the flow start
-4. for public IPs and RFC1918 IPv4 only, if no log match is found, a persistent reverse-DNS cache hit
-5. for public IPs and RFC1918 IPv4 only, if no cache hit is found, a live PTR lookup
+1. for IPv6 addresses, try a same-file MAC-derived IPv4 mapping from non-zero `in_src_mac`, `in_dst_mac`, `out_src_mac`, and `out_dst_mac`
+2. if MAC mapping does not produce an IPv4 candidate, try a non-conflicting neighbour-table `lladdr` mapping
+3. for local IPv6 addresses in a neighbour-observed `/64`, use a mapped private IPv4 only when dnsmasq logs resolve it
+4. newest matching dnsmasq observation for the selected IP where the log timestamp is older than or equal to `time_start_ns`
+5. the dnsmasq observation must also be within one hour before the flow start
+6. for public IPs and RFC1918 IPv4 only, if no log match is found, a persistent reverse-DNS cache hit
+7. for public IPs and RFC1918 IPv4 only, if no cache hit is found, a live PTR lookup
 
 Successful public and RFC1918 IPv4 PTR results are appended to `<dst>/reverse_dns_cache.jsonl` and reused forever. Local IPv6 prefix entries are pruned from the cache before enrichment uses it. PTR misses are cached only in memory for the current run. Malformed PTR responses are logged as warnings, treated as misses, and do not stop enrichment.
 When `--skip-dns-lookups` is enabled, step 5 is skipped. Existing `reverse_dns_cache.jsonl` entries and dnsmasq log observations are still used.
 
-Neighbour-table IPv6-to-IPv4 mappings are applied conservatively. If the same IPv6 address is observed with multiple link-layer addresses, the mapping is ignored for that IPv6 address. For flow data older than the neighbour logs, an IPv4 mapping is used only when the link-layer address has one observed IPv4 address. Any IPv6 address in a neighbour-observed `/64` is treated as local; if it cannot be tied to a private IPv4 address with a dnsmasq name, the host, 2LD, and TLD are recorded as `Local IPv6`. Unnamed RFC1918 IPv4 addresses are recorded as `Local IPv4`. Named local addresses use the full hostname, the first hostname label as 2LD, and `Local` as TLD. Future neighbour-log changes do not keep invalidating already rebuilt older parquet outputs.
+The base and enriched flow parquet files now preserve the raw nfdump MAC fields as optional `in_src_mac`, `in_dst_mac`, `out_src_mac`, and `out_dst_mac` columns when the source record exposes non-zero values.
+
+MAC-derived IPv6-to-IPv4 mappings are applied conservatively. For each source parquet file, `parquethosts` builds a same-file MAC-to-IPv4 index from IPv4 rows and prefers that over neighbour-table `lladdr` matching. It first uses the newest earlier IPv4 observation for the same MAC and otherwise falls back to a unique IPv4 only when that MAC maps to exactly one IPv4 in the file. Neighbour-table IPv6-to-IPv4 mappings remain as a lower-priority fallback. If the same IPv6 address is observed with multiple neighbour-log link-layer addresses, the neighbour mapping is ignored for that IPv6 address. Any IPv6 address in a neighbour-observed `/64` is treated as local; if it cannot be tied to a private IPv4 address with a dnsmasq name, the host, 2LD, and TLD are recorded as `Local IPv6`. Unnamed RFC1918 IPv4 addresses are recorded as `Local IPv4`. Named local addresses use the full hostname, the first hostname label as 2LD, and `Local` as TLD. Future neighbour-log changes do not keep invalidating already rebuilt older parquet outputs.
 
 ### Refresh Behavior
 

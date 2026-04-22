@@ -50,6 +50,8 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 	src2LD := "iki.fi"
 	srcTLD := "fi"
 	dstHost := "example.net"
+	inSrcMAC := "aa:bb:cc:dd:ee:01"
+	outDstMAC := "aa:bb:cc:dd:ee:02"
 
 	manifest := model.EnrichmentManifest{
 		LogicVersion:   model.EnrichmentLogicVersion,
@@ -67,6 +69,8 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 		DstIsPrivate: true,
 		DstPort:      443,
 		IPVersion:    model.IPVersion6,
+		InSrcMAC:     &inSrcMAC,
+		OutDstMAC:    &outDstMAC,
 		Packets:      3,
 		Protocol:     6,
 		Src2LD:       &src2LD,
@@ -91,6 +95,8 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 	assert.Equal(t, *records[0].Src2LD, src2LD)
 	assert.Equal(t, *records[0].SrcTLD, srcTLD)
 	assert.Equal(t, *records[0].DstHost, dstHost)
+	assert.Equal(t, *records[0].InSrcMAC, inSrcMAC)
+	assert.Equal(t, *records[0].OutDstMAC, outDstMAC)
 	assert.Equal(t, records[0].IPVersion, model.IPVersion6)
 	assert.Assert(t, records[0].DstIsPrivate)
 	assert.Assert(t, !records[0].SrcIsPrivate)

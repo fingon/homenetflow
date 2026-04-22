@@ -9,7 +9,7 @@ import (
 
 const (
 	DNSAnswerNXDOMAIN               = "NXDOMAIN"
-	EnrichmentLogicVersion          = 7
+	EnrichmentLogicVersion          = 8
 	EnrichmentManifestVersion       = 1
 	IPVersionUnknown          int32 = 0
 	IPVersion4                int32 = 4
@@ -187,6 +187,10 @@ type FlowRecord struct {
 	DstMask      *int32
 	Direction    *int32
 	TCPFlags     *int32
+	InSrcMAC     *string
+	InDstMAC     *string
+	OutSrcMAC    *string
+	OutDstMAC    *string
 	SrcHost      *string
 	DstHost      *string
 	Src2LD       *string

@@ -101,8 +101,12 @@ Each base parquet row contains:
 Optional columns are emitted when present in the source record:
 
 - `direction`
+- `in_dst_mac`
+- `in_src_mac`
 - `router_ip`
 - `next_hop_ip`
+- `out_dst_mac`
+- `out_src_mac`
 - `src_as`
 - `dst_as`
 - `src_mask`
@@ -115,6 +119,7 @@ Field notes:
 - `ip_version` is `4` for IPv4, `6` for IPv6, and `0` when the source record does not expose an IP version
 - `protocol` is the numeric IP protocol value
 - `direction` is optional because source records may not include it
+- `*_mac` values are lowercase colon-delimited MAC addresses from the nfdump MAC extension, emitted only when the underlying value is non-zero
 
 Each base parquet file embeds a refresh manifest in parquet metadata under key `go-nfdump2parquet.manifest`.
 
@@ -192,6 +197,8 @@ Neighbour-table entries use a nested JSON object in `line` with:
 ```
 
 `dst` is the observed IP address and `lladdr` is the link-layer address. These entries are used to treat IPv6 addresses in observed `/64`s as local and to map some IPv6 flows back to a matching private IPv4 dnsmasq identity before hostname resolution.
+
+When base parquet rows carry non-zero MAC columns, enrichment prefers same-file MAC-based IPv6-to-IPv4 matching over neighbour-log `lladdr` matching. The neighbour logs still determine which IPv6 `/64`s are treated as local.
 
 ## Reverse DNS Cache Schema
 

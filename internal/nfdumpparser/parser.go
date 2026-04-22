@@ -3,6 +3,8 @@ package nfdumpparser
 import (
 	"fmt"
 	"net"
+	"strings"
+	"unsafe"
 
 	"github.com/fingon/homenetflow/internal/model"
 	nfdump "github.com/phaag/go-nfdump"
@@ -10,9 +12,38 @@ import (
 
 type Parser struct{}
 
+const macAddressExtensionID = 15
+
 type ipVersionRecord interface {
 	IsIPv4() bool
 	IsIPv6() bool
+}
+
+type nfdumpElementParam struct {
+	offset int
+	size   int
+}
+
+type nfdumpFlowRecordMirror struct {
+	rawRecord      []byte
+	recordHeader   unsafe.Pointer
+	srcIP          [3]unsafe.Pointer
+	dstIP          [3]unsafe.Pointer
+	isV4           bool
+	isV6           bool
+	srcXlateIP     [3]unsafe.Pointer
+	dstXlateIP     [3]unsafe.Pointer
+	hasXlateIP     bool
+	packetInterval int
+	spaceInterval  int
+	extOffset      [nfdump.MAXEXTENSIONS]nfdumpElementParam
+}
+
+type nfdumpEXmacAddr struct {
+	InSrcMAC  uint64
+	OutDstMAC uint64
+	InDstMAC  uint64
+	OutSrcMAC uint64
 }
 
 func (Parser) ParseFile(path string, emit func(model.FlowRecord) error) error {
@@ -107,6 +138,8 @@ func flowRecordFromNFDump(record *nfdump.FlowRecordV3) model.FlowRecord {
 		routerIP = optionalIPString(ipReceived.IP)
 	}
 
+	macFields := macFieldsFromRecord(record)
+
 	return model.FlowRecord{
 		TimeStartNs: startTimeNs,
 		TimeEndNs:   endTimeNs,
@@ -127,6 +160,33 @@ func flowRecordFromNFDump(record *nfdump.FlowRecordV3) model.FlowRecord {
 		DstMask:     dstMask,
 		Direction:   direction,
 		TCPFlags:    tcpFlags,
+		InSrcMAC:    macFields.inSrcMAC,
+		InDstMAC:    macFields.inDstMAC,
+		OutSrcMAC:   macFields.outSrcMAC,
+		OutDstMAC:   macFields.outDstMAC,
+	}
+}
+
+type flowMACFields struct {
+	inSrcMAC  *string
+	inDstMAC  *string
+	outSrcMAC *string
+	outDstMAC *string
+}
+
+func macFieldsFromRecord(record *nfdump.FlowRecordV3) flowMACFields {
+	mirror := (*nfdumpFlowRecordMirror)(unsafe.Pointer(record))
+	param := mirror.extOffset[macAddressExtensionID]
+	if param.offset == 0 {
+		return flowMACFields{}
+	}
+
+	macExtension := (*nfdumpEXmacAddr)(unsafe.Pointer(&mirror.rawRecord[param.offset]))
+	return flowMACFields{
+		inSrcMAC:  optionalMACString(macExtension.InSrcMAC),
+		inDstMAC:  optionalMACString(macExtension.InDstMAC),
+		outSrcMAC: optionalMACString(macExtension.OutSrcMAC),
+		outDstMAC: optionalMACString(macExtension.OutDstMAC),
 	}
 }
 
@@ -163,6 +223,23 @@ func int32Pointer(value int32) *int32 {
 
 func optionalIPString(ipAddress net.IP) *string {
 	return optionalString(ipAddress.String())
+}
+
+func optionalMACString(rawMAC uint64) *string {
+	if rawMAC == 0 {
+		return nil
+	}
+
+	macAddress := strings.ToLower(fmt.Sprintf(
+		"%02x:%02x:%02x:%02x:%02x:%02x",
+		byte(rawMAC),
+		byte(rawMAC>>8),
+		byte(rawMAC>>16),
+		byte(rawMAC>>24),
+		byte(rawMAC>>32),
+		byte(rawMAC>>40),
+	))
+	return &macAddress
 }
 
 func firstNonEmptyIP(values ...*string) *string {
