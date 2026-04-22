@@ -15,10 +15,16 @@ import (
 )
 
 const (
-	dnsQueryTypeA     = "A"
-	dnsQueryTypeAAAA  = "AAAA"
-	logWindowDuration = time.Hour
-	messageFieldCount = 6
+	dnsQueryTypeA       = "A"
+	dnsQueryTypeAAAA    = "AAAA"
+	dnsQueryTypePTR     = "PTR"
+	ip6ARPASuffix       = "ip6.arpa"
+	inAddrARPASuffix    = "in-addr.arpa"
+	ip6NibbleCount      = 32
+	ipv4OctetCount      = 4
+	logWindowDuration   = time.Hour
+	messageFieldCount   = 6
+	reverseIPv6GroupLen = 4
 )
 
 type dnsObservation struct {
@@ -35,9 +41,16 @@ type dnsLookupEvent struct {
 	time      time.Time
 }
 
+type reverseCacheLogEntry struct {
+	host string
+	miss bool
+	time time.Time
+}
+
 type dnsIndex struct {
-	observationsByIP map[string][]dnsObservation
-	lookupEvents     []dnsLookupEvent
+	observationsByIP        map[string][]dnsObservation
+	lookupEvents            []dnsLookupEvent
+	reverseCacheEntriesByIP map[string][]reverseCacheLogEntry
 }
 
 type dnsLogLoader struct {
@@ -65,7 +78,10 @@ func newDNSLogLoader() *dnsLogLoader {
 }
 
 func (l *dnsLogLoader) Load(logFiles []model.SourceFile) (*dnsIndex, error) {
-	index := &dnsIndex{observationsByIP: make(map[string][]dnsObservation)}
+	index := &dnsIndex{
+		observationsByIP:        make(map[string][]dnsObservation),
+		reverseCacheEntriesByIP: make(map[string][]reverseCacheLogEntry),
+	}
 	for _, logFile := range logFiles {
 		fileIndex, err := l.loadFile(logFile.AbsPath)
 		if err != nil {
@@ -75,6 +91,9 @@ func (l *dnsLogLoader) Load(logFiles []model.SourceFile) (*dnsIndex, error) {
 		for ipAddress, observations := range fileIndex.observationsByIP {
 			index.observationsByIP[ipAddress] = append(index.observationsByIP[ipAddress], observations...)
 		}
+		for ipAddress, entries := range fileIndex.reverseCacheEntriesByIP {
+			index.reverseCacheEntriesByIP[ipAddress] = append(index.reverseCacheEntriesByIP[ipAddress], entries...)
+		}
 		index.lookupEvents = append(index.lookupEvents, fileIndex.lookupEvents...)
 	}
 
@@ -82,6 +101,31 @@ func (l *dnsLogLoader) Load(logFiles []model.SourceFile) (*dnsIndex, error) {
 		slices.SortFunc(index.observationsByIP[ipAddress], func(a, b dnsObservation) int {
 			if a.time.Equal(b.time) {
 				switch {
+				case a.host < b.host:
+					return -1
+				case a.host > b.host:
+					return 1
+				default:
+					return 0
+				}
+			}
+
+			if a.time.Before(b.time) {
+				return -1
+			}
+
+			return 1
+		})
+	}
+	for ipAddress := range index.reverseCacheEntriesByIP {
+		slices.SortFunc(index.reverseCacheEntriesByIP[ipAddress], func(a, b reverseCacheLogEntry) int {
+			if a.time.Equal(b.time) {
+				switch {
+				case a.miss != b.miss:
+					if a.miss {
+						return -1
+					}
+					return 1
 				case a.host < b.host:
 					return -1
 				case a.host > b.host:
@@ -140,7 +184,10 @@ func parseDNSLogFile(path string) (*dnsIndex, error) {
 	}
 	defer file.Close()
 
-	index := &dnsIndex{observationsByIP: make(map[string][]dnsObservation)}
+	index := &dnsIndex{
+		observationsByIP:        make(map[string][]dnsObservation),
+		reverseCacheEntriesByIP: make(map[string][]reverseCacheLogEntry),
+	}
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -175,13 +222,17 @@ func (i *dnsIndex) parseLine(lineBytes []byte) error {
 
 		i.addLookupEvent(nestedEntry.ClientIP, nestedEntry.QueryName, nestedEntry.QueryType, normalizedDNSAnswer(nestedEntry.Answers), entryTime)
 
+		if isPTRQueryType(nestedEntry.QueryType) {
+			i.addReverseCacheEntryFromPTR(nestedEntry.QueryName, nestedEntry.Answers, entryTime)
+		}
+
 		for _, answer := range nestedEntry.Answers {
 			ipAddress := net.ParseIP(answer)
 			if ipAddress == nil {
 				continue
 			}
 
-			i.addObservation(ipAddress.String(), nestedEntry.QueryName, entryTime, isReverseCacheQueryType(nestedEntry.QueryType))
+			i.addObservation(ipAddress.String(), nestedEntry.QueryName, entryTime, isForwardReverseCacheQueryType(nestedEntry.QueryType))
 		}
 
 		return nil
@@ -231,6 +282,28 @@ func (i *dnsIndex) addObservation(ipAddress, host string, entryTime time.Time, r
 	})
 }
 
+func (i *dnsIndex) addReverseCacheEntry(ipAddress string, entry reverseCacheLogEntry) {
+	i.reverseCacheEntriesByIP[ipAddress] = append(i.reverseCacheEntriesByIP[ipAddress], reverseCacheLogEntry{
+		host: entry.host,
+		miss: entry.miss,
+		time: entry.time.UTC(),
+	})
+}
+
+func (i *dnsIndex) addReverseCacheEntryFromPTR(queryName string, answers []string, entryTime time.Time) {
+	ipAddress, found := parseReverseLookupIPAddress(queryName)
+	if !found {
+		return
+	}
+
+	entry, found := reverseCacheEntryFromPTRAnswers(answers, entryTime)
+	if !found {
+		return
+	}
+
+	i.addReverseCacheEntry(ipAddress, entry)
+}
+
 func (i *dnsIndex) addLookupEvent(clientIP, queryName, queryType, answer string, entryTime time.Time) {
 	ipAddress := net.ParseIP(clientIP)
 	if ipAddress == nil {
@@ -261,6 +334,9 @@ func normalizedDNSAnswer(answers []string) string {
 		if strings.EqualFold(normalizedAnswer, model.DNSAnswerNXDOMAIN) {
 			normalizedAnswer = model.DNSAnswerNXDOMAIN
 		}
+		if strings.EqualFold(normalizedAnswer, model.DNSAnswerSERVFAIL) {
+			normalizedAnswer = model.DNSAnswerSERVFAIL
+		}
 		normalizedAnswers = append(normalizedAnswers, normalizedAnswer)
 	}
 	return strings.Join(normalizedAnswers, ", ")
@@ -285,13 +361,13 @@ func (i *dnsIndex) Lookup(ipAddress string, flowStart time.Time) *derivedNames {
 	return nil
 }
 
-func (i *dnsIndex) LookupForReverseCache(ipAddress string, lookupTime time.Time) (string, bool) {
-	observation, found := i.lookupReverseCacheObservation(ipAddress, lookupTime)
+func (i *dnsIndex) LookupForReverseCache(ipAddress string, lookupTime time.Time) (reverseCacheLogEntry, bool) {
+	entry, found := i.lookupReverseCacheEntry(ipAddress, lookupTime)
 	if !found {
-		return "", false
+		return reverseCacheLogEntry{}, false
 	}
 
-	return observation.host, true
+	return entry, true
 }
 
 func (i *dnsIndex) LookupNewerThan(ipAddress string, afterTime, flowStart time.Time) (string, bool) {
@@ -312,25 +388,26 @@ func (i *dnsIndex) LookupNewerThan(ipAddress string, afterTime, flowStart time.T
 	return "", false
 }
 
-func (i *dnsIndex) LookupNewerThanForReverseCache(ipAddress string, afterTime, lookupTime time.Time) (string, bool) {
-	observations := i.observationsByIP[ipAddress]
-	for index := len(observations) - 1; index >= 0; index-- {
-		observation := observations[index]
-		if observation.time.After(lookupTime) || !observation.reverseCacheSource {
-			continue
-		}
-
-		if !observation.time.After(afterTime) {
-			return "", false
-		}
-
-		return observation.host, true
+func (i *dnsIndex) LookupNewerThanForReverseCache(ipAddress string, afterTime, lookupTime time.Time) (reverseCacheLogEntry, bool) {
+	entry, found := i.lookupReverseCacheEntry(ipAddress, lookupTime)
+	if !found || !entry.time.After(afterTime) {
+		return reverseCacheLogEntry{}, false
 	}
 
-	return "", false
+	return entry, true
 }
 
-func (i *dnsIndex) lookupReverseCacheObservation(ipAddress string, lookupTime time.Time) (dnsObservation, bool) {
+func (i *dnsIndex) lookupReverseCacheEntry(ipAddress string, lookupTime time.Time) (reverseCacheLogEntry, bool) {
+	entries := i.reverseCacheEntriesByIP[ipAddress]
+	for index := len(entries) - 1; index >= 0; index-- {
+		entry := entries[index]
+		if entry.time.After(lookupTime) {
+			continue
+		}
+
+		return entry, true
+	}
+
 	observations := i.observationsByIP[ipAddress]
 	for index := len(observations) - 1; index >= 0; index-- {
 		observation := observations[index]
@@ -338,10 +415,13 @@ func (i *dnsIndex) lookupReverseCacheObservation(ipAddress string, lookupTime ti
 			continue
 		}
 
-		return observation, true
+		return reverseCacheLogEntry{
+			host: observation.host,
+			time: observation.time,
+		}, true
 	}
 
-	return dnsObservation{}, false
+	return reverseCacheLogEntry{}, false
 }
 
 func isPositiveLegacyKind(kind string) bool {
@@ -353,13 +433,132 @@ func isPositiveLegacyKind(kind string) bool {
 	}
 }
 
-func isReverseCacheQueryType(queryType string) bool {
+func isForwardReverseCacheQueryType(queryType string) bool {
 	switch strings.ToUpper(strings.TrimSpace(queryType)) {
 	case dnsQueryTypeA, dnsQueryTypeAAAA:
 		return true
 	default:
 		return false
 	}
+}
+
+func isPTRQueryType(queryType string) bool {
+	return strings.EqualFold(strings.TrimSpace(queryType), dnsQueryTypePTR)
+}
+
+func reverseCacheEntryFromPTRAnswers(answers []string, entryTime time.Time) (reverseCacheLogEntry, bool) {
+	normalizedHosts := normalizedHostnames(ptrAnswerHostnames(answers))
+	if len(normalizedHosts) > 0 {
+		return reverseCacheLogEntry{
+			host: normalizedHosts[0],
+			time: entryTime.UTC(),
+		}, true
+	}
+
+	for _, answer := range answers {
+		normalizedAnswer := strings.TrimSpace(answer)
+		if strings.EqualFold(normalizedAnswer, model.DNSAnswerSERVFAIL) {
+			return reverseCacheLogEntry{}, false
+		}
+	}
+	for _, answer := range answers {
+		normalizedAnswer := strings.TrimSpace(answer)
+		if strings.EqualFold(normalizedAnswer, model.DNSAnswerNXDOMAIN) {
+			return reverseCacheLogEntry{
+				miss: true,
+				time: entryTime.UTC(),
+			}, true
+		}
+	}
+
+	return reverseCacheLogEntry{}, false
+}
+
+func ptrAnswerHostnames(answers []string) []string {
+	hostnames := make([]string, 0, len(answers))
+	for _, answer := range answers {
+		normalizedAnswer := strings.TrimSpace(answer)
+		if normalizedAnswer == "" ||
+			strings.EqualFold(normalizedAnswer, model.DNSAnswerNXDOMAIN) ||
+			strings.EqualFold(normalizedAnswer, model.DNSAnswerSERVFAIL) {
+			continue
+		}
+		hostnames = append(hostnames, normalizedAnswer)
+	}
+	return hostnames
+}
+
+func parseReverseLookupIPAddress(queryName string) (string, bool) {
+	normalizedName := normalizeHostname(queryName)
+	if normalizedName == "" {
+		return "", false
+	}
+
+	if strings.HasSuffix(normalizedName, inAddrARPASuffix) {
+		return parseReverseIPv4Lookup(normalizedName)
+	}
+	if strings.HasSuffix(normalizedName, ip6ARPASuffix) {
+		return parseReverseIPv6Lookup(normalizedName)
+	}
+
+	return "", false
+}
+
+func parseReverseIPv4Lookup(queryName string) (string, bool) {
+	labels := strings.Split(queryName, hostnameLabelSeparator)
+	if len(labels) != ipv4OctetCount+2 {
+		return "", false
+	}
+	if labels[len(labels)-2] != "in-addr" || labels[len(labels)-1] != "arpa" {
+		return "", false
+	}
+
+	octets := make([]string, 0, ipv4OctetCount)
+	for index := ipv4OctetCount - 1; index >= 0; index-- {
+		label := labels[index]
+		if label == "" {
+			return "", false
+		}
+		octets = append(octets, label)
+	}
+
+	ipAddress := net.ParseIP(strings.Join(octets, "."))
+	if ipAddress == nil {
+		return "", false
+	}
+
+	return ipAddress.String(), true
+}
+
+func parseReverseIPv6Lookup(queryName string) (string, bool) {
+	labels := strings.Split(queryName, hostnameLabelSeparator)
+	if len(labels) != ip6NibbleCount+2 {
+		return "", false
+	}
+	if labels[len(labels)-2] != "ip6" || labels[len(labels)-1] != "arpa" {
+		return "", false
+	}
+
+	reversedNibbles := make([]string, 0, ip6NibbleCount)
+	for index := ip6NibbleCount - 1; index >= 0; index-- {
+		label := labels[index]
+		if len(label) != 1 || !strings.ContainsRune("0123456789abcdef", rune(label[0])) {
+			return "", false
+		}
+		reversedNibbles = append(reversedNibbles, label)
+	}
+
+	parts := make([]string, 0, ip6NibbleCount/reverseIPv6GroupLen)
+	for index := 0; index < len(reversedNibbles); index += reverseIPv6GroupLen {
+		parts = append(parts, strings.Join(reversedNibbles[index:index+reverseIPv6GroupLen], ""))
+	}
+
+	ipAddress := net.ParseIP(strings.Join(parts, ":"))
+	if ipAddress == nil {
+		return "", false
+	}
+
+	return ipAddress.String(), true
 }
 
 func parseLogTime(rawTimestamp, endTimestamp string) (time.Time, error) {

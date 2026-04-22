@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -206,10 +205,10 @@ func (c *reverseDNSCache) Lookup(ipAddress string, lookupTime time.Time, logInde
 			return cacheLookupResult{names: &names}, nil
 		}
 
-		if names, promoted, err := c.promoteNegativeEntry(ipAddress, entry, lookupTime, logIndex); err != nil {
+		if result, refreshed, err := c.refreshNegativeEntry(ipAddress, entry, lookupTime, logIndex); err != nil {
 			return cacheLookupResult{}, err
-		} else if promoted {
-			return cacheLookupResult{names: names}, nil
+		} else if refreshed {
+			return result, nil
 		}
 
 		return cacheLookupResult{}, nil
@@ -292,21 +291,22 @@ func (c *reverseDNSCache) seedMissingEntryFromLogs(ipAddress string, lookupTime 
 		return nil, false, nil
 	}
 
-	host, found := logIndex.LookupForReverseCache(ipAddress, lookupTime)
+	logEntry, found := logIndex.LookupForReverseCache(ipAddress, lookupTime)
 	if !found {
 		return nil, false, nil
 	}
 
 	entry := cacheEntry{
-		Host:         host,
+		Host:         logEntry.host,
 		IP:           ipAddress,
+		Miss:         logEntry.miss,
 		ResolvedAtNs: lookupTime.UnixNano(),
 	}
 
 	c.mu.Lock()
 	delete(c.pendingByIP, ipAddress)
 	c.entryByIP[ipAddress] = entry
-	pendingState.host = host
+	pendingState.host = logEntry.host
 	close(pendingState.done)
 	c.mu.Unlock()
 
@@ -314,36 +314,45 @@ func (c *reverseDNSCache) seedMissingEntryFromLogs(ipAddress string, lookupTime 
 		return nil, false, err
 	}
 
-	names := deriveNames(host)
+	if logEntry.miss {
+		return nil, true, nil
+	}
+
+	names := deriveNames(logEntry.host)
 	return &names, true, nil
 }
 
-func (c *reverseDNSCache) promoteNegativeEntry(ipAddress string, entry cacheEntry, lookupTime time.Time, logIndex *dnsIndex) (*derivedNames, bool, error) {
+func (c *reverseDNSCache) refreshNegativeEntry(ipAddress string, entry cacheEntry, lookupTime time.Time, logIndex *dnsIndex) (cacheLookupResult, bool, error) {
 	if logIndex == nil {
-		return nil, false, nil
+		return cacheLookupResult{}, false, nil
 	}
 
-	host, found := logIndex.LookupNewerThanForReverseCache(ipAddress, entry.resolvedAt(), lookupTime)
+	logEntry, found := logIndex.LookupNewerThanForReverseCache(ipAddress, entry.resolvedAt(), lookupTime)
 	if !found {
-		return nil, false, nil
+		return cacheLookupResult{}, false, nil
 	}
 
-	promotedEntry := cacheEntry{
-		Host:         host,
+	refreshedEntry := cacheEntry{
+		Host:         logEntry.host,
 		IP:           ipAddress,
+		Miss:         logEntry.miss,
 		ResolvedAtNs: lookupTime.UnixNano(),
 	}
 
 	c.mu.Lock()
-	c.entryByIP[ipAddress] = promotedEntry
+	c.entryByIP[ipAddress] = refreshedEntry
 	c.mu.Unlock()
 
-	if err := c.appendEntry(promotedEntry); err != nil {
-		return nil, false, err
+	if err := c.appendEntry(refreshedEntry); err != nil {
+		return cacheLookupResult{}, false, err
 	}
 
-	names := deriveNames(host)
-	return &names, true, nil
+	if logEntry.miss {
+		return cacheLookupResult{}, true, nil
+	}
+
+	names := deriveNames(logEntry.host)
+	return cacheLookupResult{names: &names}, true, nil
 }
 
 func (c *reverseDNSCache) appendEntry(entry cacheEntry) error {
@@ -380,27 +389,11 @@ func lookupAddress(ipAddress string) (host string, warning, err error) {
 		return "", nil, fmt.Errorf("lookup PTR for %q: %w", ipAddress, err)
 	}
 
-	normalizedNames := make([]string, 0, len(names))
-	seenNames := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		normalizedName := normalizeHostname(name)
-		if normalizedName == "" {
-			continue
-		}
-
-		if _, ok := seenNames[normalizedName]; ok {
-			continue
-		}
-
-		seenNames[normalizedName] = struct{}{}
-		normalizedNames = append(normalizedNames, normalizedName)
-	}
-
+	normalizedNames := normalizedHostnames(names)
 	if len(normalizedNames) == 0 {
 		return "", nil, nil
 	}
 
-	slices.Sort(normalizedNames)
 	return normalizedNames[0], nil, nil
 }
 

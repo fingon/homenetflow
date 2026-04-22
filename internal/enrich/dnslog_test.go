@@ -73,11 +73,85 @@ func TestDNSLogLoaderOnlyUsesStructuredAAndAAAAForReverseCache(t *testing.T) {
 	}})
 	assert.NilError(t, err)
 
-	host, found := index.LookupForReverseCache("192.0.2.10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC))
+	entry, found := index.LookupForReverseCache("192.0.2.10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC))
 	assert.Assert(t, found)
-	assert.Equal(t, host, "ipv4.example.net")
+	assert.Equal(t, entry.host, "ipv4.example.net")
+	assert.Assert(t, !entry.miss)
 
-	host, found = index.LookupForReverseCache("2001:db8::10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC))
+	entry, found = index.LookupForReverseCache("2001:db8::10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC))
 	assert.Assert(t, found)
-	assert.Equal(t, host, "ipv6.example.net")
+	assert.Equal(t, entry.host, "ipv6.example.net")
+	assert.Assert(t, !entry.miss)
+}
+
+func TestDNSLogLoaderParsesStructuredPTRForReverseCache(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "2026-04-01.jsonl")
+	logContents := []byte(
+		"{\"line\":\"{\\\"answers\\\":[\\\"Router.Home.ARPA.\\\",\\\"router.home.arpa.\\\"],\\\"query_name\\\":\\\"10.2.0.192.in-addr.arpa\\\",\\\"query_type\\\":\\\"PTR\\\",\\\"timestamp_end\\\":\\\"2026-04-01T08:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T08:00:00Z\"}\n" +
+			"{\"line\":\"{\\\"answers\\\":[\\\"Phone.Home.ARPA.\\\"],\\\"query_name\\\":\\\"0.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa\\\",\\\"query_type\\\":\\\"PTR\\\",\\\"timestamp_end\\\":\\\"2026-04-01T09:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T09:00:00Z\"}\n",
+	)
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	loader := newDNSLogLoader()
+	index, err := loader.Load([]model.SourceFile{{
+		AbsPath: logPath,
+		Period:  model.Period{Kind: model.PeriodDay, Start: time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)},
+	}})
+	assert.NilError(t, err)
+
+	entry, found := index.LookupForReverseCache("192.0.2.10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC))
+	assert.Assert(t, found)
+	assert.Equal(t, entry.host, "router.home.arpa")
+	assert.Assert(t, !entry.miss)
+
+	entry, found = index.LookupForReverseCache("2001:db8::10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC))
+	assert.Assert(t, found)
+	assert.Equal(t, entry.host, "phone.home.arpa")
+	assert.Assert(t, !entry.miss)
+}
+
+func TestDNSLogLoaderParsesStructuredPTRNXDOMAINForReverseCache(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "2026-04-01.jsonl")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"NXDOMAIN\\\"],\\\"query_name\\\":\\\"10.2.0.192.in-addr.arpa\\\",\\\"query_type\\\":\\\"PTR\\\",\\\"timestamp_end\\\":\\\"2026-04-01T08:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T08:00:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	loader := newDNSLogLoader()
+	index, err := loader.Load([]model.SourceFile{{
+		AbsPath: logPath,
+		Period:  model.Period{Kind: model.PeriodDay, Start: time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)},
+	}})
+	assert.NilError(t, err)
+
+	entry, found := index.LookupForReverseCache("192.0.2.10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC))
+	assert.Assert(t, found)
+	assert.Assert(t, entry.miss)
+	assert.Equal(t, entry.host, "")
+}
+
+func TestDNSLogLoaderIgnoresStructuredPTRSERVFAILAndNonAddressNames(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "2026-04-01.jsonl")
+	logContents := []byte(
+		"{\"line\":\"{\\\"answers\\\":[\\\"SERVFAIL\\\"],\\\"query_name\\\":\\\"10.2.0.192.in-addr.arpa\\\",\\\"query_type\\\":\\\"PTR\\\",\\\"timestamp_end\\\":\\\"2026-04-01T08:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T08:00:00Z\"}\n" +
+			"{\"line\":\"{\\\"answers\\\":[\\\"NXDOMAIN\\\"],\\\"query_name\\\":\\\"lb._dns-sd._udp.10.2.0.192.in-addr.arpa\\\",\\\"query_type\\\":\\\"PTR\\\",\\\"timestamp_end\\\":\\\"2026-04-01T09:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T09:00:00Z\"}\n",
+	)
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	loader := newDNSLogLoader()
+	index, err := loader.Load([]model.SourceFile{{
+		AbsPath: logPath,
+		Period:  model.Period{Kind: model.PeriodDay, Start: time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)},
+	}})
+	assert.NilError(t, err)
+
+	_, found := index.LookupForReverseCache("192.0.2.10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC))
+	assert.Assert(t, !found)
 }

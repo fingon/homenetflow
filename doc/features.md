@@ -43,9 +43,9 @@ User-visible behavior:
 - adds resolved hostnames for source and destination IPs
 - derives `_2ld` and `_tld` values from resolved names
 - marks source and destination addresses as private/local or public
-- uses dnsmasq observations first, then cached reverse DNS, then seeds missing cache entries from dnsmasq `A`/`AAAA` answers, then falls back to live PTR lookups
+- uses dnsmasq observations first, then cached reverse DNS, then seeds missing cache entries from structured dnsmasq `PTR` results, then structured dnsmasq `A`/`AAAA` answers, then falls back to live PTR lookups
 - can use neighbour-table data to mark observed IPv6 `/64`s local and map some IPv6 traffic back to a matching IPv4 dnsmasq identity before resolving names
-- keeps a persistent `reverse_dns_cache.jsonl` so later runs reuse successful public and RFC1918 IPv4 PTR results, persist PTR misses, and prune local IPv6 entries
+- keeps a persistent `reverse_dns_cache.jsonl` so later runs reuse successful public and RFC1918 IPv4 PTR results, persist PTR misses including structured-log `NXDOMAIN` results, ignore structured-log `SERVFAIL`, and prune local IPv6 entries
 - can skip live DNS lookups with `--skip-dns-lookups`
 - shows a progress bar while rebuilding enriched parquet files
 - rebuilds outputs when source parquet, overlapping logs, or enrichment logic change

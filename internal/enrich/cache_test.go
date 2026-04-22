@@ -13,7 +13,10 @@ import (
 )
 
 func testDNSIndex() *dnsIndex {
-	return &dnsIndex{observationsByIP: make(map[string][]dnsObservation)}
+	return &dnsIndex{
+		observationsByIP:        make(map[string][]dnsObservation),
+		reverseCacheEntriesByIP: make(map[string][]reverseCacheLogEntry),
+	}
 }
 
 func TestReverseDNSCacheTreatsMalformedPTRAsMiss(t *testing.T) {
@@ -161,7 +164,10 @@ func TestReverseDNSCachePromotesNegativeEntryFromLogs(t *testing.T) {
 	assert.NilError(t, err)
 
 	logIndex := testDNSIndex()
-	logIndex.addObservation("192.0.2.10", "promoted.example.net", time.Date(2026, 4, 1, 12, 20, 0, 0, time.UTC), true)
+	logIndex.addReverseCacheEntry("192.0.2.10", reverseCacheLogEntry{
+		host: "promoted.example.net",
+		time: time.Date(2026, 4, 1, 12, 20, 0, 0, time.UTC),
+	})
 
 	var lookupCallCount atomic.Int32
 	stubReverseLookup(t, func(string) ([]string, error) {
@@ -188,7 +194,10 @@ func TestReverseDNSCacheDoesNotPromoteFromFutureLogs(t *testing.T) {
 	assert.NilError(t, err)
 
 	logIndex := testDNSIndex()
-	logIndex.addObservation("192.0.2.10", "future.example.net", time.Date(2026, 4, 1, 12, 40, 0, 0, time.UTC), true)
+	logIndex.addReverseCacheEntry("192.0.2.10", reverseCacheLogEntry{
+		host: "future.example.net",
+		time: time.Date(2026, 4, 1, 12, 40, 0, 0, time.UTC),
+	})
 
 	var lookupCallCount atomic.Int32
 	stubReverseLookup(t, func(string) ([]string, error) {
@@ -211,7 +220,10 @@ func TestReverseDNSCachePromotesNegativeEntryFromOlderStructuredLogs(t *testing.
 	assert.NilError(t, err)
 
 	logIndex := testDNSIndex()
-	logIndex.addObservation("192.0.2.10", "promoted.example.net", time.Date(2026, 4, 1, 8, 0, 0, 0, time.UTC), true)
+	logIndex.addReverseCacheEntry("192.0.2.10", reverseCacheLogEntry{
+		host: "promoted.example.net",
+		time: time.Date(2026, 4, 1, 8, 0, 0, 0, time.UTC),
+	})
 
 	var lookupCallCount atomic.Int32
 	stubReverseLookup(t, func(string) ([]string, error) {
@@ -223,6 +235,104 @@ func TestReverseDNSCachePromotesNegativeEntryFromOlderStructuredLogs(t *testing.
 	assert.NilError(t, err)
 	assert.Equal(t, result.names.host, "promoted.example.net")
 	assert.Equal(t, lookupCallCount.Load(), int32(0))
+}
+
+func TestReverseDNSCacheSeedsMissingEntryFromPTRNXDOMAINLogs(t *testing.T) {
+	cacheFilePath := filepath.Join(t.TempDir(), reverseDNSCacheFilename)
+	cache, err := loadReverseDNSCache(cacheFilePath)
+	assert.NilError(t, err)
+
+	logIndex := testDNSIndex()
+	logIndex.addReverseCacheEntry("192.0.2.10", reverseCacheLogEntry{
+		miss: true,
+		time: time.Date(2026, 4, 1, 8, 0, 0, 0, time.UTC),
+	})
+
+	var lookupCallCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCallCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	result, err := cache.Lookup("192.0.2.10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC), logIndex, false)
+	assert.NilError(t, err)
+	assert.Assert(t, result.names == nil)
+	assert.Assert(t, result.warning == nil)
+	assert.Equal(t, lookupCallCount.Load(), int32(0))
+
+	fileBytes, err := os.ReadFile(cacheFilePath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(fileBytes), "{\"ip\":\"192.0.2.10\",\"miss\":true,\"resolvedAtNs\":1775046600000000000}\n")
+}
+
+func TestReverseDNSCacheRefreshesNegativeEntryFromPTRNXDOMAINLogs(t *testing.T) {
+	cacheFilePath := filepath.Join(t.TempDir(), reverseDNSCacheFilename)
+	cacheFileBytes := []byte("{\"ip\":\"192.0.2.10\",\"miss\":true,\"resolvedAtNs\":1775023200000000000}\n")
+	assert.NilError(t, os.WriteFile(cacheFilePath, cacheFileBytes, 0o600))
+
+	cache, err := loadReverseDNSCache(cacheFilePath)
+	assert.NilError(t, err)
+
+	logIndex := testDNSIndex()
+	logIndex.addReverseCacheEntry("192.0.2.10", reverseCacheLogEntry{
+		miss: true,
+		time: time.Date(2026, 4, 1, 12, 20, 0, 0, time.UTC),
+	})
+
+	var lookupCallCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCallCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	result, err := cache.Lookup("192.0.2.10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC), logIndex, false)
+	assert.NilError(t, err)
+	assert.Assert(t, result.names == nil)
+	assert.Equal(t, lookupCallCount.Load(), int32(0))
+
+	fileBytes, err := os.ReadFile(cacheFilePath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(fileBytes), "{\"ip\":\"192.0.2.10\",\"miss\":true,\"resolvedAtNs\":1775023200000000000}\n{\"ip\":\"192.0.2.10\",\"miss\":true,\"resolvedAtNs\":1775046600000000000}\n")
+}
+
+func TestReverseDNSCachePrefersPTRLogsOverStructuredAAndAAAAForMissingEntries(t *testing.T) {
+	cacheFilePath := filepath.Join(t.TempDir(), reverseDNSCacheFilename)
+	cache, err := loadReverseDNSCache(cacheFilePath)
+	assert.NilError(t, err)
+
+	logIndex := testDNSIndex()
+	logIndex.addObservation("192.0.2.10", "seeded.example.net", time.Date(2026, 4, 1, 11, 0, 0, 0, time.UTC), true)
+	logIndex.addReverseCacheEntry("192.0.2.10", reverseCacheLogEntry{
+		host: "ptr.example.net",
+		time: time.Date(2026, 4, 1, 8, 0, 0, 0, time.UTC),
+	})
+
+	result, err := cache.Lookup("192.0.2.10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC), logIndex, true)
+	assert.NilError(t, err)
+	assert.Equal(t, result.names.host, "ptr.example.net")
+
+	fileBytes, err := os.ReadFile(cacheFilePath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(fileBytes), "{\"host\":\"ptr.example.net\",\"ip\":\"192.0.2.10\",\"resolvedAtNs\":1775046600000000000}\n")
+}
+
+func TestReverseDNSCacheIgnoresPTRSERVFAILLogs(t *testing.T) {
+	cacheFilePath := filepath.Join(t.TempDir(), reverseDNSCacheFilename)
+	cache, err := loadReverseDNSCache(cacheFilePath)
+	assert.NilError(t, err)
+
+	logIndex := testDNSIndex()
+
+	var lookupCallCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCallCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	result, err := cache.Lookup("192.0.2.10", time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC), logIndex, false)
+	assert.NilError(t, err)
+	assert.Equal(t, result.names.host, "live.example.net")
+	assert.Equal(t, lookupCallCount.Load(), int32(1))
 }
 
 func TestPruneReverseDNSCacheRemovesLocalIPv6Entries(t *testing.T) {

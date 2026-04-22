@@ -370,6 +370,78 @@ func TestRunSeedsReverseCacheFromStructuredLogsBeforePTR(t *testing.T) {
 	assert.Assert(t, strings.Contains(string(cacheBytes), "{\"host\":\"seeded.example.net\",\"ip\":\"192.0.2.10\",\"resolvedAtNs\":1775046600000000000}"))
 }
 
+func TestRunSeedsReverseCacheFromStructuredPTRLogsBeforeLiveLookup(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
+
+	logPath := filepath.Join(srcLogDir, "2026-04-01.jsonl")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"seeded.example.net.\\\"],\\\"query_name\\\":\\\"10.2.0.192.in-addr.arpa\\\",\\\"query_type\\\":\\\"PTR\\\",\\\"timestamp_end\\\":\\\"2026-04-01T08:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T08:00:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	var lookupCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SkipDNSLookups: true,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, len(rows), 1)
+	assert.Equal(t, *rows[0].SrcHost, "seeded.example.net")
+	assert.Assert(t, rows[0].DstHost == nil)
+	assert.Equal(t, lookupCount.Load(), int32(0))
+
+	cacheBytes, err := os.ReadFile(filepath.Join(dstDir, reverseDNSCacheFilename))
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(cacheBytes), "{\"host\":\"seeded.example.net\",\"ip\":\"192.0.2.10\",\"resolvedAtNs\":1775046600000000000}"))
+}
+
+func TestRunSeedsNegativeReverseCacheFromStructuredPTRNXDOMAINLogs(t *testing.T) {
+	srcParquetDir := t.TempDir()
+	srcLogDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	sourcePath := filepath.Join(srcParquetDir, "nfcap_2026040112.parquet")
+	writeSourceParquet(t, sourcePath, sampleEnrichRecord())
+
+	logPath := filepath.Join(srcLogDir, "2026-04-01.jsonl")
+	logContents := []byte("{\"line\":\"{\\\"answers\\\":[\\\"NXDOMAIN\\\"],\\\"query_name\\\":\\\"10.2.0.192.in-addr.arpa\\\",\\\"query_type\\\":\\\"PTR\\\",\\\"timestamp_end\\\":\\\"2026-04-01T08:00:00Z\\\"}\",\"timestamp\":\"2026-04-01T08:00:00Z\"}\n")
+	assert.NilError(t, os.WriteFile(logPath, logContents, 0o600))
+
+	var lookupCount atomic.Int32
+	stubReverseLookup(t, func(string) ([]string, error) {
+		lookupCount.Add(1)
+		return []string{"live.example.net."}, nil
+	})
+
+	assert.NilError(t, Run(Config{
+		DstPath:        dstDir,
+		SkipDNSLookups: true,
+		SrcLogPath:     srcLogDir,
+		SrcParquetPath: srcParquetDir,
+	}))
+
+	rows := readRows(t, filepath.Join(dstDir, "nfcap_2026040112.parquet"))
+	assert.Equal(t, len(rows), 1)
+	assert.Assert(t, rows[0].SrcHost == nil)
+	assert.Assert(t, rows[0].DstHost == nil)
+	assert.Equal(t, lookupCount.Load(), int32(0))
+
+	cacheBytes, err := os.ReadFile(filepath.Join(dstDir, reverseDNSCacheFilename))
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(cacheBytes), "{\"ip\":\"192.0.2.10\",\"miss\":true,\"resolvedAtNs\":1775046600000000000}"))
+}
+
 func TestRunPromotesNegativeCacheEntryFromLaterLogObservation(t *testing.T) {
 	srcParquetDir := t.TempDir()
 	srcLogDir := t.TempDir()

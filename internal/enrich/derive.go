@@ -1,6 +1,7 @@
 package enrich
 
 import (
+	"slices"
 	"strings"
 
 	"golang.org/x/net/publicsuffix"
@@ -66,4 +67,24 @@ func normalizeHostname(host string) string {
 	}
 
 	return trimmedHost
+}
+
+func normalizedHostnames(hosts []string) []string {
+	normalizedHosts := make([]string, 0, len(hosts))
+	seenHosts := make(map[string]struct{}, len(hosts))
+	for _, host := range hosts {
+		normalizedHost := normalizeHostname(host)
+		if normalizedHost == "" {
+			continue
+		}
+		if _, found := seenHosts[normalizedHost]; found {
+			continue
+		}
+
+		seenHosts[normalizedHost] = struct{}{}
+		normalizedHosts = append(normalizedHosts, normalizedHost)
+	}
+
+	slices.Sort(normalizedHosts)
+	return normalizedHosts
 }
