@@ -56,6 +56,10 @@ The enriched parquet output keeps the original flow columns and adds:
 - `src_host`, `dst_host`
 - `src_2ld`, `dst_2ld`
 - `src_tld`, `dst_tld`
+- `src_device_id`, `dst_device_id`
+- `src_device_label`, `dst_device_label`
+- `src_device_mac`, `dst_device_mac`
+- `src_device_source`, `dst_device_source`
 - `src_is_private`, `dst_is_private`
 
 ## `parquetflowui`
@@ -72,6 +76,7 @@ User-visible behavior:
 - scales graph nodes and edges by the selected metric
 - switches between `bytes`, `connections`, and DNS lookup activity
 - switches graph/table grouping between `tld`, `2ld`, `hostname`, and `ip`
+- can show local/private endpoints by local device identity while grouping public endpoints by the selected granularity
 - filters by address family (`all`, `ipv4`, `ipv6`)
 - filters by direction (`both`, `ingress`, `egress`)
 - filters by protocol and service port from traffic breakdown slices

@@ -16,19 +16,23 @@ import (
 const dnsLookupManifestMetadataKey = "homenetflow.dnslookups.manifest"
 
 type DNSLookupRow struct {
-	Answer          string  `parquet:"answer"`
-	Client2LD       *string `parquet:"client_2ld,optional"`
-	ClientHost      *string `parquet:"client_host,optional"`
-	ClientIP        string  `parquet:"client_ip"`
-	ClientIPVersion int32   `parquet:"client_ip_version"`
-	ClientIsPrivate bool    `parquet:"client_is_private"`
-	ClientTLD       *string `parquet:"client_tld,optional"`
-	Lookups         int64   `parquet:"lookups"`
-	Query2LD        *string `parquet:"query_2ld,optional"`
-	QueryName       string  `parquet:"query_name"`
-	QueryTLD        *string `parquet:"query_tld,optional"`
-	QueryType       string  `parquet:"query_type"`
-	TimeStartNs     int64   `parquet:"time_start_ns"`
+	Answer             string  `parquet:"answer"`
+	Client2LD          *string `parquet:"client_2ld,optional"`
+	ClientDeviceID     *string `parquet:"client_device_id,optional"`
+	ClientDeviceLabel  *string `parquet:"client_device_label,optional"`
+	ClientDeviceMAC    *string `parquet:"client_device_mac,optional"`
+	ClientDeviceSource *string `parquet:"client_device_source,optional"`
+	ClientHost         *string `parquet:"client_host,optional"`
+	ClientIP           string  `parquet:"client_ip"`
+	ClientIPVersion    int32   `parquet:"client_ip_version"`
+	ClientIsPrivate    bool    `parquet:"client_is_private"`
+	ClientTLD          *string `parquet:"client_tld,optional"`
+	Lookups            int64   `parquet:"lookups"`
+	Query2LD           *string `parquet:"query_2ld,optional"`
+	QueryName          string  `parquet:"query_name"`
+	QueryTLD           *string `parquet:"query_tld,optional"`
+	QueryType          string  `parquet:"query_type"`
+	TimeStartNs        int64   `parquet:"time_start_ns"`
 }
 
 type DNSLookupWriter struct {
@@ -87,19 +91,23 @@ func (w *DNSLookupWriter) Write(record model.DNSLookupRecord) error {
 func (w *DNSLookupWriter) WriteBatch(records []model.DNSLookupRecord) error {
 	for _, record := range records {
 		w.rows = append(w.rows, DNSLookupRow{
-			Answer:          record.Answer,
-			Client2LD:       record.Client2LD,
-			ClientHost:      record.ClientHost,
-			ClientIP:        record.ClientIP,
-			ClientIPVersion: record.ClientIPVersion,
-			ClientIsPrivate: record.ClientIsPrivate,
-			ClientTLD:       record.ClientTLD,
-			Lookups:         record.Lookups,
-			Query2LD:        record.Query2LD,
-			QueryName:       record.QueryName,
-			QueryTLD:        record.QueryTLD,
-			QueryType:       record.QueryType,
-			TimeStartNs:     record.TimeStartNs,
+			Answer:             record.Answer,
+			Client2LD:          record.Client2LD,
+			ClientDeviceID:     record.ClientDeviceID,
+			ClientDeviceLabel:  record.ClientDeviceLabel,
+			ClientDeviceMAC:    record.ClientDeviceMAC,
+			ClientDeviceSource: record.ClientDeviceSource,
+			ClientHost:         record.ClientHost,
+			ClientIP:           record.ClientIP,
+			ClientIPVersion:    record.ClientIPVersion,
+			ClientIsPrivate:    record.ClientIsPrivate,
+			ClientTLD:          record.ClientTLD,
+			Lookups:            record.Lookups,
+			Query2LD:           record.Query2LD,
+			QueryName:          record.QueryName,
+			QueryTLD:           record.QueryTLD,
+			QueryType:          record.QueryType,
+			TimeStartNs:        record.TimeStartNs,
 		})
 		if len(w.rows) < writerBufferRowCount {
 			continue
@@ -157,18 +165,22 @@ func ReadDNSLookupFile(path string, emit func(model.DNSLookupRecord) error) erro
 
 func (r DNSLookupRow) toDNSLookupRecord() model.DNSLookupRecord {
 	return model.DNSLookupRecord{
-		Answer:          r.Answer,
-		Client2LD:       r.Client2LD,
-		ClientHost:      r.ClientHost,
-		ClientIP:        r.ClientIP,
-		ClientIPVersion: r.ClientIPVersion,
-		ClientIsPrivate: r.ClientIsPrivate,
-		ClientTLD:       r.ClientTLD,
-		Lookups:         r.Lookups,
-		Query2LD:        r.Query2LD,
-		QueryName:       r.QueryName,
-		QueryTLD:        r.QueryTLD,
-		QueryType:       r.QueryType,
-		TimeStartNs:     r.TimeStartNs,
+		Answer:             r.Answer,
+		Client2LD:          r.Client2LD,
+		ClientDeviceID:     r.ClientDeviceID,
+		ClientDeviceLabel:  r.ClientDeviceLabel,
+		ClientDeviceMAC:    r.ClientDeviceMAC,
+		ClientDeviceSource: r.ClientDeviceSource,
+		ClientHost:         r.ClientHost,
+		ClientIP:           r.ClientIP,
+		ClientIPVersion:    r.ClientIPVersion,
+		ClientIsPrivate:    r.ClientIsPrivate,
+		ClientTLD:          r.ClientTLD,
+		Lookups:            r.Lookups,
+		Query2LD:           r.Query2LD,
+		QueryName:          r.QueryName,
+		QueryTLD:           r.QueryTLD,
+		QueryType:          r.QueryType,
+		TimeStartNs:        r.TimeStartNs,
 	}
 }

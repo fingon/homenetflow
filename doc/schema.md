@@ -70,16 +70,24 @@ This file lives in the `parquethosts` destination directory.
 
 - `ui_summary_edges_tld_<period>.parquet`
 - `ui_summary_edges_2ld_<period>.parquet`
+- `ui_summary_device_edges_tld_<period>.parquet`
+- `ui_summary_device_edges_2ld_<period>.parquet`
 - `ui_summary_bucketed_edges_tld_<period>.parquet`
 - `ui_summary_bucketed_edges_2ld_<period>.parquet`
+- `ui_summary_device_bucketed_edges_tld_<period>.parquet`
+- `ui_summary_device_bucketed_edges_2ld_<period>.parquet`
 - `ui_summary_histogram_<period>.parquet`
 
 When matching DNS lookup parquet exists, the UI also writes:
 
 - `ui_summary_dns_edges_tld_<period>.parquet`
 - `ui_summary_dns_edges_2ld_<period>.parquet`
+- `ui_summary_device_dns_edges_tld_<period>.parquet`
+- `ui_summary_device_dns_edges_2ld_<period>.parquet`
 - `ui_summary_dns_bucketed_edges_tld_<period>.parquet`
 - `ui_summary_dns_bucketed_edges_2ld_<period>.parquet`
+- `ui_summary_device_dns_bucketed_edges_tld_<period>.parquet`
+- `ui_summary_device_dns_bucketed_edges_2ld_<period>.parquet`
 - `ui_summary_dns_histogram_<period>.parquet`
 
 ## Base Flow Parquet Schema
@@ -133,6 +141,14 @@ Enriched parquet preserves all base flow columns and adds:
 - `dst_2ld`
 - `src_tld`
 - `dst_tld`
+- `src_device_id`
+- `dst_device_id`
+- `src_device_label`
+- `dst_device_label`
+- `src_device_mac`
+- `dst_device_mac`
+- `src_device_source`
+- `dst_device_source`
 - `src_is_private`
 - `dst_is_private`
 
@@ -141,6 +157,10 @@ Field meaning:
 - `_host`: normalized hostname chosen for the IP, `Local IPv4` for anonymous RFC1918 IPv4 addresses, or `Local IPv6` for anonymous local IPv6 addresses
 - `_2ld`: one label above the suffix, such as `iki.fi` from `www.fingon.iki.fi`; for named local addresses this is the first hostname label, and for anonymous local addresses this is `Local IPv4` or `Local IPv6`
 - `_tld`: suffix value, such as `fi` from `www.fingon.iki.fi` or `co.uk` from `foo.bar.co.uk`; for named local addresses this is `Local`, and for anonymous local addresses this is `Local IPv4` or `Local IPv6`
+- `_device_id`: stable local/private endpoint identity, prefixed with `mac:`, `host:`, or `ip:`; public endpoints leave this empty
+- `_device_label`: display label for the local device, usually hostname when known and otherwise IP or MAC fallback
+- `_device_mac`: normalized MAC address when MAC identity was available
+- `_device_source`: identity source, currently `mac`, `host`, or `ip`
 - `_is_private`: whether the IP falls into the private or local ranges recognized by enrichment
 
 For public names outside the ICANN suffix list, derivation falls back to labels. For example, `cer.lan` would produce `_2ld=cer.lan` and `_tld=lan` if it were treated as public.
@@ -230,6 +250,10 @@ Each DNS lookup parquet row contains:
 
 - `answer`
 - `client_2ld`
+- `client_device_id`
+- `client_device_label`
+- `client_device_mac`
+- `client_device_source`
 - `client_host`
 - `client_ip`
 - `client_ip_version`

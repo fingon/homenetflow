@@ -17,9 +17,30 @@ func TestParseQueryStateDefaults(t *testing.T) {
 	assert.Equal(t, state.Granularity, Granularity2LD)
 	assert.Equal(t, state.AddressFamily, AddressFamilyAll)
 	assert.Equal(t, state.Direction, DirectionBoth)
+	assert.Equal(t, state.LocalIdentity, LocalIdentityAddress)
 	assert.Equal(t, state.EdgeLimit, defaultEdgeLimit)
 	assert.Equal(t, state.Page, defaultPage)
 	assert.Equal(t, state.PageSize, defaultPageSize)
+}
+
+func TestParseQueryStateLocalIdentity(t *testing.T) {
+	request := httptest.NewRequest("GET", "/?local_identity=device", nil)
+
+	state := ParseQueryState(request)
+
+	assert.Equal(t, state.LocalIdentity, LocalIdentityDevice)
+}
+
+func TestQueryStateValuesIncludesDeviceLocalIdentity(t *testing.T) {
+	state := QueryState{
+		Granularity:   Granularity2LD,
+		LocalIdentity: LocalIdentityDevice,
+		Metric:        MetricBytes,
+	}
+
+	values := state.Values()
+
+	assert.Equal(t, values.Get("local_identity"), string(LocalIdentityDevice))
 }
 
 func TestParseFlowQueryEdge(t *testing.T) {

@@ -30,20 +30,28 @@ const (
 )
 
 type summarySnapshot struct {
-	bucketedEdgeGlobByGranularity    map[Granularity]string
-	bucketedEdgePathsByGranulariy    map[Granularity][]string
-	dnsBucketedEdgeGlobByGranularity map[Granularity]string
-	dnsBucketedEdgePathsByGranulariy map[Granularity][]string
-	dnsEdgeGlobByGranularity         map[Granularity]string
-	dnsEdgePathsByGranulariy         map[Granularity][]string
-	dnsHistogramGlob                 string
-	dnsHistogramPaths                []string
-	edgeGlobByGranularity            map[Granularity]string
-	edgePathsByGranulariy            map[Granularity][]string
-	histogramGlob                    string
-	histogramPaths                   []string
-	span                             TimeSpan
-	spanValid                        bool
+	bucketedEdgeGlobByGranularity          map[Granularity]string
+	bucketedEdgePathsByGranulariy          map[Granularity][]string
+	dnsBucketedEdgeGlobByGranularity       map[Granularity]string
+	dnsBucketedEdgePathsByGranulariy       map[Granularity][]string
+	dnsEdgeGlobByGranularity               map[Granularity]string
+	dnsEdgePathsByGranulariy               map[Granularity][]string
+	dnsHistogramGlob                       string
+	dnsHistogramPaths                      []string
+	deviceBucketedEdgeGlobByGranularity    map[Granularity]string
+	deviceBucketedEdgePathsByGranulariy    map[Granularity][]string
+	deviceDNSBucketedEdgeGlobByGranularity map[Granularity]string
+	deviceDNSBucketedEdgePathsByGranulariy map[Granularity][]string
+	deviceDNSEdgeGlobByGranularity         map[Granularity]string
+	deviceDNSEdgePathsByGranulariy         map[Granularity][]string
+	deviceEdgeGlobByGranularity            map[Granularity]string
+	deviceEdgePathsByGranulariy            map[Granularity][]string
+	edgeGlobByGranularity                  map[Granularity]string
+	edgePathsByGranulariy                  map[Granularity][]string
+	histogramGlob                          string
+	histogramPaths                         []string
+	span                                   TimeSpan
+	spanValid                              bool
 }
 
 type summaryInspection struct {
@@ -80,17 +88,25 @@ type summarySourceStatus struct {
 }
 
 type sourceSummaryPaths struct {
-	bucketedTldEdges      string
-	bucketedTwoLDEdges    string
-	dnsBucketedTldEdges   string
-	dnsBucketedTwoLDEdges string
-	dnsHistogram          string
-	dnsSource             string
-	dnsTldEdges           string
-	dnsTwoLDEdges         string
-	histogram             string
-	tldEdges              string
-	twoLDEdges            string
+	bucketedTldEdges            string
+	bucketedTwoLDEdges          string
+	dnsBucketedTldEdges         string
+	dnsBucketedTwoLDEdges       string
+	dnsHistogram                string
+	dnsSource                   string
+	dnsTldEdges                 string
+	dnsTwoLDEdges               string
+	deviceBucketedTldEdges      string
+	deviceBucketedTwoLDEdges    string
+	deviceDNSBucketedTldEdges   string
+	deviceDNSBucketedTwoLDEdges string
+	deviceDNSTldEdges           string
+	deviceDNSTwoLDEdges         string
+	deviceTldEdges              string
+	deviceTwoLDEdges            string
+	histogram                   string
+	tldEdges                    string
+	twoLDEdges                  string
 }
 
 func inspectSummaryState(srcRootPath string) (summaryInspection, error) {
@@ -132,6 +148,38 @@ func inspectSummaryState(srcRootPath string) (summaryInspection, error) {
 			},
 			dnsHistogramGlob:  filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_histogram_*.parquet")),
 			dnsHistogramPaths: make([]string, 0, len(sourceFiles)),
+			deviceBucketedEdgeGlobByGranularity: map[Granularity]string{
+				GranularityTLD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"device_bucketed_edges_tld_*.parquet")),
+				Granularity2LD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"device_bucketed_edges_2ld_*.parquet")),
+			},
+			deviceBucketedEdgePathsByGranulariy: map[Granularity][]string{
+				GranularityTLD: make([]string, 0, len(sourceFiles)),
+				Granularity2LD: make([]string, 0, len(sourceFiles)),
+			},
+			deviceDNSBucketedEdgeGlobByGranularity: map[Granularity]string{
+				GranularityTLD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"device_dns_bucketed_edges_tld_*.parquet")),
+				Granularity2LD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"device_dns_bucketed_edges_2ld_*.parquet")),
+			},
+			deviceDNSBucketedEdgePathsByGranulariy: map[Granularity][]string{
+				GranularityTLD: make([]string, 0, len(sourceFiles)),
+				Granularity2LD: make([]string, 0, len(sourceFiles)),
+			},
+			deviceDNSEdgeGlobByGranularity: map[Granularity]string{
+				GranularityTLD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"device_dns_edges_tld_*.parquet")),
+				Granularity2LD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"device_dns_edges_2ld_*.parquet")),
+			},
+			deviceDNSEdgePathsByGranulariy: map[Granularity][]string{
+				GranularityTLD: make([]string, 0, len(sourceFiles)),
+				Granularity2LD: make([]string, 0, len(sourceFiles)),
+			},
+			deviceEdgeGlobByGranularity: map[Granularity]string{
+				GranularityTLD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"device_edges_tld_*.parquet")),
+				Granularity2LD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"device_edges_2ld_*.parquet")),
+			},
+			deviceEdgePathsByGranulariy: map[Granularity][]string{
+				GranularityTLD: make([]string, 0, len(sourceFiles)),
+				Granularity2LD: make([]string, 0, len(sourceFiles)),
+			},
 			edgeGlobByGranularity: map[Granularity]string{
 				GranularityTLD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"edges_tld_*.parquet")),
 				Granularity2LD: filepath.ToSlash(filepath.Join(srcRootPath, summaryFilenamePrefix+"edges_2ld_*.parquet")),
@@ -150,7 +198,7 @@ func inspectSummaryState(srcRootPath string) (summaryInspection, error) {
 			paths:      summaryPathsForSource(srcRootPath, sourceFile),
 			sourceFile: sourceFile,
 		}
-		for _, path := range []string{job.paths.tldEdges, job.paths.twoLDEdges, job.paths.bucketedTldEdges, job.paths.bucketedTwoLDEdges, job.paths.histogram} {
+		for _, path := range []string{job.paths.tldEdges, job.paths.twoLDEdges, job.paths.bucketedTldEdges, job.paths.bucketedTwoLDEdges, job.paths.deviceTldEdges, job.paths.deviceTwoLDEdges, job.paths.deviceBucketedTldEdges, job.paths.deviceBucketedTwoLDEdges, job.paths.histogram} {
 			expectedPaths[path] = struct{}{}
 		}
 		dnsSourceFound, err := fileExists(job.paths.dnsSource)
@@ -158,7 +206,7 @@ func inspectSummaryState(srcRootPath string) (summaryInspection, error) {
 			return summaryInspection{}, err
 		}
 		if dnsSourceFound {
-			for _, path := range []string{job.paths.dnsTldEdges, job.paths.dnsTwoLDEdges, job.paths.dnsBucketedTldEdges, job.paths.dnsBucketedTwoLDEdges, job.paths.dnsHistogram} {
+			for _, path := range []string{job.paths.dnsTldEdges, job.paths.dnsTwoLDEdges, job.paths.dnsBucketedTldEdges, job.paths.dnsBucketedTwoLDEdges, job.paths.deviceDNSTldEdges, job.paths.deviceDNSTwoLDEdges, job.paths.deviceDNSBucketedTldEdges, job.paths.deviceDNSBucketedTwoLDEdges, job.paths.dnsHistogram} {
 				expectedPaths[path] = struct{}{}
 			}
 		}
@@ -202,11 +250,27 @@ func inspectSourceSummary(job summaryJob) (summarySourceStatus, error) {
 	if err != nil {
 		return summarySourceStatus{}, err
 	}
+	deviceTLDManifest, deviceTLDFound, err := readUISummaryManifestIfPresent(job.paths.deviceTldEdges)
+	if err != nil {
+		return summarySourceStatus{}, err
+	}
+	deviceTwoLDManifest, deviceTwoLDFound, err := readUISummaryManifestIfPresent(job.paths.deviceTwoLDEdges)
+	if err != nil {
+		return summarySourceStatus{}, err
+	}
+	deviceBucketedTLDManifest, deviceBucketedTLDFound, err := readUISummaryManifestIfPresent(job.paths.deviceBucketedTldEdges)
+	if err != nil {
+		return summarySourceStatus{}, err
+	}
+	deviceBucketedTwoLDManifest, deviceBucketedTwoLDFound, err := readUISummaryManifestIfPresent(job.paths.deviceBucketedTwoLDEdges)
+	if err != nil {
+		return summarySourceStatus{}, err
+	}
 	histogramManifest, histogramFound, err := readUISummaryManifestIfPresent(job.paths.histogram)
 	if err != nil {
 		return summarySourceStatus{}, err
 	}
-	if !tldFound || !twoLDFound || !bucketedTLDFound || !bucketedTwoLDFound || !histogramFound {
+	if !tldFound || !twoLDFound || !bucketedTLDFound || !bucketedTwoLDFound || !deviceTLDFound || !deviceTwoLDFound || !deviceBucketedTLDFound || !deviceBucketedTwoLDFound || !histogramFound {
 		return summarySourceStatus{state: summarySourceStateMissing}, nil
 	}
 
@@ -219,12 +283,21 @@ func inspectSourceSummary(job summaryJob) (summarySourceStatus, error) {
 	var dnsBucketedTLDManifest model.UISummaryManifest
 	var dnsBucketedTwoLDManifest model.UISummaryManifest
 	var dnsHistogramManifest model.UISummaryManifest
+	var deviceDNSTLDManifest model.UISummaryManifest
+	var deviceDNSTwoLDManifest model.UISummaryManifest
+	var deviceDNSBucketedTLDManifest model.UISummaryManifest
+	var deviceDNSBucketedTwoLDManifest model.UISummaryManifest
+	//nolint:nestif
 	if dnsSourceFound {
 		var dnsTLDFound bool
 		var dnsTwoLDFound bool
 		var dnsBucketedTLDFound bool
 		var dnsBucketedTwoLDFound bool
 		var dnsHistogramFound bool
+		var deviceDNSTLDFound bool
+		var deviceDNSTwoLDFound bool
+		var deviceDNSBucketedTLDFound bool
+		var deviceDNSBucketedTwoLDFound bool
 		dnsTLDManifest, dnsTLDFound, err = readUISummaryManifestIfPresent(job.paths.dnsTldEdges)
 		if err != nil {
 			return summarySourceStatus{}, err
@@ -245,15 +318,31 @@ func inspectSourceSummary(job summaryJob) (summarySourceStatus, error) {
 		if err != nil {
 			return summarySourceStatus{}, err
 		}
-		if !dnsTLDFound || !dnsTwoLDFound || !dnsBucketedTLDFound || !dnsBucketedTwoLDFound || !dnsHistogramFound {
+		deviceDNSTLDManifest, deviceDNSTLDFound, err = readUISummaryManifestIfPresent(job.paths.deviceDNSTldEdges)
+		if err != nil {
+			return summarySourceStatus{}, err
+		}
+		deviceDNSTwoLDManifest, deviceDNSTwoLDFound, err = readUISummaryManifestIfPresent(job.paths.deviceDNSTwoLDEdges)
+		if err != nil {
+			return summarySourceStatus{}, err
+		}
+		deviceDNSBucketedTLDManifest, deviceDNSBucketedTLDFound, err = readUISummaryManifestIfPresent(job.paths.deviceDNSBucketedTldEdges)
+		if err != nil {
+			return summarySourceStatus{}, err
+		}
+		deviceDNSBucketedTwoLDManifest, deviceDNSBucketedTwoLDFound, err = readUISummaryManifestIfPresent(job.paths.deviceDNSBucketedTwoLDEdges)
+		if err != nil {
+			return summarySourceStatus{}, err
+		}
+		if !dnsTLDFound || !dnsTwoLDFound || !dnsBucketedTLDFound || !dnsBucketedTwoLDFound || !deviceDNSTLDFound || !deviceDNSTwoLDFound || !deviceDNSBucketedTLDFound || !deviceDNSBucketedTwoLDFound || !dnsHistogramFound {
 			return summarySourceStatus{dnsSourceFound: true, state: summarySourceStateMissing}, nil
 		}
 	}
 
 	expectedSource := summarySourceManifest(job.sourceFile)
-	manifests := []model.UISummaryManifest{tldManifest, twoLDManifest, bucketedTLDManifest, bucketedTwoLDManifest, histogramManifest}
-	expectedKinds := []string{summaryEdgeKind, summaryEdgeKind, summaryBucketedEdgeKind, summaryBucketedEdgeKind, summaryHistogramKind}
-	expectedGranularities := []string{string(GranularityTLD), string(Granularity2LD), string(GranularityTLD), string(Granularity2LD), ""}
+	manifests := []model.UISummaryManifest{tldManifest, twoLDManifest, bucketedTLDManifest, bucketedTwoLDManifest, deviceTLDManifest, deviceTwoLDManifest, deviceBucketedTLDManifest, deviceBucketedTwoLDManifest, histogramManifest}
+	expectedKinds := []string{summaryEdgeKind, summaryEdgeKind, summaryBucketedEdgeKind, summaryBucketedEdgeKind, summaryEdgeKind, summaryEdgeKind, summaryBucketedEdgeKind, summaryBucketedEdgeKind, summaryHistogramKind}
+	expectedGranularities := []string{string(GranularityTLD), string(Granularity2LD), string(GranularityTLD), string(Granularity2LD), deviceSummaryGranularity(GranularityTLD), deviceSummaryGranularity(Granularity2LD), deviceSummaryGranularity(GranularityTLD), deviceSummaryGranularity(Granularity2LD), ""}
 	for index, manifest := range manifests {
 		if manifest.Version != model.UISummaryManifestVersion ||
 			manifest.LogicVersion != model.UISummaryLogicVersion ||
@@ -276,14 +365,15 @@ func inspectSourceSummary(job summaryJob) (summarySourceStatus, error) {
 		}
 	}
 
+	//nolint:nestif
 	if dnsSourceFound {
 		expectedDNSSource, err := dnsSummarySourceManifest(job.paths.dnsSource)
 		if err != nil {
 			return summarySourceStatus{}, err
 		}
-		dnsManifests := []model.UISummaryManifest{dnsTLDManifest, dnsTwoLDManifest, dnsBucketedTLDManifest, dnsBucketedTwoLDManifest, dnsHistogramManifest}
-		dnsExpectedKinds := []string{summaryEdgeKind, summaryEdgeKind, summaryBucketedEdgeKind, summaryBucketedEdgeKind, summaryHistogramKind}
-		dnsExpectedGranularities := []string{string(GranularityTLD), string(Granularity2LD), string(GranularityTLD), string(Granularity2LD), ""}
+		dnsManifests := []model.UISummaryManifest{dnsTLDManifest, dnsTwoLDManifest, dnsBucketedTLDManifest, dnsBucketedTwoLDManifest, deviceDNSTLDManifest, deviceDNSTwoLDManifest, deviceDNSBucketedTLDManifest, deviceDNSBucketedTwoLDManifest, dnsHistogramManifest}
+		dnsExpectedKinds := []string{summaryEdgeKind, summaryEdgeKind, summaryBucketedEdgeKind, summaryBucketedEdgeKind, summaryEdgeKind, summaryEdgeKind, summaryBucketedEdgeKind, summaryBucketedEdgeKind, summaryHistogramKind}
+		dnsExpectedGranularities := []string{string(GranularityTLD), string(Granularity2LD), string(GranularityTLD), string(Granularity2LD), deviceSummaryGranularity(GranularityTLD), deviceSummaryGranularity(Granularity2LD), deviceSummaryGranularity(GranularityTLD), deviceSummaryGranularity(Granularity2LD), ""}
 		for index, manifest := range dnsManifests {
 			if manifest.Version != model.UISummaryManifestVersion ||
 				manifest.LogicVersion != model.UISummaryLogicVersion ||
@@ -327,12 +417,20 @@ func addSummaryPaths(snapshot *summarySnapshot, job summaryJob, status summarySo
 	snapshot.edgePathsByGranulariy[Granularity2LD] = append(snapshot.edgePathsByGranulariy[Granularity2LD], job.paths.twoLDEdges)
 	snapshot.bucketedEdgePathsByGranulariy[GranularityTLD] = append(snapshot.bucketedEdgePathsByGranulariy[GranularityTLD], job.paths.bucketedTldEdges)
 	snapshot.bucketedEdgePathsByGranulariy[Granularity2LD] = append(snapshot.bucketedEdgePathsByGranulariy[Granularity2LD], job.paths.bucketedTwoLDEdges)
+	snapshot.deviceEdgePathsByGranulariy[GranularityTLD] = append(snapshot.deviceEdgePathsByGranulariy[GranularityTLD], job.paths.deviceTldEdges)
+	snapshot.deviceEdgePathsByGranulariy[Granularity2LD] = append(snapshot.deviceEdgePathsByGranulariy[Granularity2LD], job.paths.deviceTwoLDEdges)
+	snapshot.deviceBucketedEdgePathsByGranulariy[GranularityTLD] = append(snapshot.deviceBucketedEdgePathsByGranulariy[GranularityTLD], job.paths.deviceBucketedTldEdges)
+	snapshot.deviceBucketedEdgePathsByGranulariy[Granularity2LD] = append(snapshot.deviceBucketedEdgePathsByGranulariy[Granularity2LD], job.paths.deviceBucketedTwoLDEdges)
 	snapshot.histogramPaths = append(snapshot.histogramPaths, job.paths.histogram)
 	if status.dnsSourceFound {
 		snapshot.dnsEdgePathsByGranulariy[GranularityTLD] = append(snapshot.dnsEdgePathsByGranulariy[GranularityTLD], job.paths.dnsTldEdges)
 		snapshot.dnsEdgePathsByGranulariy[Granularity2LD] = append(snapshot.dnsEdgePathsByGranulariy[Granularity2LD], job.paths.dnsTwoLDEdges)
 		snapshot.dnsBucketedEdgePathsByGranulariy[GranularityTLD] = append(snapshot.dnsBucketedEdgePathsByGranulariy[GranularityTLD], job.paths.dnsBucketedTldEdges)
 		snapshot.dnsBucketedEdgePathsByGranulariy[Granularity2LD] = append(snapshot.dnsBucketedEdgePathsByGranulariy[Granularity2LD], job.paths.dnsBucketedTwoLDEdges)
+		snapshot.deviceDNSEdgePathsByGranulariy[GranularityTLD] = append(snapshot.deviceDNSEdgePathsByGranulariy[GranularityTLD], job.paths.deviceDNSTldEdges)
+		snapshot.deviceDNSEdgePathsByGranulariy[Granularity2LD] = append(snapshot.deviceDNSEdgePathsByGranulariy[Granularity2LD], job.paths.deviceDNSTwoLDEdges)
+		snapshot.deviceDNSBucketedEdgePathsByGranulariy[GranularityTLD] = append(snapshot.deviceDNSBucketedEdgePathsByGranulariy[GranularityTLD], job.paths.deviceDNSBucketedTldEdges)
+		snapshot.deviceDNSBucketedEdgePathsByGranulariy[Granularity2LD] = append(snapshot.deviceDNSBucketedEdgePathsByGranulariy[Granularity2LD], job.paths.deviceDNSBucketedTwoLDEdges)
 		snapshot.dnsHistogramPaths = append(snapshot.dnsHistogramPaths, job.paths.dnsHistogram)
 	}
 
@@ -354,17 +452,25 @@ func addSummaryPaths(snapshot *summarySnapshot, job summaryJob, status summarySo
 func summaryPathsForSource(srcRootPath string, sourceFile model.SourceFile) sourceSummaryPaths {
 	label := sourceFile.Period.Label()
 	return sourceSummaryPaths{
-		bucketedTldEdges:      filepath.Join(srcRootPath, summaryFilenamePrefix+"bucketed_edges_tld_"+label+".parquet"),
-		bucketedTwoLDEdges:    filepath.Join(srcRootPath, summaryFilenamePrefix+"bucketed_edges_2ld_"+label+".parquet"),
-		dnsBucketedTldEdges:   filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_bucketed_edges_tld_"+label+".parquet"),
-		dnsBucketedTwoLDEdges: filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_bucketed_edges_2ld_"+label+".parquet"),
-		dnsHistogram:          filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_histogram_"+label+".parquet"),
-		dnsSource:             sourceFile.Period.DNSLookupOutputPath(srcRootPath),
-		dnsTldEdges:           filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_edges_tld_"+label+".parquet"),
-		dnsTwoLDEdges:         filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_edges_2ld_"+label+".parquet"),
-		histogram:             filepath.Join(srcRootPath, summaryFilenamePrefix+"histogram_"+label+".parquet"),
-		tldEdges:              filepath.Join(srcRootPath, summaryFilenamePrefix+"edges_tld_"+label+".parquet"),
-		twoLDEdges:            filepath.Join(srcRootPath, summaryFilenamePrefix+"edges_2ld_"+label+".parquet"),
+		bucketedTldEdges:            filepath.Join(srcRootPath, summaryFilenamePrefix+"bucketed_edges_tld_"+label+".parquet"),
+		bucketedTwoLDEdges:          filepath.Join(srcRootPath, summaryFilenamePrefix+"bucketed_edges_2ld_"+label+".parquet"),
+		deviceBucketedTldEdges:      filepath.Join(srcRootPath, summaryFilenamePrefix+"device_bucketed_edges_tld_"+label+".parquet"),
+		deviceBucketedTwoLDEdges:    filepath.Join(srcRootPath, summaryFilenamePrefix+"device_bucketed_edges_2ld_"+label+".parquet"),
+		deviceDNSBucketedTldEdges:   filepath.Join(srcRootPath, summaryFilenamePrefix+"device_dns_bucketed_edges_tld_"+label+".parquet"),
+		deviceDNSBucketedTwoLDEdges: filepath.Join(srcRootPath, summaryFilenamePrefix+"device_dns_bucketed_edges_2ld_"+label+".parquet"),
+		deviceDNSTldEdges:           filepath.Join(srcRootPath, summaryFilenamePrefix+"device_dns_edges_tld_"+label+".parquet"),
+		deviceDNSTwoLDEdges:         filepath.Join(srcRootPath, summaryFilenamePrefix+"device_dns_edges_2ld_"+label+".parquet"),
+		deviceTldEdges:              filepath.Join(srcRootPath, summaryFilenamePrefix+"device_edges_tld_"+label+".parquet"),
+		deviceTwoLDEdges:            filepath.Join(srcRootPath, summaryFilenamePrefix+"device_edges_2ld_"+label+".parquet"),
+		dnsBucketedTldEdges:         filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_bucketed_edges_tld_"+label+".parquet"),
+		dnsBucketedTwoLDEdges:       filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_bucketed_edges_2ld_"+label+".parquet"),
+		dnsHistogram:                filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_histogram_"+label+".parquet"),
+		dnsSource:                   sourceFile.Period.DNSLookupOutputPath(srcRootPath),
+		dnsTldEdges:                 filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_edges_tld_"+label+".parquet"),
+		dnsTwoLDEdges:               filepath.Join(srcRootPath, summaryFilenamePrefix+"dns_edges_2ld_"+label+".parquet"),
+		histogram:                   filepath.Join(srcRootPath, summaryFilenamePrefix+"histogram_"+label+".parquet"),
+		tldEdges:                    filepath.Join(srcRootPath, summaryFilenamePrefix+"edges_tld_"+label+".parquet"),
+		twoLDEdges:                  filepath.Join(srcRootPath, summaryFilenamePrefix+"edges_2ld_"+label+".parquet"),
 	}
 }
 
@@ -407,10 +513,22 @@ func rebuildSummaryJob(ctx context.Context, job summaryJob) error {
 	if err := rebuildEdgeSummary(ctx, db, job.sourceFile, job.paths.twoLDEdges, Granularity2LD, spanStartNs, spanEndNs); err != nil {
 		return err
 	}
+	if err := rebuildDeviceEdgeSummary(ctx, db, job.sourceFile, job.paths.deviceTldEdges, GranularityTLD, spanStartNs, spanEndNs); err != nil {
+		return err
+	}
+	if err := rebuildDeviceEdgeSummary(ctx, db, job.sourceFile, job.paths.deviceTwoLDEdges, Granularity2LD, spanStartNs, spanEndNs); err != nil {
+		return err
+	}
 	if err := rebuildBucketedEdgeSummary(ctx, db, job.sourceFile, job.paths.bucketedTldEdges, GranularityTLD, spanStartNs, spanEndNs); err != nil {
 		return err
 	}
 	if err := rebuildBucketedEdgeSummary(ctx, db, job.sourceFile, job.paths.bucketedTwoLDEdges, Granularity2LD, spanStartNs, spanEndNs); err != nil {
+		return err
+	}
+	if err := rebuildDeviceBucketedEdgeSummary(ctx, db, job.sourceFile, job.paths.deviceBucketedTldEdges, GranularityTLD, spanStartNs, spanEndNs); err != nil {
+		return err
+	}
+	if err := rebuildDeviceBucketedEdgeSummary(ctx, db, job.sourceFile, job.paths.deviceBucketedTwoLDEdges, Granularity2LD, spanStartNs, spanEndNs); err != nil {
 		return err
 	}
 	if err := rebuildHistogramSummary(ctx, db, job.sourceFile, job.paths.histogram, spanStartNs, spanEndNs); err != nil {
@@ -421,6 +539,7 @@ func rebuildSummaryJob(ctx context.Context, job summaryJob) error {
 	if err != nil {
 		return err
 	}
+	//nolint:nestif
 	if dnsSourceFound {
 		dnsSpanStartNs, dnsSpanEndNs, err := queryDNSLookupSummarySpan(ctx, db, job.paths.dnsSource)
 		if err != nil {
@@ -432,10 +551,22 @@ func rebuildSummaryJob(ctx context.Context, job summaryJob) error {
 		if err := rebuildDNSEdgeSummary(ctx, db, job.paths, job.paths.dnsTwoLDEdges, Granularity2LD, dnsSpanStartNs, dnsSpanEndNs); err != nil {
 			return err
 		}
+		if err := rebuildDeviceDNSEdgeSummary(ctx, db, job.paths, job.paths.deviceDNSTldEdges, GranularityTLD, dnsSpanStartNs, dnsSpanEndNs); err != nil {
+			return err
+		}
+		if err := rebuildDeviceDNSEdgeSummary(ctx, db, job.paths, job.paths.deviceDNSTwoLDEdges, Granularity2LD, dnsSpanStartNs, dnsSpanEndNs); err != nil {
+			return err
+		}
 		if err := rebuildDNSBucketedEdgeSummary(ctx, db, job.paths, job.paths.dnsBucketedTldEdges, GranularityTLD, dnsSpanStartNs, dnsSpanEndNs); err != nil {
 			return err
 		}
 		if err := rebuildDNSBucketedEdgeSummary(ctx, db, job.paths, job.paths.dnsBucketedTwoLDEdges, Granularity2LD, dnsSpanStartNs, dnsSpanEndNs); err != nil {
+			return err
+		}
+		if err := rebuildDeviceDNSBucketedEdgeSummary(ctx, db, job.paths, job.paths.deviceDNSBucketedTldEdges, GranularityTLD, dnsSpanStartNs, dnsSpanEndNs); err != nil {
+			return err
+		}
+		if err := rebuildDeviceDNSBucketedEdgeSummary(ctx, db, job.paths, job.paths.deviceDNSBucketedTwoLDEdges, Granularity2LD, dnsSpanStartNs, dnsSpanEndNs); err != nil {
 			return err
 		}
 		if err := rebuildDNSHistogramSummary(ctx, db, job.paths, job.paths.dnsHistogram, dnsSpanStartNs, dnsSpanEndNs); err != nil {
@@ -491,7 +622,33 @@ func rebuildEdgeSummary(
 	spanStartNs int64,
 	spanEndNs int64,
 ) error {
-	srcExpr, dstExpr := entityExpressions(granularity)
+	return rebuildEdgeSummaryWithLocalIdentity(ctx, db, sourceFile, outputPath, granularity, LocalIdentityAddress, spanStartNs, spanEndNs)
+}
+
+func rebuildDeviceEdgeSummary(
+	ctx context.Context,
+	db *sql.DB,
+	sourceFile model.SourceFile,
+	outputPath string,
+	granularity Granularity,
+	spanStartNs int64,
+	spanEndNs int64,
+) error {
+	return rebuildEdgeSummaryWithLocalIdentity(ctx, db, sourceFile, outputPath, granularity, LocalIdentityDevice, spanStartNs, spanEndNs)
+}
+
+func rebuildEdgeSummaryWithLocalIdentity(
+	ctx context.Context,
+	db *sql.DB,
+	sourceFile model.SourceFile,
+	outputPath string,
+	granularity Granularity,
+	localIdentity LocalIdentity,
+	spanStartNs int64,
+	spanEndNs int64,
+) error {
+	srcExpr, dstExpr := entityExpressionsForState(QueryState{Granularity: granularity, LocalIdentity: localIdentity})
+	manifestGranularity := summaryManifestGranularity(granularity, localIdentity)
 	query := fmt.Sprintf(`
 SELECT %s AS src_entity, %s AS dst_entity,
   COALESCE(src_host, '') AS src_host,
@@ -519,7 +676,7 @@ GROUP BY src_entity, dst_entity, src_host, src_ip, dst_host, dst_ip, direction, 
 ORDER BY src_entity, dst_entity, src_host, src_ip, dst_host, dst_ip, direction, ip_version, protocol, service_port
 `, srcExpr, dstExpr, rawServicePortExpression(), quoteLiteral(sourceFile.AbsPath))
 
-	writer, finalize, err := parquetout.CreateUISummaryEdges(outputPath, model.NewUISummaryManifest(sourceFile, summaryEdgeKind, string(granularity), spanStartNs, spanEndNs))
+	writer, finalize, err := parquetout.CreateUISummaryEdges(outputPath, model.NewUISummaryManifest(sourceFile, summaryEdgeKind, manifestGranularity, spanStartNs, spanEndNs))
 	if err != nil {
 		return err
 	}
@@ -595,7 +752,33 @@ func rebuildBucketedEdgeSummary(
 	spanStartNs int64,
 	spanEndNs int64,
 ) error {
-	srcExpr, dstExpr := entityExpressions(granularity)
+	return rebuildBucketedEdgeSummaryWithLocalIdentity(ctx, db, sourceFile, outputPath, granularity, LocalIdentityAddress, spanStartNs, spanEndNs)
+}
+
+func rebuildDeviceBucketedEdgeSummary(
+	ctx context.Context,
+	db *sql.DB,
+	sourceFile model.SourceFile,
+	outputPath string,
+	granularity Granularity,
+	spanStartNs int64,
+	spanEndNs int64,
+) error {
+	return rebuildBucketedEdgeSummaryWithLocalIdentity(ctx, db, sourceFile, outputPath, granularity, LocalIdentityDevice, spanStartNs, spanEndNs)
+}
+
+func rebuildBucketedEdgeSummaryWithLocalIdentity(
+	ctx context.Context,
+	db *sql.DB,
+	sourceFile model.SourceFile,
+	outputPath string,
+	granularity Granularity,
+	localIdentity LocalIdentity,
+	spanStartNs int64,
+	spanEndNs int64,
+) error {
+	srcExpr, dstExpr := entityExpressionsForState(QueryState{Granularity: granularity, LocalIdentity: localIdentity})
+	manifestGranularity := summaryManifestGranularity(granularity, localIdentity)
 	query := fmt.Sprintf(`
 SELECT CAST(FLOOR(time_start_ns / %d) AS BIGINT) * %d AS bucket_start_ns,
   %s AS src_entity, %s AS dst_entity,
@@ -624,7 +807,7 @@ GROUP BY bucket_start_ns, src_entity, dst_entity, src_host, src_ip, dst_host, ds
 ORDER BY bucket_start_ns, src_entity, dst_entity, src_host, src_ip, dst_host, dst_ip, direction, ip_version, protocol, service_port
 `, summaryBucketWidthNs, summaryBucketWidthNs, srcExpr, dstExpr, rawServicePortExpression(), quoteLiteral(sourceFile.AbsPath))
 
-	writer, finalize, err := parquetout.CreateUISummaryBucketedEdges(outputPath, model.NewUISummaryManifest(sourceFile, summaryBucketedEdgeKind, string(granularity), spanStartNs, spanEndNs))
+	writer, finalize, err := parquetout.CreateUISummaryBucketedEdges(outputPath, model.NewUISummaryManifest(sourceFile, summaryBucketedEdgeKind, manifestGranularity, spanStartNs, spanEndNs))
 	if err != nil {
 		return err
 	}
@@ -766,7 +949,33 @@ func rebuildDNSEdgeSummary(
 	spanStartNs int64,
 	spanEndNs int64,
 ) error {
-	srcExpr, dstExpr := dnsLookupEntityExpressions(granularity)
+	return rebuildDNSEdgeSummaryWithLocalIdentity(ctx, db, paths, outputPath, granularity, LocalIdentityAddress, spanStartNs, spanEndNs)
+}
+
+func rebuildDeviceDNSEdgeSummary(
+	ctx context.Context,
+	db *sql.DB,
+	paths sourceSummaryPaths,
+	outputPath string,
+	granularity Granularity,
+	spanStartNs int64,
+	spanEndNs int64,
+) error {
+	return rebuildDNSEdgeSummaryWithLocalIdentity(ctx, db, paths, outputPath, granularity, LocalIdentityDevice, spanStartNs, spanEndNs)
+}
+
+func rebuildDNSEdgeSummaryWithLocalIdentity(
+	ctx context.Context,
+	db *sql.DB,
+	paths sourceSummaryPaths,
+	outputPath string,
+	granularity Granularity,
+	localIdentity LocalIdentity,
+	spanStartNs int64,
+	spanEndNs int64,
+) error {
+	srcExpr, dstExpr := dnsLookupEntityExpressionsForState(QueryState{Granularity: granularity, LocalIdentity: localIdentity})
+	manifestGranularity := summaryManifestGranularity(granularity, localIdentity)
 	dnsSourceHasAnswer, err := parquetPathHasColumn(ctx, db, paths.dnsSource, "answer")
 	if err != nil {
 		return err
@@ -802,7 +1011,7 @@ ORDER BY src_entity, dst_entity, client_host, client_ip, query_name, client_ip_v
 		return err
 	}
 	manifest := model.UISummaryManifest{
-		Granularity:  string(granularity),
+		Granularity:  manifestGranularity,
 		Kind:         summaryEdgeKind,
 		LogicVersion: model.UISummaryLogicVersion,
 		Source:       sourceManifest,
@@ -877,7 +1086,33 @@ func rebuildDNSBucketedEdgeSummary(
 	spanStartNs int64,
 	spanEndNs int64,
 ) error {
-	srcExpr, dstExpr := dnsLookupEntityExpressions(granularity)
+	return rebuildDNSBucketedEdgeSummaryWithLocalIdentity(ctx, db, paths, outputPath, granularity, LocalIdentityAddress, spanStartNs, spanEndNs)
+}
+
+func rebuildDeviceDNSBucketedEdgeSummary(
+	ctx context.Context,
+	db *sql.DB,
+	paths sourceSummaryPaths,
+	outputPath string,
+	granularity Granularity,
+	spanStartNs int64,
+	spanEndNs int64,
+) error {
+	return rebuildDNSBucketedEdgeSummaryWithLocalIdentity(ctx, db, paths, outputPath, granularity, LocalIdentityDevice, spanStartNs, spanEndNs)
+}
+
+func rebuildDNSBucketedEdgeSummaryWithLocalIdentity(
+	ctx context.Context,
+	db *sql.DB,
+	paths sourceSummaryPaths,
+	outputPath string,
+	granularity Granularity,
+	localIdentity LocalIdentity,
+	spanStartNs int64,
+	spanEndNs int64,
+) error {
+	srcExpr, dstExpr := dnsLookupEntityExpressionsForState(QueryState{Granularity: granularity, LocalIdentity: localIdentity})
+	manifestGranularity := summaryManifestGranularity(granularity, localIdentity)
 	dnsSourceHasAnswer, err := parquetPathHasColumn(ctx, db, paths.dnsSource, "answer")
 	if err != nil {
 		return err
@@ -914,7 +1149,7 @@ ORDER BY bucket_start_ns, src_entity, dst_entity, client_host, client_ip, query_
 		return err
 	}
 	manifest := model.UISummaryManifest{
-		Granularity:  string(granularity),
+		Granularity:  manifestGranularity,
 		Kind:         summaryBucketedEdgeKind,
 		LogicVersion: model.UISummaryLogicVersion,
 		Source:       sourceManifest,
@@ -1094,6 +1329,17 @@ func summaryBuildConcurrency() int {
 
 func summaryBuildThreadsPerJob() int {
 	return max(1, runtime.GOMAXPROCS(0)/summaryBuildConcurrency())
+}
+
+func summaryManifestGranularity(granularity Granularity, localIdentity LocalIdentity) string {
+	if localIdentity == LocalIdentityDevice {
+		return deviceSummaryGranularity(granularity)
+	}
+	return string(granularity)
+}
+
+func deviceSummaryGranularity(granularity Granularity) string {
+	return "device_" + string(granularity)
 }
 
 func readUISummaryManifestIfPresent(path string) (model.UISummaryManifest, bool, error) {

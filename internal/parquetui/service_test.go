@@ -79,6 +79,32 @@ func TestServiceGraphAddsRestNodesAtGranularLevels(t *testing.T) {
 	assert.Assert(t, containsNodeLabel(graph.Nodes, "Rest"))
 }
 
+func TestServiceGraphDeviceLocalIdentityUsesRemoteGranularity(t *testing.T) {
+	tempDir := t.TempDir()
+	first := sampleRecord("192.168.1.10", "140.82.114.3", "alpha-v4.lan", "alpha-v4", "Local", "lb-140-82-114-3-iad.github.com", "github.com", "com", 100, 10, 20)
+	second := sampleRecord("fd00::10", "140.82.113.4", "alpha-v6.lan", "alpha-v6", "Local", "lb-140-82-113-4-iad.github.com", "github.com", "com", 200, 30, 40)
+	applySourceDevice(&first, "mac:aa:bb:cc:dd:ee:ff", "alpha.lan")
+	applySourceDevice(&second, "mac:aa:bb:cc:dd:ee:ff", "alpha.lan")
+	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{first, second})
+
+	service, err := NewService(context.Background(), tempDir, time.Hour)
+	assert.NilError(t, err)
+	defer service.Close()
+
+	graph, err := service.Graph(context.Background(), QueryState{
+		Granularity:   Granularity2LD,
+		LocalIdentity: LocalIdentityDevice,
+		Metric:        MetricBytes,
+		EdgeLimit:     0,
+	})
+	assert.NilError(t, err)
+
+	assert.Assert(t, containsNode(graph.Nodes, "alpha.lan"))
+	assert.Assert(t, containsNode(graph.Nodes, "github.com"))
+	assert.Assert(t, containsEdge(graph.Edges, "alpha.lan", "github.com"))
+	assert.Equal(t, graph.Totals.Bytes, int64(300))
+}
+
 func TestServiceGraphHidesIgnoredTrafficByDefault(t *testing.T) {
 	tempDir := t.TempDir()
 	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
@@ -1999,6 +2025,15 @@ func containsNode(nodes []Node, nodeID string) bool {
 	return false
 }
 
+func containsEdge(edges []Edge, source, destination string) bool {
+	for _, edge := range edges {
+		if edge.Source == source && edge.Destination == destination {
+			return true
+		}
+	}
+	return false
+}
+
 func containsNodeLabel(nodes []Node, label string) bool {
 	for _, node := range nodes {
 		if node.Label == label {
@@ -2006,6 +2041,13 @@ func containsNodeLabel(nodes []Node, label string) bool {
 		}
 	}
 	return false
+}
+
+func applySourceDevice(record *model.FlowRecord, id, label string) {
+	source := "mac"
+	record.SrcDeviceID = &id
+	record.SrcDeviceLabel = &label
+	record.SrcDeviceSource = &source
 }
 
 func findEdge(t *testing.T, edges []Edge, source, destination string) Edge {

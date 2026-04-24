@@ -858,6 +858,12 @@ func topBar(dashboard DashboardData) g.Node {
 				),
 				Div(
 					Class("group segmented"),
+					Label(g.Text("Local")),
+					toggleRadio("local_identity", string(LocalIdentityAddress), "Address", state.LocalIdentity == LocalIdentityAddress),
+					toggleRadio("local_identity", string(LocalIdentityDevice), "Device", state.LocalIdentity == LocalIdentityDevice),
+				),
+				Div(
+					Class("group segmented"),
 					Label(g.Text("By")),
 					toggleRadio("granularity", string(GranularityTLD), "TLD", state.Granularity == GranularityTLD),
 					toggleRadio("granularity", string(Granularity2LD), "2TLD", state.Granularity == Granularity2LD),
@@ -938,6 +944,9 @@ func hiddenStateFields(state QueryState) g.Node {
 		Input(Type("hidden"), Name("selected_edge_dst"), Value(state.SelectedEdgeDst)),
 		renderHiddenValues("include", state.Include),
 		renderHiddenValues("exclude", state.Exclude),
+	}
+	if state.LocalIdentity != "" && state.LocalIdentity != LocalIdentityAddress {
+		nodes = append(nodes, Input(Type("hidden"), Name("local_identity"), Value(string(state.LocalIdentity))))
 	}
 	if state.Protocol > 0 {
 		nodes = append(nodes, Input(Type("hidden"), Name("protocol"), Value(strconv.FormatInt(int64(state.Protocol), 10))))
@@ -1576,6 +1585,7 @@ func flowDetailHiddenFields(query FlowQuery) g.Node {
 		Input(Type("hidden"), ID("filter-to-ns"), Name("to"), Value(strconv.FormatInt(state.ToNs, 10))),
 		Input(Type("hidden"), Name("metric"), Value(string(state.Metric))),
 		Input(Type("hidden"), Name("granularity"), Value(string(state.Granularity))),
+		Input(Type("hidden"), Name("local_identity"), Value(string(state.LocalIdentity))),
 		Input(Type("hidden"), Name("sort"), Value(string(state.Sort))),
 		Input(Type("hidden"), Name("page"), Value(strconv.Itoa(defaultPage))),
 		Input(Type("hidden"), Name("page_size"), Value(strconv.Itoa(state.PageSize))),

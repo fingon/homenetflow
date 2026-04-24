@@ -66,17 +66,37 @@ func (s *Service) canUseSummaryGraph(state QueryState, span TimeSpan) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if state.Metric == MetricDNSLookups {
-		paths := s.summaries.dnsEdgePathsByGranulariy[state.Granularity]
-		if !fullRange {
-			paths = s.summaries.dnsBucketedEdgePathsByGranulariy[state.Granularity]
-		}
+		paths := s.dnsSummaryEdgePathsForStateLocked(state, fullRange)
 		return len(paths) > 0 && s.summaries.spanValid
 	}
-	paths := s.summaries.edgePathsByGranulariy[state.Granularity]
-	if !fullRange {
-		paths = s.summaries.bucketedEdgePathsByGranulariy[state.Granularity]
-	}
+	paths := s.summaryEdgePathsForStateLocked(state, fullRange)
 	return len(paths) > 0 && s.summaries.spanValid
+}
+
+func (s *Service) summaryEdgePathsForStateLocked(state QueryState, fullRange bool) []string {
+	if state.LocalIdentity == LocalIdentityDevice {
+		if fullRange {
+			return s.summaries.deviceEdgePathsByGranulariy[state.Granularity]
+		}
+		return s.summaries.deviceBucketedEdgePathsByGranulariy[state.Granularity]
+	}
+	if fullRange {
+		return s.summaries.edgePathsByGranulariy[state.Granularity]
+	}
+	return s.summaries.bucketedEdgePathsByGranulariy[state.Granularity]
+}
+
+func (s *Service) dnsSummaryEdgePathsForStateLocked(state QueryState, fullRange bool) []string {
+	if state.LocalIdentity == LocalIdentityDevice {
+		if !fullRange {
+			return s.summaries.deviceDNSBucketedEdgePathsByGranulariy[state.Granularity]
+		}
+		return s.summaries.deviceDNSEdgePathsByGranulariy[state.Granularity]
+	}
+	if !fullRange {
+		return s.summaries.dnsBucketedEdgePathsByGranulariy[state.Granularity]
+	}
+	return s.summaries.dnsEdgePathsByGranulariy[state.Granularity]
 }
 
 func (s *Service) canUseSummaryHistogram(state QueryState, span TimeSpan) bool {
@@ -275,7 +295,7 @@ FROM read_parquet(%s)
 %s
 GROUP BY bucket
 ORDER BY bucket
-`, summaryMetricColumn(state.Metric), quoteLiteral(s.summaryBucketedEdgeGlob(state.Granularity, state.Metric)), rangeClause)
+`, summaryMetricColumn(state.Metric), quoteLiteral(s.summaryBucketedEdgeGlob(state)), rangeClause)
 
 	queryArgs := append([]any{state.FromNs, widthNs}, args...)
 	queryArgs = append(queryArgs, ignoreArgs...)
@@ -472,7 +492,7 @@ SELECT src_entity, dst_entity,
 FROM read_parquet(%s)
 %s
 GROUP BY src_entity, dst_entity, direction, ip_version, protocol, service_port
-`, ignoredBytesExpr, ignoredConnectionsExpr, quoteLiteral(s.summaryEdgeGlob(state.Granularity, state.Metric)), whereClause)
+`, ignoredBytesExpr, ignoredConnectionsExpr, quoteLiteral(s.summaryEdgeGlob(state)), whereClause)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -575,7 +595,7 @@ SELECT src_entity, dst_entity,
 FROM read_parquet(%s)
 %s
 GROUP BY src_entity, dst_entity, direction, ip_version, protocol, service_port
-`, ignoredBytesExpr, ignoredConnectionsExpr, quoteLiteral(s.summaryBucketedEdgeGlob(state.Granularity, state.Metric)), rangeClause)
+`, ignoredBytesExpr, ignoredConnectionsExpr, quoteLiteral(s.summaryBucketedEdgeGlob(state)), rangeClause)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -877,6 +897,9 @@ func summaryGraphSnapshotCacheKey(granularity Granularity, addressFamily Address
 
 func summaryFilterCacheSuffix(state QueryState) string {
 	parts := []string{fmt.Sprintf(":hide_ignored=%t", state.HideIgnored)}
+	if state.LocalIdentity != "" && state.LocalIdentity != LocalIdentityAddress {
+		parts = append(parts, ":local_identity="+string(state.LocalIdentity))
+	}
 	if state.Metric != MetricDNSLookups && (state.Protocol != 0 || state.Port != 0) {
 		parts = append(parts, fmt.Sprintf(":protocol=%d:port=%d", state.Protocol, state.Port))
 	}
@@ -890,22 +913,34 @@ func summaryBucketStartNs(timestampNs int64) int64 {
 	return (timestampNs / summaryBucketWidthNs) * summaryBucketWidthNs
 }
 
-func (s *Service) summaryEdgeGlob(granularity Granularity, metric Metric) string {
+func (s *Service) summaryEdgeGlob(state QueryState) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if metric == MetricDNSLookups {
-		return s.summaries.dnsEdgeGlobByGranularity[granularity]
+	if state.Metric == MetricDNSLookups {
+		if state.LocalIdentity == LocalIdentityDevice {
+			return s.summaries.deviceDNSEdgeGlobByGranularity[state.Granularity]
+		}
+		return s.summaries.dnsEdgeGlobByGranularity[state.Granularity]
 	}
-	return s.summaries.edgeGlobByGranularity[granularity]
+	if state.LocalIdentity == LocalIdentityDevice {
+		return s.summaries.deviceEdgeGlobByGranularity[state.Granularity]
+	}
+	return s.summaries.edgeGlobByGranularity[state.Granularity]
 }
 
-func (s *Service) summaryBucketedEdgeGlob(granularity Granularity, metric Metric) string {
+func (s *Service) summaryBucketedEdgeGlob(state QueryState) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if metric == MetricDNSLookups {
-		return s.summaries.dnsBucketedEdgeGlobByGranularity[granularity]
+	if state.Metric == MetricDNSLookups {
+		if state.LocalIdentity == LocalIdentityDevice {
+			return s.summaries.deviceDNSBucketedEdgeGlobByGranularity[state.Granularity]
+		}
+		return s.summaries.dnsBucketedEdgeGlobByGranularity[state.Granularity]
 	}
-	return s.summaries.bucketedEdgeGlobByGranularity[granularity]
+	if state.LocalIdentity == LocalIdentityDevice {
+		return s.summaries.deviceBucketedEdgeGlobByGranularity[state.Granularity]
+	}
+	return s.summaries.bucketedEdgeGlobByGranularity[state.Granularity]
 }
 
 func (s *Service) summaryHistogramGlob(metric Metric) string {

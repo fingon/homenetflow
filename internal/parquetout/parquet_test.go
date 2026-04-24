@@ -50,6 +50,12 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 	src2LD := "iki.fi"
 	srcTLD := "fi"
 	dstHost := "example.net"
+	srcDeviceID := "mac:aa:bb:cc:dd:ee:01"
+	srcDeviceLabel := "laptop.lan"
+	srcDeviceSource := "mac"
+	dstDeviceID := "host:example.net"
+	dstDeviceLabel := "example.net"
+	dstDeviceSource := "host"
 	inSrcMAC := "aa:bb:cc:dd:ee:01"
 	outDstMAC := "aa:bb:cc:dd:ee:02"
 
@@ -62,25 +68,32 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 	writer, finalize, err := CreateEnriched(path, manifest)
 	assert.NilError(t, err)
 	assert.NilError(t, writer.Write(model.FlowRecord{
-		Bytes:        1,
-		DurationNs:   2,
-		DstIP:        "198.51.100.1",
-		DstHost:      &dstHost,
-		DstIsPrivate: true,
-		DstPort:      443,
-		IPVersion:    model.IPVersion6,
-		InSrcMAC:     &inSrcMAC,
-		OutDstMAC:    &outDstMAC,
-		Packets:      3,
-		Protocol:     6,
-		Src2LD:       &src2LD,
-		SrcHost:      &srcHost,
-		SrcIP:        "192.0.2.1",
-		SrcIsPrivate: false,
-		SrcPort:      12345,
-		SrcTLD:       &srcTLD,
-		TimeEndNs:    20,
-		TimeStartNs:  10,
+		Bytes:           1,
+		DurationNs:      2,
+		DstIP:           "198.51.100.1",
+		DstDeviceID:     &dstDeviceID,
+		DstDeviceLabel:  &dstDeviceLabel,
+		DstDeviceSource: &dstDeviceSource,
+		DstHost:         &dstHost,
+		DstIsPrivate:    true,
+		DstPort:         443,
+		IPVersion:       model.IPVersion6,
+		InSrcMAC:        &inSrcMAC,
+		OutDstMAC:       &outDstMAC,
+		Packets:         3,
+		Protocol:        6,
+		SrcDeviceID:     &srcDeviceID,
+		SrcDeviceLabel:  &srcDeviceLabel,
+		SrcDeviceMAC:    &inSrcMAC,
+		SrcDeviceSource: &srcDeviceSource,
+		Src2LD:          &src2LD,
+		SrcHost:         &srcHost,
+		SrcIP:           "192.0.2.1",
+		SrcIsPrivate:    false,
+		SrcPort:         12345,
+		SrcTLD:          &srcTLD,
+		TimeEndNs:       20,
+		TimeStartNs:     10,
 	}))
 	assert.NilError(t, finalize())
 
@@ -95,6 +108,13 @@ func TestReadFileRoundTripIncludesEnrichmentColumns(t *testing.T) {
 	assert.Equal(t, *records[0].Src2LD, src2LD)
 	assert.Equal(t, *records[0].SrcTLD, srcTLD)
 	assert.Equal(t, *records[0].DstHost, dstHost)
+	assert.Equal(t, *records[0].SrcDeviceID, srcDeviceID)
+	assert.Equal(t, *records[0].SrcDeviceLabel, srcDeviceLabel)
+	assert.Equal(t, *records[0].SrcDeviceMAC, inSrcMAC)
+	assert.Equal(t, *records[0].SrcDeviceSource, srcDeviceSource)
+	assert.Equal(t, *records[0].DstDeviceID, dstDeviceID)
+	assert.Equal(t, *records[0].DstDeviceLabel, dstDeviceLabel)
+	assert.Equal(t, *records[0].DstDeviceSource, dstDeviceSource)
 	assert.Equal(t, *records[0].InSrcMAC, inSrcMAC)
 	assert.Equal(t, *records[0].OutDstMAC, outDstMAC)
 	assert.Equal(t, records[0].IPVersion, model.IPVersion6)
@@ -120,14 +140,20 @@ func TestDNSLookupManifestRoundTripIncludesSkipDNSLookups(t *testing.T) {
 
 	writer, finalize, err := CreateDNSLookups(path, manifest)
 	assert.NilError(t, err)
+	clientDeviceID := "host:phone.lan"
+	clientDeviceLabel := "phone.lan"
+	clientDeviceSource := "host"
 	assert.NilError(t, writer.Write(model.DNSLookupRecord{
-		Answer:          model.DNSAnswerNXDOMAIN,
-		ClientIP:        "192.0.2.1",
-		ClientIPVersion: model.IPVersion4,
-		Lookups:         1,
-		QueryName:       "example.net",
-		QueryType:       "A",
-		TimeStartNs:     10,
+		Answer:             model.DNSAnswerNXDOMAIN,
+		ClientDeviceID:     &clientDeviceID,
+		ClientDeviceLabel:  &clientDeviceLabel,
+		ClientDeviceSource: &clientDeviceSource,
+		ClientIP:           "192.0.2.1",
+		ClientIPVersion:    model.IPVersion4,
+		Lookups:            1,
+		QueryName:          "example.net",
+		QueryType:          "A",
+		TimeStartNs:        10,
 	}))
 	assert.NilError(t, finalize())
 
@@ -142,6 +168,9 @@ func TestDNSLookupManifestRoundTripIncludesSkipDNSLookups(t *testing.T) {
 	}))
 	assert.Equal(t, len(records), 1)
 	assert.Equal(t, records[0].Answer, model.DNSAnswerNXDOMAIN)
+	assert.Equal(t, *records[0].ClientDeviceID, clientDeviceID)
+	assert.Equal(t, *records[0].ClientDeviceLabel, clientDeviceLabel)
+	assert.Equal(t, *records[0].ClientDeviceSource, clientDeviceSource)
 }
 
 func TestReadFileRoundTripPreservesDirection(t *testing.T) {

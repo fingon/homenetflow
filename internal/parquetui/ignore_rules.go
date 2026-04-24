@@ -641,9 +641,9 @@ func flowIgnoreRuleConditionSQL(rule IgnoreRule, inetAvailable bool) (string, []
 		return nil
 	}
 
-	appendEntity(rule.Match.AnyEntity, "src_host", "src_2ld", "src_tld", "src_ip", "dst_host", "dst_2ld", "dst_tld", "dst_ip")
-	appendEntity(rule.Match.SourceEntity, "src_host", "src_2ld", "src_tld", "src_ip")
-	appendEntity(rule.Match.DestinationEntity, "dst_host", "dst_2ld", "dst_tld", "dst_ip")
+	appendEntity(rule.Match.AnyEntity, "src_host", "src_2ld", "src_tld", "src_ip", "dst_host", "dst_2ld", "dst_tld", "dst_ip", "src_device_id", "src_device_label", "dst_device_id", "dst_device_label")
+	appendEntity(rule.Match.SourceEntity, "src_host", "src_2ld", "src_tld", "src_ip", "src_device_id", "src_device_label")
+	appendEntity(rule.Match.DestinationEntity, "dst_host", "dst_2ld", "dst_tld", "dst_ip", "dst_device_id", "dst_device_label")
 	if rule.Match.SourceIP != "" {
 		conditions = append(conditions, "src_ip = ?")
 		args = append(args, rule.Match.SourceIP)
@@ -722,8 +722,8 @@ func dnsIgnoreRuleConditionSQL(rule IgnoreRule, inetAvailable bool) (string, []a
 		return nil
 	}
 
-	appendEntity(rule.Match.AnyEntity, "client_host", "client_2ld", "client_tld", "client_ip", "query_name", "query_2ld", "query_tld")
-	appendEntity(rule.Match.SourceEntity, "client_host", "client_2ld", "client_tld", "client_ip")
+	appendEntity(rule.Match.AnyEntity, "client_host", "client_2ld", "client_tld", "client_ip", "client_device_id", "client_device_label", "query_name", "query_2ld", "query_tld")
+	appendEntity(rule.Match.SourceEntity, "client_host", "client_2ld", "client_tld", "client_ip", "client_device_id", "client_device_label")
 	appendEntity(rule.Match.DestinationEntity, "query_name", "query_2ld", "query_tld")
 	if rule.Match.SourceIP != "" {
 		conditions = append(conditions, "client_ip = ?")

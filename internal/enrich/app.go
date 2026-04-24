@@ -22,6 +22,9 @@ import (
 )
 
 const (
+	deviceSourceHost        = "host"
+	deviceSourceIP          = "ip"
+	deviceSourceMAC         = "mac"
 	localEntityTLD          = "Local"
 	localIPv4Host           = "Local IPv4"
 	localIPv6Host           = "Local IPv6"
@@ -383,6 +386,8 @@ func dnsLookupRecordForEvent(
 		record.Client2LD = clientNames.two
 		record.ClientTLD = clientNames.tld
 	}
+	clientDevice := localDeviceIdentity(event.clientIP, record.ClientIsPrivate, clientNames, nil)
+	applyClientDevice(&record, clientDevice)
 	return record, nil
 }
 
@@ -417,6 +422,8 @@ func enrichRecord(
 		record.Src2LD = srcNames.two
 		record.SrcTLD = srcNames.tld
 	}
+	srcDevice := localDeviceIdentity(record.SrcIP, record.SrcIsPrivate, srcNames, endpointMACCandidates(record, true))
+	applySourceDevice(&record, srcDevice)
 
 	record.DstHost = nil
 	record.Dst2LD = nil
@@ -426,8 +433,126 @@ func enrichRecord(
 		record.Dst2LD = dstNames.two
 		record.DstTLD = dstNames.tld
 	}
+	dstDevice := localDeviceIdentity(record.DstIP, record.DstIsPrivate, dstNames, endpointMACCandidates(record, false))
+	applyDestinationDevice(&record, dstDevice)
 
 	return record, nil
+}
+
+type deviceIdentity struct {
+	id     string
+	label  string
+	mac    *string
+	source string
+}
+
+func localDeviceIdentity(ipAddress string, isLocal bool, names *derivedNames, macCandidates []string) *deviceIdentity {
+	if !isLocal {
+		return nil
+	}
+	if len(macCandidates) > 0 {
+		macAddress := macCandidates[0]
+		return &deviceIdentity{
+			id:     "mac:" + macAddress,
+			label:  deviceLabel(ipAddress, names, macAddress),
+			mac:    &macAddress,
+			source: deviceSourceMAC,
+		}
+	}
+	if names != nil && names.host != "" && names.host != localIPv4Host && names.host != localIPv6Host {
+		return &deviceIdentity{
+			id:     "host:" + names.host,
+			label:  names.host,
+			source: deviceSourceHost,
+		}
+	}
+	if ipAddress == "" {
+		return nil
+	}
+	return &deviceIdentity{
+		id:     "ip:" + ipAddress,
+		label:  ipAddress,
+		source: deviceSourceIP,
+	}
+}
+
+func deviceLabel(ipAddress string, names *derivedNames, macAddress string) string {
+	if names != nil && names.host != "" && names.host != localIPv4Host && names.host != localIPv6Host {
+		return names.host
+	}
+	if ipAddress != "" {
+		return ipAddress
+	}
+	return macAddress
+}
+
+func applySourceDevice(record *model.FlowRecord, device *deviceIdentity) {
+	if device == nil {
+		record.SrcDeviceID = nil
+		record.SrcDeviceLabel = nil
+		record.SrcDeviceMAC = nil
+		record.SrcDeviceSource = nil
+		return
+	}
+	record.SrcDeviceID = &device.id
+	record.SrcDeviceLabel = &device.label
+	record.SrcDeviceMAC = device.mac
+	record.SrcDeviceSource = &device.source
+}
+
+func applyDestinationDevice(record *model.FlowRecord, device *deviceIdentity) {
+	if device == nil {
+		record.DstDeviceID = nil
+		record.DstDeviceLabel = nil
+		record.DstDeviceMAC = nil
+		record.DstDeviceSource = nil
+		return
+	}
+	record.DstDeviceID = &device.id
+	record.DstDeviceLabel = &device.label
+	record.DstDeviceMAC = device.mac
+	record.DstDeviceSource = &device.source
+}
+
+func applyClientDevice(record *model.DNSLookupRecord, device *deviceIdentity) {
+	if device == nil {
+		record.ClientDeviceID = nil
+		record.ClientDeviceLabel = nil
+		record.ClientDeviceMAC = nil
+		record.ClientDeviceSource = nil
+		return
+	}
+	record.ClientDeviceID = &device.id
+	record.ClientDeviceLabel = &device.label
+	record.ClientDeviceMAC = device.mac
+	record.ClientDeviceSource = &device.source
+}
+
+func endpointMACCandidates(record model.FlowRecord, sourceEndpoint bool) []string {
+	var candidates []*string
+	if sourceEndpoint {
+		candidates = []*string{record.InSrcMAC, record.OutSrcMAC}
+	} else {
+		candidates = []*string{record.OutDstMAC, record.InDstMAC}
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	result := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		normalizedMAC := normalizeMAC(*candidate)
+		if normalizedMAC == "" {
+			continue
+		}
+		if _, ok := seen[normalizedMAC]; ok {
+			continue
+		}
+		seen[normalizedMAC] = struct{}{}
+		result = append(result, normalizedMAC)
+	}
+	return result
 }
 
 func resolveNames(

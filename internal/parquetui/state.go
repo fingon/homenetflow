@@ -50,6 +50,13 @@ const (
 	GranularityIP       Granularity = "ip"
 )
 
+type LocalIdentity string
+
+const (
+	LocalIdentityAddress LocalIdentity = "address"
+	LocalIdentityDevice  LocalIdentity = "device"
+)
+
 type TableSort string
 
 const (
@@ -133,6 +140,7 @@ type QueryState struct {
 	Sort            TableSort
 	ToNs            int64
 	Metric          Metric
+	LocalIdentity   LocalIdentity
 	Preset          string
 }
 
@@ -157,6 +165,7 @@ type ClientState struct {
 	Granularity     string   `json:"granularity"`
 	HideIgnored     bool     `json:"hide_ignored"`
 	Include         []string `json:"include"`
+	LocalIdentity   string   `json:"local_identity"`
 	Metric          string   `json:"metric"`
 	NodeLimit       int      `json:"node_limit"`
 	Page            int      `json:"page"`
@@ -187,6 +196,7 @@ func ParseQueryState(r *http.Request) QueryState {
 		HideIgnored:     parseBoolDefaultTrue(query.Get("hide_ignored")),
 		HideIgnoredSet:  query.Has("hide_ignored"),
 		Include:         compactValues(query["include"]),
+		LocalIdentity:   LocalIdentityAddress,
 		Page:            defaultPage,
 		PageSize:        defaultPageSize,
 		Search:          strings.TrimSpace(query.Get("search")),
@@ -213,6 +223,10 @@ func ParseQueryState(r *http.Request) QueryState {
 
 	if granularity := Granularity(query.Get("granularity")); granularity.valid() {
 		state.Granularity = granularity
+	}
+
+	if localIdentity := LocalIdentity(query.Get("local_identity")); localIdentity.valid() {
+		state.LocalIdentity = localIdentity
 	}
 
 	if sort := TableSort(query.Get("sort")); sort.valid() {
@@ -299,6 +313,9 @@ func (s QueryState) normalized(span TimeSpan, pruneEntityActions bool) QueryStat
 	if !state.Granularity.valid() {
 		state.Granularity = Granularity2LD
 	}
+	if !state.LocalIdentity.valid() {
+		state.LocalIdentity = LocalIdentityAddress
+	}
 	if !state.AddressFamily.valid() {
 		state.AddressFamily = AddressFamilyAll
 	}
@@ -378,6 +395,9 @@ func (s QueryState) Values() url.Values {
 	}
 	values.Set("metric", string(s.Metric))
 	values.Set("granularity", string(s.Granularity))
+	if s.LocalIdentity != "" && s.LocalIdentity != LocalIdentityAddress {
+		values.Set("local_identity", string(s.LocalIdentity))
+	}
 	values.Set("sort", string(s.Sort))
 	if !s.HideIgnored {
 		values.Set("hide_ignored", "false")
@@ -460,6 +480,7 @@ func (s QueryState) ClientState() ClientState {
 		Granularity:     string(s.Granularity),
 		HideIgnored:     s.HideIgnored,
 		Include:         append([]string(nil), s.Include...),
+		LocalIdentity:   string(s.LocalIdentity),
 		Metric:          string(s.Metric),
 		NodeLimit:       s.NodeLimit,
 		Page:            s.Page,
@@ -661,6 +682,10 @@ func (m Metric) valid() bool {
 
 func (g Granularity) valid() bool {
 	return g == GranularityTLD || g == Granularity2LD || g == GranularityHostname || g == GranularityIP
+}
+
+func (i LocalIdentity) valid() bool {
+	return i == LocalIdentityAddress || i == LocalIdentityDevice
 }
 
 func (a AddressFamily) valid() bool {

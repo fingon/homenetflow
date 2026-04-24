@@ -60,6 +60,10 @@ var requiredColumns = []string{
 	"bytes",
 	"direction",
 	"dst_2ld",
+	"dst_device_id",
+	"dst_device_label",
+	"dst_device_mac",
+	"dst_device_source",
 	"dst_host",
 	"dst_ip",
 	"dst_is_private",
@@ -69,6 +73,10 @@ var requiredColumns = []string{
 	"protocol",
 	"src_port",
 	"src_2ld",
+	"src_device_id",
+	"src_device_label",
+	"src_device_mac",
+	"src_device_source",
 	"src_host",
 	"src_ip",
 	"src_is_private",
@@ -1114,7 +1122,7 @@ func (s *Service) filteredCTE(state QueryState) (string, []any, error) {
 		return s.filteredDNSLookupCTE(state)
 	}
 
-	srcExpr, dstExpr := entityExpressions(state.Granularity)
+	srcExpr, dstExpr := entityExpressionsForState(state)
 	whereClause, args := filterClause(state, srcExpr, dstExpr)
 	ignoreCondition, ignoreArgs, err := buildFlowIgnoreConditionSQL(s.enabledIgnoreRules(), s.inetSupportEnabled())
 	if err != nil {
@@ -1142,7 +1150,7 @@ func (s *Service) filteredCTE(state QueryState) (string, []any, error) {
 }
 
 func (s *Service) filteredRawFlowsCTE(state QueryState) (string, []any, error) {
-	srcScopeExpr, dstScopeExpr := entityExpressions(state.Granularity)
+	srcScopeExpr, dstScopeExpr := entityExpressionsForState(state)
 	srcDisplayExpr, dstDisplayExpr := entityExpressions(GranularityHostname)
 	whereClause, args := filterClause(state, srcScopeExpr, dstScopeExpr)
 	ignoreCondition, ignoreArgs, err := buildFlowIgnoreConditionSQL(s.enabledIgnoreRules(), s.inetSupportEnabled())
@@ -1215,7 +1223,7 @@ func flowSortOrderBy(sortKey FlowSort, sortDir FlowSortDir) string {
 }
 
 func (s *Service) filteredDNSLookupCTE(state QueryState) (string, []any, error) {
-	srcExpr, dstExpr := dnsLookupEntityExpressions(state.Granularity)
+	srcExpr, dstExpr := dnsLookupEntityExpressionsForState(state)
 	whereClause, args := filterClause(state, srcExpr, dstExpr)
 	answerExpr := quoteLiteral("")
 	if s.hasDNSLookupAnswer() {
@@ -1955,6 +1963,15 @@ func entityExpressions(granularity Granularity) (string, string) {
 	}
 }
 
+func entityExpressionsForState(state QueryState) (string, string) {
+	srcExpr, dstExpr := entityExpressions(state.Granularity)
+	if state.LocalIdentity != LocalIdentityDevice {
+		return srcExpr, dstExpr
+	}
+	return localDeviceEntityExpression("src_is_private", "src_device_label", srcExpr),
+		localDeviceEntityExpression("dst_is_private", "dst_device_label", dstExpr)
+}
+
 func dnsLookupEntityExpressions(granularity Granularity) (string, string) {
 	switch granularity {
 	case GranularityTLD:
@@ -1968,6 +1985,24 @@ func dnsLookupEntityExpressions(granularity Granularity) (string, string) {
 	default:
 		return local2LDExpression("client_is_private", "client_ip_version", "client_host", "client_2ld", "client_tld"), coalescedEntityExpression("query_2ld", "query_tld", "query_name")
 	}
+}
+
+func dnsLookupEntityExpressionsForState(state QueryState) (string, string) {
+	srcExpr, dstExpr := dnsLookupEntityExpressions(state.Granularity)
+	if state.LocalIdentity != LocalIdentityDevice {
+		return srcExpr, dstExpr
+	}
+	return localDeviceEntityExpression("client_is_private", "client_device_label", srcExpr), dstExpr
+}
+
+func localDeviceEntityExpression(privateColumn, labelColumn, fallbackExpr string) string {
+	return fmt.Sprintf(
+		"CASE WHEN %s AND NULLIF(%s, '') IS NOT NULL THEN %s ELSE %s END",
+		privateColumn,
+		labelColumn,
+		labelColumn,
+		fallbackExpr,
+	)
 }
 
 func coalescedEntityExpression(fields ...string) string {
@@ -2331,6 +2366,9 @@ func buildBreadcrumbs(state QueryState) []string {
 		"Granularity: " + strings.ToUpper(string(state.Granularity)),
 		"Metric: " + metricLabel,
 	}
+	if state.LocalIdentity == LocalIdentityDevice {
+		breadcrumbs = append(breadcrumbs, "Local: Device")
+	}
 	if len(state.Include) > 0 {
 		breadcrumbs = append(breadcrumbs, "Entity: "+strings.Join(state.Include, ", "))
 	}
@@ -2391,13 +2429,13 @@ func (s *Service) currentRevision() uint64 {
 }
 
 func (s *Service) detectINETSupport(ctx context.Context) bool {
-	query := "SELECT CAST('127.0.0.1' AS INET)"
-	var value string
+	query := "SELECT CAST('127.0.0.1' AS INET) IS NOT NULL"
+	var value bool
 	if err := s.db.QueryRowContext(ctx, query).Scan(&value); err != nil {
 		slog.Debug("DuckDB inet support unavailable", "err", err)
 		return false
 	}
-	return value != ""
+	return value
 }
 
 func (s *Service) hasDNSLookupData() bool {

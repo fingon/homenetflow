@@ -178,6 +178,7 @@ The UI includes:
 - a server-rendered timeline histogram with brush-based zooming
 - metric scaling by bytes or connections
 - global granularity switching across `tld`, `2ld`, `hostname`, and `ip`
+- a local identity toggle that can group local/private endpoints by inferred device while keeping public endpoints grouped by the selected granularity
 - entity selection, include/exclude filtering, and a sortable flows table
 - capped node counts at granular levels with a `Rest` bucket
 - private-aware graph coloring: private nodes are green, mixed nodes are yellow, public nodes use the default blue
@@ -191,6 +192,8 @@ The UI uses htmx for navigation and filter updates, with only a small amount of 
 The UI expects enriched parquet files and validates that they carry the enrichment manifest metadata. It also builds summary parquet files; their schema and metadata are documented in [doc/schema.md](doc/schema.md).
 
 At `tld` and `2ld` granularities, local entities use `Local IPv4`, `Local IPv6`, or named local buckets. Public unresolved entities use `Unknown public`.
+
+When local identity is set to `device`, private/local endpoints use local device identity derived during enrichment. Public endpoints still use the selected granularity. Long ranges use summary-backed `device+tld` and `device+2ld` views; `device+hostname` and `device+ip` remain short-range raw-flow investigation views.
 
 Views over 7 days are served from UI summaries instead of raw flow rows. Ignored-traffic rules use summary-safe dimensions: entities, host/IP identity, CIDR, protocol, service port, direction, and address family.
 

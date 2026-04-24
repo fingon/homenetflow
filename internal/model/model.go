@@ -10,7 +10,7 @@ import (
 const (
 	DNSAnswerNXDOMAIN               = "NXDOMAIN"
 	DNSAnswerSERVFAIL               = "SERVFAIL"
-	EnrichmentLogicVersion          = 10
+	EnrichmentLogicVersion          = 11
 	EnrichmentManifestVersion       = 1
 	IPVersionUnknown          int32 = 0
 	IPVersion4                int32 = 4
@@ -19,7 +19,7 @@ const (
 	PeriodHour                      = "hour"
 	PeriodMonth                     = "month"
 	RefreshManifestVersion          = 2
-	UISummaryLogicVersion           = 11
+	UISummaryLogicVersion           = 12
 	UISummaryManifestVersion        = 1
 )
 
@@ -169,53 +169,65 @@ func NewUISummaryManifest(sourceFile SourceFile, kind, granularity string, spanS
 }
 
 type FlowRecord struct {
-	TimeStartNs  int64
-	TimeEndNs    int64
-	DurationNs   int64
-	IPVersion    int32
-	Protocol     int32
-	SrcIP        string
-	DstIP        string
-	SrcPort      int32
-	DstPort      int32
-	Packets      int64
-	Bytes        int64
-	RouterIP     *string
-	NextHopIP    *string
-	SrcAS        *int32
-	DstAS        *int32
-	SrcMask      *int32
-	DstMask      *int32
-	Direction    *int32
-	TCPFlags     *int32
-	InSrcMAC     *string
-	InDstMAC     *string
-	OutSrcMAC    *string
-	OutDstMAC    *string
-	SrcHost      *string
-	DstHost      *string
-	Src2LD       *string
-	Dst2LD       *string
-	SrcTLD       *string
-	DstTLD       *string
-	SrcIsPrivate bool
-	DstIsPrivate bool
+	TimeStartNs     int64
+	TimeEndNs       int64
+	DurationNs      int64
+	IPVersion       int32
+	Protocol        int32
+	SrcIP           string
+	DstIP           string
+	SrcPort         int32
+	DstPort         int32
+	Packets         int64
+	Bytes           int64
+	RouterIP        *string
+	NextHopIP       *string
+	SrcAS           *int32
+	DstAS           *int32
+	SrcMask         *int32
+	DstMask         *int32
+	Direction       *int32
+	TCPFlags        *int32
+	InSrcMAC        *string
+	InDstMAC        *string
+	OutSrcMAC       *string
+	OutDstMAC       *string
+	SrcHost         *string
+	DstHost         *string
+	SrcDeviceID     *string
+	DstDeviceID     *string
+	SrcDeviceLabel  *string
+	DstDeviceLabel  *string
+	SrcDeviceMAC    *string
+	DstDeviceMAC    *string
+	SrcDeviceSource *string
+	DstDeviceSource *string
+	Src2LD          *string
+	Dst2LD          *string
+	SrcTLD          *string
+	DstTLD          *string
+	SrcIsPrivate    bool
+	DstIsPrivate    bool
 }
 
 type DNSLookupRecord struct {
-	Answer          string
-	TimeStartNs     int64
-	ClientIP        string
-	ClientHost      *string
-	Client2LD       *string
-	ClientTLD       *string
-	QueryName       string
-	Query2LD        *string
-	QueryTLD        *string
-	QueryType       string
-	ClientIPVersion int32
-	Lookups         int64
-	ClientIsPrivate bool
+	Answer             string
+	TimeStartNs        int64
+	ClientIP           string
+	ClientHost         *string
+	ClientDeviceID     *string
+	ClientDeviceLabel  *string
+	ClientDeviceMAC    *string
+	ClientDeviceSource *string
+	Client2LD          *string
+	ClientTLD          *string
+	QueryName          string
+	Query2LD           *string
+	QueryTLD           *string
+	QueryType          string
+	ClientIPVersion    int32
+	Lookups            int64
+	ClientIsPrivate    bool
 }
 
 type FlowParser interface {
