@@ -168,41 +168,38 @@ func AppShell(dashboard DashboardData) g.Node {
 						Span(Class("panel-subtle hover-help timeline-help"), g.Text("Drag to zoom")),
 					),
 					Div(
-						ID("histogram"),
-						Class("histogram"),
-						Data("span-start-ns", strconv.FormatInt(dashboard.Span.StartNs, 10)),
-						Data("span-end-ns", strconv.FormatInt(dashboard.Span.EndNs, 10)),
-						renderHistogramSVG(state.Metric, dashboard.Histogram),
+						Class("timeline-layout"),
+						TotalsPanel(state, dashboard.Graph),
+						Div(
+							ID("histogram"),
+							Class("histogram"),
+							Data("span-start-ns", strconv.FormatInt(dashboard.Span.StartNs, 10)),
+							Data("span-end-ns", strconv.FormatInt(dashboard.Span.EndNs, 10)),
+							renderHistogramSVG(state.Metric, dashboard.Histogram),
+						),
 					),
 				),
 				Section(
 					Class("section-panel section-block"),
 					ID("graph-section"),
 					Div(Class("panel-heading section-heading"), H2(g.Text("Graph"))),
-					Div(
-						Class("content-grid"),
-						ID("graph-section-content"),
-						Section(
-							Class("graph-panel"),
-							ID("graph-panel"),
+					Section(
+						Class("graph-panel"),
+						ID("graph-panel"),
+						Div(
+							ID("graph-canvas"),
+							Class("graph-canvas"),
 							Div(
-								ID("graph-canvas"),
-								Class("graph-canvas"),
-								Div(
-									Class("legend-line graph-legend"),
-									Span(Class("legend-item"), g.Text("Node size = selected metric")),
-									Span(Class("legend-item"), g.Text("Edge width = selected metric")),
-									Span(Class("legend-item hover-help graph-help"), g.Text("Scroll to zoom, drag to pan")),
-									Span(Class("legend-item hover-help graph-help"), g.Text("Labels expand with zoom and hover")),
-								),
-								renderGraphSVG(state, dashboard.Graph),
+								Class("legend-line graph-legend"),
+								Span(Class("legend-item"), g.Text("Node size = selected metric")),
+								Span(Class("legend-item"), g.Text("Edge width = selected metric")),
+								Span(Class("legend-item hover-help graph-help"), g.Text("Scroll to zoom, drag to pan")),
+								Span(Class("legend-item hover-help graph-help"), g.Text("Labels expand with zoom and hover")),
 							),
+							ActiveFiltersOverlay(state),
+							renderGraphSVG(state, dashboard.Graph),
 						),
-						Aside(
-							Class("side-panel"),
-							ID("summary-panel"),
-							SummaryPanel(state, dashboard.Graph),
-						),
+						selectedPanel(state, dashboard.Graph),
 					),
 				),
 			),
@@ -248,47 +245,58 @@ func FlowDetailShell(flows FlowDetailData) g.Node {
 }
 
 func SummaryPanel(state QueryState, graph GraphData) g.Node {
-	currentAddressFamily := normalizedAddressFamily(state.AddressFamily)
-	addressFamilyChip := g.Node(nil)
-	if currentAddressFamily != AddressFamilyAll {
-		addressFamilyChip = Span(Class("chip"), g.Text("Address Family: "+addressFamilyLabel(currentAddressFamily)))
-	}
-	currentDirection := normalizedDirection(state.Direction)
-	directionChip := g.Node(nil)
-	if currentDirection != DirectionBoth {
-		directionChip = Span(Class("chip"), g.Text("Direction: "+directionLabel(currentDirection)))
-	}
-	protocolChip := g.Node(nil)
-	if state.Protocol > 0 {
-		protocolChip = Span(Class("chip"), g.Text("Protocol: "+rawFlowProtocolLabel(state.Protocol)))
-	}
-	portChip := g.Node(nil)
-	if state.Port > 0 {
-		portChip = Span(Class("chip"), g.Text("Port: "+strconv.FormatInt(int64(state.Port), 10)))
-	}
-
 	return Div(
 		Class("summary-panel"),
 		sectionTitle("Active Filters"),
-		Div(
-			Class("filter-list"),
-			Span(Class("chip"), g.Text("Time: "), timestampRangeNode(state.FromNs, state.ToNs)),
-			Span(Class("chip"), g.Text(ignoreVisibilityLabel(state.HideIgnored))),
-			addressFamilyChip,
-			directionChip,
-			protocolChip,
-			portChip,
-			renderNodes(state.Include, func(item string) g.Node {
-				return Span(Class("chip"), g.Text("Entity: "+item))
-			}),
-			renderNodes(state.Exclude, func(item string) g.Node {
-				return Span(Class("chip"), g.Text("Exclude: "+item))
-			}),
-		),
+		Div(append([]g.Node{Class("filter-list")}, activeFilterChips(state)...)...),
 		sectionTitle("Totals"),
 		Div(append([]g.Node{Class("stats-grid")}, totalStatBlocks(state, graph)...)...),
 		selectedPanel(state, graph),
 	)
+}
+
+func ActiveFiltersOverlay(state QueryState) g.Node {
+	return Div(
+		Class("graph-filter-overlay"),
+		Div(append([]g.Node{Class("filter-list")}, activeFilterChips(state)...)...),
+	)
+}
+
+func TotalsPanel(state QueryState, graph GraphData) g.Node {
+	return Aside(
+		Class("timeline-totals-panel"),
+		g.Attr("aria-label", "Totals"),
+		Div(append([]g.Node{Class("stats-grid timeline-stats-grid")}, totalStatBlocks(state, graph)...)...),
+	)
+}
+
+func activeFilterChips(state QueryState) []g.Node {
+	nodes := []g.Node{
+		Span(Class("chip"), g.Text("Time: "), timestampRangeNode(state.FromNs, state.ToNs)),
+		Span(Class("chip"), g.Text(ignoreVisibilityLabel(state.HideIgnored))),
+	}
+
+	currentAddressFamily := normalizedAddressFamily(state.AddressFamily)
+	if currentAddressFamily != AddressFamilyAll {
+		nodes = append(nodes, Span(Class("chip"), g.Text("Address Family: "+addressFamilyLabel(currentAddressFamily))))
+	}
+	currentDirection := normalizedDirection(state.Direction)
+	if currentDirection != DirectionBoth {
+		nodes = append(nodes, Span(Class("chip"), g.Text("Direction: "+directionLabel(currentDirection))))
+	}
+	if state.Protocol > 0 {
+		nodes = append(nodes, Span(Class("chip"), g.Text("Protocol: "+rawFlowProtocolLabel(state.Protocol))))
+	}
+	if state.Port > 0 {
+		nodes = append(nodes, Span(Class("chip"), g.Text("Port: "+strconv.FormatInt(int64(state.Port), 10))))
+	}
+	for _, item := range state.Include {
+		nodes = append(nodes, Span(Class("chip"), g.Text("Entity: "+item)))
+	}
+	for _, item := range state.Exclude {
+		nodes = append(nodes, Span(Class("chip"), g.Text("Exclude: "+item)))
+	}
+	return nodes
 }
 
 func totalStatBlocks(state QueryState, graph GraphData) []g.Node {
@@ -420,58 +428,52 @@ func selectedPanel(state QueryState, graph GraphData) g.Node {
 
 func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 	if graph.SelectedEdge != nil {
-		nodes := []g.Node{
-			sectionTitle("Selected Edge"),
-			P(Class(dnsResultClass("", graph.SelectedEdge.DNSResultState)), g.Text(fmt.Sprintf("%s -> %s", graph.SelectedEdge.Source, graph.SelectedEdge.Destination))),
-		}
+		edge := graph.SelectedEdge
+		detailNodes := []g.Node(nil)
+		detailClass := strings.TrimSpace("selected-item-name " + dnsResultClass("", edge.DNSResultState))
+		metricNodes := []g.Node(nil)
 		if graph.SelectedEdge.Ignored {
-			nodes = append(nodes, P(Class("panel-subtle ignored-copy"), g.Text("Matches an ignored-traffic rule.")))
+			metricNodes = append(metricNodes, selectedItemChip("Ignored", "matches rule", "ignored-copy"))
 		}
 		if graph.ActiveMetric != MetricDNSLookups {
-			nodes = append(nodes, P(g.Text("Bytes: "+formatMetricValue(MetricBytes, graph.SelectedEdge.Bytes))))
+			metricNodes = append(metricNodes, selectedItemChip("Bytes", formatMetricValue(MetricBytes, edge.Bytes), ""))
 		}
-		nodes = append(nodes,
-			P(g.Text(connectionsTotalLabel(graph.ActiveMetric)+": "+formatMetricValue(connectionsDisplayMetric(graph.ActiveMetric), graph.SelectedEdge.Connections))),
-			P(g.Text("First seen: "), timestampNode(graph.SelectedEdge.FirstSeenNs, now)),
-			P(g.Text("Last seen: "), timestampNode(graph.SelectedEdge.LastSeenNs, now)),
+		metricNodes = append(metricNodes,
+			selectedItemChip(connectionsTotalLabel(graph.ActiveMetric), formatMetricValue(connectionsDisplayMetric(graph.ActiveMetric), edge.Connections), ""),
+			selectedItemNode("First seen", timestampNode(edge.FirstSeenNs, now), ""),
+			selectedItemNode("Last seen", timestampNode(edge.LastSeenNs, now), ""),
 		)
 		buttons := []g.Node{navLink(deselectStateURL(state), "action-button", "Deselect")}
-		if !graph.SelectedEdge.Synthetic {
-			buttons = append([]g.Node{navLink(selectedEdgeIgnoreRuleURL(state, graph.SelectedEdge), actionButtonClass, "Ignore traffic like this")}, buttons...)
+		if !edge.Synthetic {
+			buttons = append([]g.Node{navLink(selectedEdgeIgnoreRuleURL(state, edge), actionButtonClass, "Ignore traffic like this")}, buttons...)
 		}
-		nodes = append(nodes, Div(append([]g.Node{Class("button-row")}, buttons...)...))
-		if flowDetailLinksEnabled(state, graph.SelectedEdge.Synthetic) {
-			nodes = append(nodes, Div(
-				Class("button-row"),
-				navLink(selectedFlowEdgeURL(state, graph.SelectedEdge.Source, graph.SelectedEdge.Destination), actionButtonClass, "Show matching flows"),
-			))
+		if flowDetailLinksEnabled(state, edge.Synthetic) {
+			buttons = append(buttons, navLink(selectedFlowEdgeURL(state, edge.Source, edge.Destination), actionButtonClass, "Show matching flows"))
 		}
-		return Div(nodes...)
+		return selectedItemPanel(
+			"Selected Edge",
+			Span(Class(detailClass), g.Text(fmt.Sprintf("%s -> %s", edge.Source, edge.Destination))),
+			metricNodes,
+			buttons,
+			detailNodes,
+		)
 	}
 
 	if graph.SelectedNode == nil {
-		nodes := []g.Node(nil)
-		if !state.EntityActionsEnabled() {
-			nodes = append(nodes,
-				sectionTitle("Selected Item"),
-				P(Class("panel-subtle"), g.Text(entityActionsUnavailableMessage)),
-			)
-			return Div(nodes...)
-		}
-		nodes = append(nodes,
-			sectionTitle("Selected Item"),
-			P(Class("panel-subtle"), g.Text("Click a node to highlight it and inspect its peers.")),
-		)
-		return Div(nodes...)
+		return nil
 	}
 	if !state.EntityActionsEnabled() {
+		selectedNode := graph.SelectedNode
 		return Div(
-			sectionTitle("Selected Entity"),
-			P(Class(dnsResultClass("", graph.SelectedNode.DNSResultState)), g.Text(graph.SelectedNode.Label)),
-			P(Class("panel-subtle"), g.Text(entityActionsUnavailableMessage)),
+			Class("selected-item-panel"),
 			Div(
-				Class("button-row"),
-				flowDetailEntityLink(state, graph.SelectedNode),
+				Class("selected-item-row"),
+				Div(
+					Class("selected-item-main"),
+					Span(Class("selected-item-kind"), g.Text("Selected Entity")),
+					Span(Class(strings.TrimSpace("selected-item-name "+dnsResultClass("", selectedNode.DNSResultState))), g.Text(selectedNode.Label)),
+					Span(Class("chip"), g.Text(entityActionsUnavailableMessage)),
+				),
 			),
 		)
 	}
@@ -481,18 +483,15 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 	excludeURL := excludeEntityStateURL(state, selectedNode.ID)
 	drillURL := drillStateURL(state, selectedNode.ID)
 
-	nodes := []g.Node{
-		sectionTitle("Selected Entity"),
-		P(Class(dnsResultClass("", selectedNode.DNSResultState)), g.Text(selectedNode.Label)),
-	}
+	metricNodes := []g.Node(nil)
 	if selectedNode.Ignored {
-		nodes = append(nodes, P(Class("panel-subtle ignored-copy"), g.Text("Matches an ignored-traffic rule.")))
+		metricNodes = append(metricNodes, selectedItemChip("Ignored", "matches rule", "ignored-copy"))
 	}
 	if selectedNode.Ingress != 0 {
-		nodes = append(nodes, P(g.Text("Ingress: "+formatMetricValue(graph.ActiveMetric, selectedNode.Ingress))))
+		metricNodes = append(metricNodes, selectedItemChip("Ingress", formatMetricValue(graph.ActiveMetric, selectedNode.Ingress), ""))
 	}
 	if selectedNode.Egress != 0 {
-		nodes = append(nodes, P(g.Text("Egress: "+formatMetricValue(graph.ActiveMetric, selectedNode.Egress))))
+		metricNodes = append(metricNodes, selectedItemChip("Egress", formatMetricValue(graph.ActiveMetric, selectedNode.Egress), ""))
 	}
 	buttons := []g.Node{
 		navLink(entityURL, actionButtonClass, "Filter to this entity"),
@@ -504,17 +503,76 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 	if !selectedNode.Synthetic {
 		buttons = append([]g.Node{navLink(selectedNodeIgnoreRuleURL(state, selectedNode), actionButtonClass, "Ignore traffic like this")}, buttons...)
 	}
-	nodes = append(nodes,
-		Div(append([]g.Node{Class("button-row")}, buttons...)...),
-		sectionTitle("Peers"),
+	detailNodes := selectedPeerDetails(state, graph)
+	return selectedItemPanel(
+		"Selected Entity",
+		Span(Class(strings.TrimSpace("selected-item-name "+dnsResultClass("", selectedNode.DNSResultState))), g.Text(selectedNode.Label)),
+		metricNodes,
+		buttons,
+		detailNodes,
+	)
+}
+
+func selectedItemPanel(kind string, name g.Node, metrics, buttons, detailNodes []g.Node) g.Node {
+	if len(detailNodes) > 0 {
+		buttons = append(buttons, Button(
+			Type("button"),
+			Class("action-button"),
+			g.Attr("aria-label", "Expand Selected Peers"),
+			g.Attr("aria-controls", "selected-peers-content"),
+			g.Attr("aria-expanded", "false"),
+			g.Attr("data-collapsible-toggle", ""),
+			Data("section-title", "Selected Peers"),
+			g.Text("Peers"),
+		))
+	}
+
+	nodes := []g.Node{
+		Div(
+			Class("selected-item-row"),
+			Div(
+				Class("selected-item-main"),
+				Span(Class("selected-item-kind"), g.Text(kind)),
+				name,
+				g.Group(metrics),
+			),
+			Div(append([]g.Node{Class("button-row selected-item-actions")}, buttons...)...),
+		),
+	}
+	if len(detailNodes) > 0 {
+		nodes = append(nodes, Div(
+			ID("selected-peers-content"),
+			Class("selected-peers-content is-collapsed"),
+			g.Group(detailNodes),
+		))
+	}
+	return Div(append([]g.Node{Class("selected-item-panel")}, nodes...)...)
+}
+
+func selectedItemChip(label, value, className string) g.Node {
+	return selectedItemNode(label, g.Text(value), className)
+}
+
+func selectedItemNode(label string, value g.Node, className string) g.Node {
+	return Span(
+		Class(strings.TrimSpace("chip selected-item-metric "+className)),
+		g.Text(label+": "),
+		value,
+	)
+}
+
+func selectedPeerDetails(state QueryState, graph GraphData) []g.Node {
+	if len(graph.SelectedNodePeers) == 0 {
+		return nil
+	}
+	return []g.Node{
 		Ul(
 			Class("rank-list"),
 			renderNodes(graph.SelectedNodePeers, func(peer DetailPeer) g.Node {
 				return Li(rankingItem(state, selectEntityStateURL(state, peer.Entity), dnsResultStateSuccess, false, peer.Entity, formatMetricValue(graph.ActiveMetric, peer.MetricValue)))
 			}),
 		),
-	)
-	return Div(nodes...)
+	}
 }
 
 func BreakdownPanel(state QueryState, graph GraphData) g.Node {

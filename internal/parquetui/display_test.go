@@ -449,6 +449,8 @@ func TestDNSLookupPanelsHideBytes(t *testing.T) {
 
 	assert.Assert(t, !strings.Contains(selectedEdgeMarkup, "Bytes:"))
 	assert.Assert(t, strings.Contains(selectedEdgeMarkup, "DNS Lookups: 7"))
+	assert.Assert(t, strings.Contains(selectedEdgeMarkup, `class="selected-item-panel"`))
+	assert.Assert(t, strings.Contains(selectedEdgeMarkup, `class="selected-item-row"`))
 }
 
 func TestSelectedPanelRendersRawFlowLinkForEligibleSelections(t *testing.T) {
@@ -875,6 +877,24 @@ func TestSelectedPanelDisablesEntityActionsForLongRange(t *testing.T) {
 	assert.Assert(t, !strings.Contains(markup, "Show matching flows"))
 }
 
+func TestSelectedPanelOmitsPlaceholderWhenNothingSelected(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, AppShell(DashboardData{
+		State: QueryState{
+			FromNs:      10,
+			ToNs:        20,
+			Metric:      MetricBytes,
+			Granularity: Granularity2LD,
+		},
+		Span:  TimeSpan{StartNs: 10, EndNs: 20},
+		Graph: GraphData{ActiveMetric: MetricBytes},
+	}))
+
+	assert.Assert(t, !strings.Contains(markup, `class="selected-item-panel"`))
+	assert.Assert(t, !strings.Contains(markup, "Click a node to highlight it"))
+}
+
 func TestBreakdownPanelRendersTrafficBreakdown(t *testing.T) {
 	t.Parallel()
 
@@ -967,6 +987,9 @@ func TestSelectedPanelPeerLinksSelectPeerEntity(t *testing.T) {
 
 	peerAnchor := anchorMarkupForLabel(t, markup, "dns.google")
 
+	assert.Assert(t, strings.Contains(markup, `id="selected-peers-content"`))
+	assert.Assert(t, strings.Contains(markup, `class="selected-peers-content is-collapsed"`))
+	assert.Assert(t, strings.Contains(markup, `aria-controls="selected-peers-content"`))
 	assert.Assert(t, strings.Contains(peerAnchor, `class="table-link ranking-link"`))
 	assert.Assert(t, strings.Contains(peerAnchor, `class="ranking-label"`))
 	assert.Assert(t, strings.Contains(peerAnchor, `class="ranking-value"`))
@@ -1207,6 +1230,34 @@ func TestSummaryPanelActiveFiltersOnlyRenderTimeAndEntityFilters(t *testing.T) {
 	assert.Assert(t, !strings.Contains(summaryMarkup, "Granularity:"))
 }
 
+func TestActiveFiltersOverlayRendersFilterChips(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, ActiveFiltersOverlay(QueryState{
+		AddressFamily: AddressFamilyIPv6,
+		Direction:     DirectionEgress,
+		Exclude:       []string{"dns.google"},
+		FromNs:        10,
+		Granularity:   GranularityHostname,
+		Include:       []string{"alpha.lan"},
+		Metric:        MetricConnections,
+		Port:          443,
+		Protocol:      6,
+		ToNs:          20,
+	}))
+
+	assert.Assert(t, strings.Contains(markup, `class="graph-filter-overlay"`))
+	assert.Assert(t, strings.Contains(markup, "Time:"))
+	assert.Assert(t, strings.Contains(markup, "Address Family: IPv6"))
+	assert.Assert(t, strings.Contains(markup, "Direction: Egress"))
+	assert.Assert(t, strings.Contains(markup, "Protocol: 6 (TCP)"))
+	assert.Assert(t, strings.Contains(markup, "Port: 443"))
+	assert.Assert(t, strings.Contains(markup, "Entity: alpha.lan"))
+	assert.Assert(t, strings.Contains(markup, "Exclude: dns.google"))
+	assert.Assert(t, !strings.Contains(markup, "Metric:"))
+	assert.Assert(t, !strings.Contains(markup, "Granularity:"))
+}
+
 func TestSummaryPanelRendersAddressFamilyFilterChip(t *testing.T) {
 	t.Parallel()
 
@@ -1251,6 +1302,10 @@ func TestAppShellRendersRankingsInSidebar(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `data-rankings-tab="flows"`))
 	assert.Assert(t, strings.Contains(markup, `id="rankings-panel-entities"`))
 	assert.Assert(t, strings.Contains(markup, `id="rankings-panel-flows"`))
+	assert.Assert(t, strings.Contains(markup, `class="timeline-totals-panel"`))
+	assert.Assert(t, strings.Contains(markup, `class="graph-filter-overlay"`))
+	assert.Assert(t, !strings.Contains(markup, `id="summary-panel"`))
+	assert.Assert(t, !strings.Contains(markup, `class="side-panel"`))
 	assert.Assert(t, !strings.Contains(markup, `aria-label="Collapse Graph"`))
 	assert.Assert(t, !strings.Contains(markup, `aria-label="Collapse Rankings"`))
 	assert.Assert(t, strings.Contains(markup, `aria-label="Expand Flows Table"`))
@@ -1300,7 +1355,7 @@ func TestAppShellRendersRankingsVisibleByDefault(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `id="rankings-panel-flows" role="tabpanel" aria-labelledby="rankings-tab-flows" hidden`))
 	assert.Assert(t, !strings.Contains(markup, `aria-label="Collapse Graph"`))
 	assert.Assert(t, !strings.Contains(markup, `aria-label="Collapse Rankings"`))
-	assert.Assert(t, !strings.Contains(markup, `class="content-grid is-collapsed"`))
+	assert.Assert(t, !strings.Contains(markup, `class="content-grid"`))
 	assert.Assert(t, !strings.Contains(markup, `class="rankings-panel is-collapsed"`))
 }
 
@@ -1332,9 +1387,13 @@ func TestAppShellRendersBreakdownBesideTimelineAndGraph(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `class="dashboard-main"`))
 	assert.Assert(t, strings.Contains(markup, `class="dashboard-primary"`))
 	assert.Assert(t, strings.Contains(markup, `class="dashboard-sidebar has-breakdown"`))
+	assert.Assert(t, strings.Contains(markup, `class="timeline-layout"`))
+	assert.Assert(t, strings.Contains(markup, `class="timeline-totals-panel"`))
 	assert.Assert(t, strings.Contains(markup, `id="histogram"`))
 	assert.Assert(t, strings.Contains(markup, `id="graph-section"`))
+	assert.Assert(t, strings.Contains(markup, `class="graph-filter-overlay"`))
 	assert.Assert(t, strings.Contains(markup, `id="breakdown-section"`))
+	assert.Assert(t, !strings.Contains(markup, `id="summary-panel"`))
 	assert.Assert(t, !strings.Contains(markup, `data-collapses-with="graph-section-content"`))
 	assert.Assert(t, strings.Contains(markup, "Protocols"))
 	assert.Assert(t, !strings.Contains(markup, `aria-label="Collapse Breakdown"`))
