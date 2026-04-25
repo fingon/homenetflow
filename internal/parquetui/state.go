@@ -12,20 +12,23 @@ import (
 )
 
 const (
-	defaultEdgeLimit = 100
-	defaultPage      = 1
-	defaultPageSize  = 100
-	defaultPort      = 8080
-	falseValue       = "false"
-	trueValue        = "true"
-	entityActionDays = 7
-	presetAllValue   = "all"
-	presetHourValue  = "1h"
-	presetDayValue   = "1d"
-	presetDayLegacy  = "24h"
-	presetWeekValue  = "7d"
-	presetMonthValue = "30d"
-	flowSortDirParam = "flow_sort_dir"
+	defaultEdgeLimit      = 100
+	defaultGraphNodeLimit = 10
+	defaultPage           = 1
+	defaultPageSize       = 100
+	defaultPort           = 8080
+	falseValue            = "false"
+	maxEdgeLimit          = defaultEdgeLimit
+	maxNodeLimit          = 50
+	trueValue             = "true"
+	entityActionDays      = 7
+	presetAllValue        = "all"
+	presetHourValue       = "1h"
+	presetDayValue        = "1d"
+	presetDayLegacy       = "24h"
+	presetWeekValue       = "7d"
+	presetMonthValue      = "30d"
+	flowSortDirParam      = "flow_sort_dir"
 )
 
 var (
@@ -336,7 +339,7 @@ func (s QueryState) normalized(span TimeSpan, pruneEntityActions bool) QueryStat
 	if !state.Sort.valid() {
 		state.Sort = defaultSortForMetric(state.Metric)
 	}
-	if state.EdgeLimit < 0 {
+	if state.EdgeLimit <= 0 || state.EdgeLimit > maxEdgeLimit {
 		state.EdgeLimit = defaultEdgeLimit
 	}
 	if state.Page <= 0 {
@@ -363,6 +366,9 @@ func (s QueryState) normalized(span TimeSpan, pruneEntityActions bool) QueryStat
 	}
 	if state.NodeLimit == 0 {
 		state.NodeLimit = defaultNodeLimit(state.Granularity)
+	}
+	if state.NodeLimit < 0 || state.NodeLimit > maxNodeLimit {
+		state.NodeLimit = maxNodeLimit
 	}
 	if pruneEntityActions && !state.EntityActionsEnabled() {
 		if state.Granularity != GranularityTLD && state.Granularity != Granularity2LD {
@@ -571,7 +577,7 @@ func (s QueryState) layoutCacheState() QueryState {
 }
 
 func defaultNodeLimit(_ Granularity) int {
-	return 10
+	return defaultGraphNodeLimit
 }
 
 func defaultSortForMetric(metric Metric) TableSort {

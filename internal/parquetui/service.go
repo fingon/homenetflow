@@ -196,6 +196,8 @@ type GraphData struct {
 	Edges             []Edge `json:"edges"`
 	HiddenEdgeCount   int    `json:"hiddenEdgeCount"`
 	HiddenNodeCount   int    `json:"hiddenNodeCount"`
+	LayoutHeightPx    int
+	LayoutWidthPx     int
 	Nodes             []Node `json:"nodes"`
 	NodePositions     map[string]LayoutPoint
 	SelectedEdge      *Edge          `json:"selectedEdge"`
@@ -289,7 +291,7 @@ type Service struct {
 	globPath              string
 	histogramCache        *resultCache[[]HistogramBin]
 	inetAvailable         bool
-	layoutCache           *resultCache[map[string]LayoutPoint]
+	layoutCache           *resultCache[LayoutData]
 	reloadInterval        time.Duration
 	srcParquetPath        string
 	summaryGraphCache     *resultCache[*summaryGraphSnapshotData]
@@ -334,7 +336,7 @@ func NewService(ctx context.Context, srcParquetPath string, reloadInterval time.
 		globPath:          globPath,
 		histogramCache:    newResultCache[[]HistogramBin](resultCacheLimit),
 		ignoreRulePath:    ignoreRulesPath(absPath),
-		layoutCache:       newResultCache[map[string]LayoutPoint](resultCacheLimit),
+		layoutCache:       newResultCache[LayoutData](resultCacheLimit),
 		reloadInterval:    reloadInterval,
 		srcParquetPath:    absPath,
 		summaryGraphCache: newResultCache[*summaryGraphSnapshotData](resultCacheLimit),
@@ -409,6 +411,8 @@ func (s *Service) graphWithSpan(ctx context.Context, state QueryState, span Time
 			ActiveGranularity: state.Granularity,
 			ActiveMetric:      state.Metric,
 			Breadcrumbs:       buildBreadcrumbs(state),
+			LayoutHeightPx:    graphHeightPx,
+			LayoutWidthPx:     graphWidthPx,
 			NodePositions:     map[string]LayoutPoint{},
 			Span:              span,
 		}, nil
@@ -503,7 +507,7 @@ func (s *Service) graphWithSpan(ctx context.Context, state QueryState, span Time
 	var breakdown SelectionBreakdown
 	var peers []DetailPeer
 	var sparkline []HistogramBin
-	var nodePositions map[string]LayoutPoint
+	var graphLayout LayoutData
 	var selectionDuration time.Duration
 	var layoutDuration time.Duration
 	group, groupContext = errgroup.WithContext(ctx)
@@ -517,7 +521,7 @@ func (s *Service) graphWithSpan(ctx context.Context, state QueryState, span Time
 	group.Go(func() error {
 		startTime := time.Now()
 		var queryErr error
-		nodePositions, queryErr = s.layoutPositions(groupContext, state)
+		graphLayout, queryErr = s.layoutPositions(groupContext, state)
 		layoutDuration = time.Since(startTime)
 		return queryErr
 	})
@@ -534,8 +538,10 @@ func (s *Service) graphWithSpan(ctx context.Context, state QueryState, span Time
 		Edges:             visibleEdges,
 		HiddenEdgeCount:   hiddenEdgeCount,
 		HiddenNodeCount:   max(0, len(nodeTotals)-countNonSynthetic(nodeTotals, keepLookup)),
+		LayoutHeightPx:    graphLayout.HeightPx,
+		LayoutWidthPx:     graphLayout.WidthPx,
 		Nodes:             nodes,
-		NodePositions:     nodePositions,
+		NodePositions:     graphLayout.Positions,
 		SelectedEdge:      selectedEdge,
 		SelectedNode:      selectedNode,
 		SelectedNodePeers: peers,
@@ -2235,32 +2241,37 @@ func chooseKeepEntities(nodeTotals []Node, state QueryState) []string {
 		return entities
 	}
 
-	forcedLookup := make(map[string]struct{}, len(state.Include)+1)
-	for _, entity := range state.Include {
-		forcedLookup[entity] = struct{}{}
-	}
+	forcedEntities := make([]string, 0, len(state.Include)+1)
 	if state.SelectedEntity != "" && state.SelectedEntity != graphRestID {
-		forcedLookup[state.SelectedEntity] = struct{}{}
+		forcedEntities = append(forcedEntities, state.SelectedEntity)
 	}
+	forcedEntities = append(forcedEntities, state.Include...)
 
 	keep := make([]string, 0, state.NodeLimit)
 	keepLookup := make(map[string]struct{}, state.NodeLimit)
-	for _, node := range nodeTotals {
-		if _, ok := forcedLookup[node.ID]; !ok {
-			continue
+	appendNode := func(node Node) {
+		if len(keep) >= state.NodeLimit {
+			return
+		}
+		if _, ok := keepLookup[node.ID]; ok {
+			return
 		}
 		keep = append(keep, node.ID)
 		keepLookup[node.ID] = struct{}{}
 	}
+	for _, entity := range forcedEntities {
+		for _, node := range nodeTotals {
+			if node.ID == entity {
+				appendNode(node)
+				break
+			}
+		}
+	}
 	for _, node := range nodeTotals {
+		appendNode(node)
 		if len(keep) >= state.NodeLimit {
 			break
 		}
-		if _, ok := keepLookup[node.ID]; ok {
-			continue
-		}
-		keep = append(keep, node.ID)
-		keepLookup[node.ID] = struct{}{}
 	}
 	return keep
 }
@@ -2512,17 +2523,17 @@ func (s *Service) ToggleIgnoreRuleEnabled(id string) error {
 	return s.refreshMetadataWithOptions(s.bgCtx, refreshMetadataOptions{forceSummary: true})
 }
 
-func (s *Service) layoutPositions(ctx context.Context, state QueryState) (map[string]LayoutPoint, error) {
+func (s *Service) layoutPositions(ctx context.Context, state QueryState) (LayoutData, error) {
 	cacheState := state.layoutCacheState()
 	cacheKey := cacheState.cacheKey(layoutCacheKind, s.currentRevision())
-	if positions, ok := s.layoutCache.Get(cacheKey); ok {
-		return positions, nil
+	if graphLayout, ok := s.layoutCache.Get(cacheKey); ok {
+		return graphLayout, nil
 	}
 
 	if cacheState.Metric == MetricDNSLookups {
 		nodeTotals, err := s.queryNodeTotals(ctx, cacheState)
 		if err != nil {
-			return nil, err
+			return LayoutData{}, err
 		}
 		keepEntities := chooseKeepEntities(nodeTotals, cacheState)
 		var edges []Edge
@@ -2538,12 +2549,13 @@ func (s *Service) layoutPositions(ctx context.Context, state QueryState) (map[st
 			return queryErr
 		})
 		if err := group.Wait(); err != nil {
-			return nil, err
+			return LayoutData{}, err
 		}
 		visibleEdges, _ := limitEdges(edges, cacheState.EdgeLimit, cacheState.SelectedEntity)
-		positions := buildSingleMetricLayoutPositions(nodeTotals, visibleEdges)
-		s.layoutCache.Set(cacheKey, positions)
-		return positions, nil
+		layoutNodeTotals := layoutVisibleNodeTotals(nodeTotals, keepEntities)
+		graphLayout := buildSingleMetricLayout(layoutNodeTotals, visibleEdges, cacheState.SelectedEntity)
+		s.layoutCache.Set(cacheKey, graphLayout)
+		return graphLayout, nil
 	}
 
 	bytesState := cacheState.Clone()
@@ -2565,7 +2577,7 @@ func (s *Service) layoutPositions(ctx context.Context, state QueryState) (map[st
 		return queryErr
 	})
 	if err := group.Wait(); err != nil {
-		return nil, err
+		return LayoutData{}, err
 	}
 
 	bytesKeepEntities := chooseKeepEntities(bytesNodeTotals, cacheState)
@@ -2595,28 +2607,32 @@ func (s *Service) layoutPositions(ctx context.Context, state QueryState) (map[st
 		return queryErr
 	})
 	if err := group.Wait(); err != nil {
-		return nil, err
+		return LayoutData{}, err
 	}
 	bytesVisibleEdges, _ := limitEdges(bytesEdges, cacheState.EdgeLimit, cacheState.SelectedEntity)
 	connectionVisibleEdges, _ := limitEdges(connectionEdges, cacheState.EdgeLimit, cacheState.SelectedEntity)
 
-	positions := buildStableLayoutPositions(
+	graphLayout := buildStableLayout(
 		bytesNodeTotals,
 		connectionNodeTotals,
 		bytesVisibleEdges,
 		connectionVisibleEdges,
+		keepEntities,
+		cacheState.SelectedEntity,
 	)
-	s.layoutCache.Set(cacheKey, positions)
-	return positions, nil
+	s.layoutCache.Set(cacheKey, graphLayout)
+	return graphLayout, nil
 }
 
-func buildSingleMetricLayoutPositions(nodes []Node, edges []Edge) map[string]LayoutPoint {
+func buildSingleMetricLayout(nodes []Node, edges []Edge, selectedEntity string) LayoutData {
 	nodeRanks := nodeRankLookup(nodes)
 	layoutNodesByID := make(map[string]layoutNode, len(nodes)+len(edges)*2)
 	for _, node := range nodes {
 		layoutNodesByID[node.ID] = layoutNode{
 			ID:        node.ID,
+			Label:     node.Label,
 			Score:     int64(max(1, nodeRanks[node.ID])),
+			Selected:  node.Selected || node.ID == selectedEntity,
 			Synthetic: node.Synthetic,
 		}
 	}
@@ -2635,7 +2651,7 @@ func buildSingleMetricLayoutPositions(nodes []Node, edges []Edge) map[string]Lay
 	for _, node := range layoutNodesByID {
 		layoutNodes = append(layoutNodes, node)
 	}
-	return computeStableNodePositions(layoutNodes, layoutEdges, graphWidthPx, graphHeightPx)
+	return computeStableGraphLayout(layoutNodes, layoutEdges, 0, 0)
 }
 
 func (s *Service) appendRestNodes(ctx context.Context, state QueryState, keepEntities []string, nodes []Node) ([]Node, error) {
@@ -2649,26 +2665,39 @@ func (s *Service) appendRestNodes(ctx context.Context, state QueryState, keepEnt
 	return nodes, nil
 }
 
-func buildStableLayoutPositions(
+func buildStableLayout(
 	bytesNodeTotals []Node,
 	connectionNodeTotals []Node,
 	bytesEdges []Edge,
 	connectionEdges []Edge,
-) map[string]LayoutPoint {
+	keepEntities []string,
+	selectedEntity string,
+) LayoutData {
 	bytesRank := nodeRankLookup(bytesNodeTotals)
 	connectionRank := nodeRankLookup(connectionNodeTotals)
-	layoutNodesByID := make(map[string]layoutNode, max(len(bytesNodeTotals), len(connectionNodeTotals))+2)
+	keepLookup := keepEntityLookup(keepEntities)
+	layoutNodesByID := make(map[string]layoutNode, len(keepLookup)+2)
 	for _, node := range bytesNodeTotals {
+		if !nodeIncludedInLayout(node.ID, keepLookup) {
+			continue
+		}
 		layoutNodesByID[node.ID] = layoutNode{
 			ID:        node.ID,
+			Label:     node.Label,
 			Score:     nodeLayoutScore(node.ID, bytesRank, connectionRank),
+			Selected:  node.Selected || node.ID == selectedEntity,
 			Synthetic: node.Synthetic,
 		}
 	}
 	for _, node := range connectionNodeTotals {
+		if !nodeIncludedInLayout(node.ID, keepLookup) {
+			continue
+		}
 		layoutNodesByID[node.ID] = layoutNode{
 			ID:        node.ID,
+			Label:     node.Label,
 			Score:     nodeLayoutScore(node.ID, bytesRank, connectionRank),
+			Selected:  node.Selected || node.ID == selectedEntity,
 			Synthetic: node.Synthetic,
 		}
 	}
@@ -2683,12 +2712,16 @@ func buildStableLayoutPositions(
 		}
 		layoutNodesByID[edge.Source] = layoutNode{
 			ID:        edge.Source,
+			Label:     edge.Source,
 			Score:     nodeLayoutScore(edge.Source, bytesRank, connectionRank),
+			Selected:  edge.Source == selectedEntity,
 			Synthetic: edge.Source == graphRestID,
 		}
 		layoutNodesByID[edge.Destination] = layoutNode{
 			ID:        edge.Destination,
+			Label:     edge.Destination,
 			Score:     nodeLayoutScore(edge.Destination, bytesRank, connectionRank),
+			Selected:  edge.Destination == selectedEntity,
 			Synthetic: edge.Destination == graphRestID,
 		}
 	}
@@ -2696,12 +2729,16 @@ func buildStableLayoutPositions(
 		key := edge.Source + "\x00" + edge.Destination
 		layoutNodesByID[edge.Source] = layoutNode{
 			ID:        edge.Source,
+			Label:     edge.Source,
 			Score:     nodeLayoutScore(edge.Source, bytesRank, connectionRank),
+			Selected:  edge.Source == selectedEntity,
 			Synthetic: edge.Source == graphRestID,
 		}
 		layoutNodesByID[edge.Destination] = layoutNode{
 			ID:        edge.Destination,
+			Label:     edge.Destination,
 			Score:     nodeLayoutScore(edge.Destination, bytesRank, connectionRank),
+			Selected:  edge.Destination == selectedEntity,
 			Synthetic: edge.Destination == graphRestID,
 		}
 		if existing, ok := layoutEdgesByKey[key]; ok {
@@ -2727,7 +2764,34 @@ func buildStableLayoutPositions(
 		layoutEdges = append(layoutEdges, edge)
 	}
 
-	return computeStableNodePositions(layoutNodes, layoutEdges, graphWidthPx, graphHeightPx)
+	return computeStableGraphLayout(layoutNodes, layoutEdges, 0, 0)
+}
+
+func layoutVisibleNodeTotals(nodes []Node, keepEntities []string) []Node {
+	keepLookup := keepEntityLookup(keepEntities)
+	visibleNodes := make([]Node, 0, min(len(nodes), len(keepLookup)+1))
+	for _, node := range nodes {
+		if nodeIncludedInLayout(node.ID, keepLookup) {
+			visibleNodes = append(visibleNodes, node)
+		}
+	}
+	return visibleNodes
+}
+
+func keepEntityLookup(keepEntities []string) map[string]struct{} {
+	keepLookup := make(map[string]struct{}, len(keepEntities))
+	for _, entity := range keepEntities {
+		keepLookup[entity] = struct{}{}
+	}
+	return keepLookup
+}
+
+func nodeIncludedInLayout(nodeID string, keepLookup map[string]struct{}) bool {
+	if nodeID == graphRestID {
+		return true
+	}
+	_, ok := keepLookup[nodeID]
+	return ok
 }
 
 func nodeRankLookup(nodes []Node) map[string]int {

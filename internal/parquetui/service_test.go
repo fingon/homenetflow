@@ -43,6 +43,23 @@ func TestTotalsFromEdgesAggregatesRawEdgeData(t *testing.T) {
 	assert.Equal(t, totals.Ignored, int64(2))
 }
 
+func TestChooseKeepEntitiesKeepsNodeLimitHard(t *testing.T) {
+	nodes := []Node{
+		{ID: "top"},
+		{ID: "selected"},
+		{ID: "included"},
+		{ID: "overflow"},
+	}
+
+	keepEntities := chooseKeepEntities(nodes, QueryState{
+		Include:        []string{"included", "overflow"},
+		NodeLimit:      2,
+		SelectedEntity: "selected",
+	})
+
+	assert.DeepEqual(t, keepEntities, []string{"selected", "included"})
+}
+
 func TestNewServiceRejectsBaseParquet(t *testing.T) {
 	tempDir := t.TempDir()
 	writeBaseParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"))

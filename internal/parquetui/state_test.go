@@ -175,6 +175,39 @@ func TestQueryStateNormalizedAppliesSpanAndNodeLimit(t *testing.T) {
 	assert.Equal(t, normalized.Metric, MetricConnections)
 }
 
+func TestQueryStateNormalizedCapsGraphLimits(t *testing.T) {
+	state := QueryState{
+		EdgeLimit:   maxEdgeLimit + 1,
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+		NodeLimit:   maxNodeLimit + 1,
+	}
+
+	normalized := state.Normalized(TimeSpan{
+		StartNs: 10,
+		EndNs:   100,
+	})
+
+	assert.Equal(t, normalized.EdgeLimit, defaultEdgeLimit)
+	assert.Equal(t, normalized.NodeLimit, maxNodeLimit)
+}
+
+func TestQueryStateNormalizedRejectsUnlimitedEdges(t *testing.T) {
+	state := QueryState{
+		EdgeLimit:   0,
+		Granularity: GranularityHostname,
+		Metric:      MetricBytes,
+		NodeLimit:   defaultGraphNodeLimit,
+	}
+
+	normalized := state.Normalized(TimeSpan{
+		StartNs: 10,
+		EndNs:   100,
+	})
+
+	assert.Equal(t, normalized.EdgeLimit, defaultEdgeLimit)
+}
+
 func TestQueryStateNormalizedResetsDirectionForDNSLookups(t *testing.T) {
 	state := QueryState{
 		Direction: DirectionIngress,

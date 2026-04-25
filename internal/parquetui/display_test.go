@@ -14,6 +14,8 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+const layoutUnitTestTimeout = time.Second
+
 func TestFormatMetricValue(t *testing.T) {
 	t.Parallel()
 
@@ -1454,62 +1456,62 @@ func TestAppShellRendersFlowsTableCollapsedByDefault(t *testing.T) {
 }
 
 func TestServiceGraphKeepsNodePositionsStableAcrossMetrics(t *testing.T) {
-	tempDir := t.TempDir()
-	writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
-		sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 9000, 10, 20),
-		sampleRecord("192.168.1.10", "9.9.9.9", "alpha.lan", "lan", "lan", "dns.quad9.net", "quad9.net", "net", 9000, 30, 40),
-		sampleRecord("192.168.1.11", "8.8.4.4", "beta.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 50, 60),
-		sampleRecord("192.168.1.11", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 100, 70, 80),
-		sampleRecord("192.168.1.11", "1.0.0.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 100, 90, 100),
-		sampleRecord("192.168.1.11", "149.112.112.112", "beta.lan", "lan", "lan", "dns.quad9.net", "quad9.net", "net", 100, 110, 120),
-	})
+	runLayoutUnitTest(t, func() {
+		tempDir := t.TempDir()
+		writeEnrichedParquet(t, filepath.Join(tempDir, "nfcap_202604.parquet"), []model.FlowRecord{
+			sampleRecord("192.168.1.10", "8.8.8.8", "alpha.lan", "lan", "lan", "dns.google", "google.com", "com", 9000, 10, 20),
+			sampleRecord("192.168.1.10", "9.9.9.9", "alpha.lan", "lan", "lan", "dns.quad9.net", "quad9.net", "net", 9000, 30, 40),
+			sampleRecord("192.168.1.11", "8.8.4.4", "beta.lan", "lan", "lan", "dns.google", "google.com", "com", 100, 50, 60),
+			sampleRecord("192.168.1.11", "1.1.1.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 100, 70, 80),
+			sampleRecord("192.168.1.11", "1.0.0.1", "beta.lan", "lan", "lan", "one.one.one.one", "one.one.one.one", "one.one.one.one", 100, 90, 100),
+			sampleRecord("192.168.1.11", "149.112.112.112", "beta.lan", "lan", "lan", "dns.quad9.net", "quad9.net", "net", 100, 110, 120),
+		})
 
-	service, err := NewService(context.Background(), tempDir, time.Hour)
-	assert.NilError(t, err)
-	defer service.Close()
+		service, err := NewService(context.Background(), tempDir, time.Hour)
+		assert.NilError(t, err)
+		defer service.Close()
 
-	baseState := QueryState{
-		Granularity: GranularityHostname,
-		NodeLimit:   2,
-		EdgeLimit:   2,
-	}
-	bytesGraph, err := service.Graph(context.Background(), QueryState{
-		Granularity: baseState.Granularity,
-		Metric:      MetricBytes,
-		NodeLimit:   baseState.NodeLimit,
-		EdgeLimit:   baseState.EdgeLimit,
-	})
-	assert.NilError(t, err)
-	connectionGraph, err := service.Graph(context.Background(), QueryState{
-		Granularity: baseState.Granularity,
-		Metric:      MetricConnections,
-		NodeLimit:   baseState.NodeLimit,
-		EdgeLimit:   baseState.EdgeLimit,
-	})
-	assert.NilError(t, err)
-
-	for _, node := range bytesGraph.Nodes {
-		position, ok := bytesGraph.NodePositions[node.ID]
-		assert.Assert(t, ok, "missing position for %s", node.ID)
-		assert.Assert(t, position.X >= 0)
-		assert.Assert(t, position.X <= graphWidthPx)
-		assert.Assert(t, position.Y >= 0)
-		assert.Assert(t, position.Y <= graphHeightPx)
-	}
-
-	for _, node := range connectionGraph.Nodes {
-		bytesPosition, bytesOK := bytesGraph.NodePositions[node.ID]
-		connectionPosition, connectionOK := connectionGraph.NodePositions[node.ID]
-		if !bytesOK || !connectionOK {
-			continue
+		baseState := QueryState{
+			Granularity: GranularityHostname,
+			NodeLimit:   2,
+			EdgeLimit:   2,
 		}
-		assert.Equal(t, bytesPosition, connectionPosition)
-	}
+		bytesGraph, err := service.Graph(context.Background(), QueryState{
+			Granularity: baseState.Granularity,
+			Metric:      MetricBytes,
+			NodeLimit:   baseState.NodeLimit,
+			EdgeLimit:   baseState.EdgeLimit,
+		})
+		assert.NilError(t, err)
+		connectionGraph, err := service.Graph(context.Background(), QueryState{
+			Granularity: baseState.Granularity,
+			Metric:      MetricConnections,
+			NodeLimit:   baseState.NodeLimit,
+			EdgeLimit:   baseState.EdgeLimit,
+		})
+		assert.NilError(t, err)
 
-	restPosition, restOK := bytesGraph.NodePositions[graphRestID]
-	if restOK {
-		assert.Assert(t, restPosition.Y > graphHeightPx/2)
-	}
+		for _, node := range bytesGraph.Nodes {
+			position, ok := bytesGraph.NodePositions[node.ID]
+			assert.Assert(t, ok, "missing position for %s", node.ID)
+			assert.Assert(t, position.X >= 0)
+			assert.Assert(t, position.X <= float64(bytesGraph.LayoutWidthPx))
+			assert.Assert(t, position.Y >= 0)
+			assert.Assert(t, position.Y <= float64(bytesGraph.LayoutHeightPx))
+		}
+
+		for _, node := range connectionGraph.Nodes {
+			bytesPosition, bytesOK := bytesGraph.NodePositions[node.ID]
+			connectionPosition, connectionOK := connectionGraph.NodePositions[node.ID]
+			if !bytesOK || !connectionOK {
+				continue
+			}
+			assert.Equal(t, bytesPosition, connectionPosition)
+		}
+
+		assert.Assert(t, bytesGraph.LayoutWidthPx >= graphWidthPx)
+		assert.Assert(t, bytesGraph.LayoutHeightPx >= graphHeightPx)
+	})
 }
 
 func renderNodeString(t *testing.T, node interface{ Render(io.Writer) error }) string {
@@ -1532,97 +1534,168 @@ func anchorMarkupForLabel(t *testing.T, markup, label string) string {
 	return markup[startIndex : labelIndex+endOffset+len("</a>")]
 }
 
-func TestBuildLayoutRings(t *testing.T) {
+func TestComputeStableGraphLayoutIsDeterministic(t *testing.T) {
 	t.Parallel()
 
-	nodes := make([]layoutNode, 0, 60)
-	for index := range 60 {
-		nodes = append(nodes, layoutNode{
-			ID:    string(rune('a'+(index%26))) + strings.Repeat("x", index/26),
-			Score: int64(100 - index),
-		})
-	}
+	runLayoutUnitTest(t, func() {
+		nodes := make([]layoutNode, 0, 24)
+		edges := make([]layoutEdge, 0, 24)
+		for index := range 24 {
+			nodeID := fmt.Sprintf("node-%d", index)
+			nodes = append(nodes, layoutNode{
+				ID:    nodeID,
+				Label: nodeID,
+				Score: int64(100 - index),
+			})
+			if index > 0 {
+				edges = append(edges, layoutEdge{
+					Bytes:       int64(1000 + index),
+					Connections: int64(index),
+					Destination: nodeID,
+					Source:      fmt.Sprintf("node-%d", index-1),
+				})
+			}
+		}
 
-	nodeRadiiByID := make(map[string]float64, len(nodes))
-	for _, node := range nodes {
-		nodeRadiiByID[node.ID] = nodeRadius(node.Score, 100)
-	}
+		firstLayout := computeStableGraphLayout(nodes, edges, 0, 0)
+		secondLayout := computeStableGraphLayout(nodes, edges, 0, 0)
 
-	rings := buildLayoutRings(nodes, nodeRadiiByID, graphWidthPx/2-float64(layoutNodePaddingPx), graphHeightPx/2-float64(layoutNodePaddingPx))
-
-	totalNodes := 0
-	for _, ring := range rings {
-		totalNodes += len(ring)
-	}
-
-	assert.Assert(t, len(rings) >= 3)
-	assert.Assert(t, len(rings[0]) > 0)
-	assert.Assert(t, len(rings[0]) <= layoutInnerRingCount)
-	assert.Assert(t, len(rings[1]) <= layoutMiddleRingCount)
-	assert.Assert(t, len(rings[2]) > 0)
-	assert.Equal(t, totalNodes, len(nodes))
+		assert.Equal(t, firstLayout.WidthPx, secondLayout.WidthPx)
+		assert.Equal(t, firstLayout.HeightPx, secondLayout.HeightPx)
+		assert.DeepEqual(t, firstLayout.Positions, secondLayout.Positions)
+	})
 }
 
-func TestBuildLayoutRingsKeepsDefaultGraphOnOneRing(t *testing.T) {
+func TestComputeStableGraphLayoutExpandsDenseBounds(t *testing.T) {
 	t.Parallel()
 
-	nodes := make([]layoutNode, 0, 9)
-	for index := range 9 {
-		nodes = append(nodes, layoutNode{
-			ID:    fmt.Sprintf("node-%d", index),
-			Score: int64(100 - index),
-		})
-	}
+	runLayoutUnitTest(t, func() {
+		nodes := make([]layoutNode, 0, maxNodeLimit)
+		for index := range maxNodeLimit {
+			nodes = append(nodes, layoutNode{
+				ID:    fmt.Sprintf("node-%d", index),
+				Label: fmt.Sprintf("node-%d", index),
+				Score: int64(500 - index),
+			})
+		}
 
-	nodeRadiiByID := make(map[string]float64, len(nodes))
-	for _, node := range nodes {
-		nodeRadiiByID[node.ID] = nodeRadius(node.Score, 100)
-	}
+		graphLayout := computeStableGraphLayout(nodes, nil, 0, 0)
 
-	rings := buildLayoutRings(nodes, nodeRadiiByID, graphWidthPx/2-float64(layoutNodePaddingPx), graphHeightPx/2-float64(layoutNodePaddingPx))
-
-	assert.Equal(t, len(rings), 1)
-	assert.Equal(t, len(rings[0]), len(nodes))
+		assert.Assert(t, graphLayout.WidthPx > graphWidthPx)
+		assert.Assert(t, graphLayout.HeightPx > graphHeightPx)
+		assert.Assert(t, len(graphLayout.Positions) == len(nodes))
+	})
 }
 
-func TestOrderLayoutRingUsesPlacedNeighborAngles(t *testing.T) {
+func TestComputeStableGraphLayoutAvoidsDenseCircleOverlap(t *testing.T) {
 	t.Parallel()
 
-	neighborsByNode := map[string][]layoutNeighbor{
-		"left-child": {
-			{otherID: "left-anchor", weight: 5},
-		},
-		"right-child": {
-			{otherID: "right-anchor", weight: 5},
-		},
-	}
-	placedAngles := map[string]float64{
-		"left-anchor":  normalizeAngle(math.Pi),
-		"right-anchor": 0,
-	}
-	ring := []layoutNode{
-		{ID: "right-child", Score: 10},
-		{ID: "left-child", Score: 10},
-	}
+	runLayoutUnitTest(t, func() {
+		nodes := make([]layoutNode, 0, maxNodeLimit)
+		for index := range maxNodeLimit {
+			nodes = append(nodes, layoutNode{
+				ID:    fmt.Sprintf("node-%d", index),
+				Label: fmt.Sprintf("node-%d", index),
+				Score: int64(300 - index),
+			})
+		}
 
-	ordered := orderLayoutRing(ring, neighborsByNode, placedAngles)
+		graphLayout := computeStableGraphLayout(nodes, nil, 0, 0)
+		assertNoLayoutCircleOverlap(t, nodes, graphLayout.Positions)
+	})
+}
 
-	assert.Equal(t, ordered[0].ID, "right-child")
-	assert.Equal(t, ordered[1].ID, "left-child")
+func TestComputeStableGraphLayoutAvoidsPersistentLabelOverlap(t *testing.T) {
+	t.Parallel()
+
+	runLayoutUnitTest(t, func() {
+		nodes := []layoutNode{
+			{ID: "selected-alpha", Label: "selected-alpha.example", Score: 100, Selected: true},
+			{ID: "synthetic-rest", Label: "synthetic-rest.example", Score: 90, Synthetic: true},
+			{ID: "regular", Label: "regular.example", Score: 80},
+		}
+
+		graphLayout := computeStableGraphLayout(nodes, nil, graphWidthPx, graphHeightPx)
+		nodeRadiiByID := make(map[string]float64, len(nodes))
+		for _, node := range nodes {
+			nodeRadiiByID[node.ID] = nodeRadius(node.Score, 100)
+		}
+
+		persistentNodes := nodes[:2]
+		for leftIndex := range persistentNodes {
+			leftNode := persistentNodes[leftIndex]
+			leftRects := nodeCollisionRects(leftNode, graphLayout.Positions[leftNode.ID], nodeRadiiByID[leftNode.ID])
+			for rightIndex := leftIndex + 1; rightIndex < len(persistentNodes); rightIndex++ {
+				rightNode := persistentNodes[rightIndex]
+				rightRects := nodeCollisionRects(rightNode, graphLayout.Positions[rightNode.ID], nodeRadiiByID[rightNode.ID])
+				for _, leftRect := range leftRects {
+					for _, rightRect := range rightRects {
+						assert.Assert(t, !rectsOverlap(leftRect, rightRect), "%s and %s label boxes overlap", leftNode.ID, rightNode.ID)
+					}
+				}
+			}
+		}
+	})
 }
 
 func TestComputeStableNodePositionsAvoidsCircleOverlap(t *testing.T) {
 	t.Parallel()
 
-	nodes := make([]layoutNode, 0, 14)
-	for index := range 14 {
-		nodes = append(nodes, layoutNode{
-			ID:    fmt.Sprintf("node-%d", index),
-			Score: int64(200 - index*10),
-		})
-	}
+	runLayoutUnitTest(t, func() {
+		nodes := make([]layoutNode, 0, 14)
+		for index := range 14 {
+			nodes = append(nodes, layoutNode{
+				ID:    fmt.Sprintf("node-%d", index),
+				Score: int64(200 - index*10),
+			})
+		}
 
-	positions := computeStableNodePositions(nodes, nil, graphWidthPx, graphHeightPx)
+		positions := computeStableNodePositions(nodes, nil, graphWidthPx, graphHeightPx)
+		assertNoLayoutCircleOverlap(t, nodes, positions)
+	})
+}
+
+func TestBuildSingleMetricLayoutUsesOnlyVisibleNodeTotals(t *testing.T) {
+	t.Parallel()
+
+	runLayoutUnitTest(t, func() {
+		nodes := make([]Node, 0, maxNodeLimit+25)
+		for index := range maxNodeLimit + 25 {
+			nodeID := fmt.Sprintf("node-%d", index)
+			nodes = append(nodes, Node{
+				ID:    nodeID,
+				Label: nodeID,
+				Total: int64(maxNodeLimit + 25 - index),
+			})
+		}
+		nodes = append(nodes, Node{ID: graphRestID, Label: graphRestID, Synthetic: true, Total: 1})
+		keepEntities := chooseKeepEntities(nodes, QueryState{NodeLimit: maxNodeLimit})
+
+		graphLayout := buildSingleMetricLayout(layoutVisibleNodeTotals(nodes, keepEntities), nil, "")
+
+		assert.Assert(t, len(graphLayout.Positions) <= maxNodeLimit+1)
+		assert.Assert(t, graphLayout.Positions[graphRestID] != LayoutPoint{})
+	})
+}
+
+func runLayoutUnitTest(t *testing.T, run func()) {
+	t.Helper()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		run()
+	}()
+	select {
+	case <-done:
+	case <-time.After(layoutUnitTestTimeout):
+		t.Fatalf("graph layout unit test exceeded %s; layout delays over one second are unacceptable to users", layoutUnitTestTimeout)
+	}
+}
+
+func assertNoLayoutCircleOverlap(t *testing.T, nodes []layoutNode, positions map[string]LayoutPoint) {
+	t.Helper()
+
 	maxScore := nodes[0].Score
 	for leftIndex := range nodes {
 		leftNode := nodes[leftIndex]

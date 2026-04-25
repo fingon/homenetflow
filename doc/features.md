@@ -89,6 +89,7 @@ User-visible behavior:
 - serves views over 7 days from UI summaries instead of raw flow rows
 - supports ignored-traffic rules based on entities, host/IP identity, CIDR, protocol, service port, direction, and address family
 - groups overflowed graph nodes into `Rest`
+- caps graph layout size for responsiveness; layout delays over one second are unacceptable to users
 - colors nodes by address class so private, mixed, and public traffic are distinguishable
 - uses local buckets for private/local `tld` and `2ld` entities and `Unknown public` for unresolved public entities
 - refreshes automatically when underlying parquet files change

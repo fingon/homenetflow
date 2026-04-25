@@ -13,6 +13,7 @@ require (
 	github.com/schollz/progressbar/v3 v3.18.0
 	golang.org/x/net v0.52.0
 	golang.org/x/sync v0.20.0
+	gonum.org/v1/gonum v0.16.0
 	gotest.tools/v3 v3.5.2
 	maragu.dev/gomponents v1.2.0
 )

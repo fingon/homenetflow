@@ -143,7 +143,7 @@ func (s *Service) summaryGraph(ctx context.Context, state QueryState, span TimeS
 		return 1
 	})
 
-	nodePositions, err := s.summaryLayoutPositions(ctx, state)
+	graphLayout, err := s.summaryLayoutPositions(ctx, state)
 	if err != nil {
 		return GraphData{}, err
 	}
@@ -162,8 +162,10 @@ func (s *Service) summaryGraph(ctx context.Context, state QueryState, span TimeS
 		Edges:             visibleEdges,
 		HiddenEdgeCount:   hiddenEdgeCount,
 		HiddenNodeCount:   max(0, len(view.nodeTotals)-countNonSynthetic(view.nodeTotals, keepLookup)),
+		LayoutHeightPx:    graphLayout.HeightPx,
+		LayoutWidthPx:     graphLayout.WidthPx,
 		Nodes:             nodes,
-		NodePositions:     nodePositions,
+		NodePositions:     graphLayout.Positions,
 		Span:              span,
 		Totals:            viewTotalsForMetric(snapshot.totals, len(view.nodeTotals), len(visibleEdges)),
 		TopEdges:          limitTopEdges(visibleEdges, summaryTopItemLimit),
@@ -350,35 +352,35 @@ func (s *Service) summaryIgnoreCondition(state QueryState) (string, []any, error
 	return buildFlowSummaryIgnoreConditionSQL(s.enabledIgnoreRules(), s.inetSupportEnabled())
 }
 
-func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) (map[string]LayoutPoint, error) {
+func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) (LayoutData, error) {
 	cacheState := state.layoutCacheState()
 	cacheKey := cacheState.cacheKey(layoutCacheKind, s.currentRevision()) + ":summary"
-	if positions, ok := s.layoutCache.Get(cacheKey); ok {
-		return positions, nil
+	if graphLayout, ok := s.layoutCache.Get(cacheKey); ok {
+		return graphLayout, nil
 	}
 
 	if cacheState.Metric == MetricDNSLookups {
 		snapshot, err := s.summaryGraphSnapshotForCurrentSpan(ctx, cacheState, MetricDNSLookups)
 		if err != nil {
-			return nil, err
+			return LayoutData{}, err
 		}
 		view := buildSummaryMetricView(snapshot, MetricDNSLookups)
 		keepEntities := chooseKeepEntities(view.nodeTotals, cacheState)
 		edges, nodeMap := buildSummaryVisibleGraph(view, keepEntities, cacheState)
 		nodes := nodesFromMapSorted(nodeMap)
 		visibleEdges, _ := limitEdges(edges, cacheState.EdgeLimit, "")
-		positions := buildSingleMetricLayoutPositions(nodes, visibleEdges)
-		s.layoutCache.Set(cacheKey, positions)
-		return positions, nil
+		graphLayout := buildSingleMetricLayout(nodes, visibleEdges, cacheState.SelectedEntity)
+		s.layoutCache.Set(cacheKey, graphLayout)
+		return graphLayout, nil
 	}
 
 	bytesSnapshot, err := s.summaryGraphSnapshotForCurrentSpan(ctx, cacheState, MetricBytes)
 	if err != nil {
-		return nil, err
+		return LayoutData{}, err
 	}
 	connectionSnapshot, err := s.summaryGraphSnapshotForCurrentSpan(ctx, cacheState, MetricConnections)
 	if err != nil {
-		return nil, err
+		return LayoutData{}, err
 	}
 	bytesView := buildSummaryMetricView(bytesSnapshot, MetricBytes)
 	connectionView := buildSummaryMetricView(connectionSnapshot, MetricConnections)
@@ -393,14 +395,16 @@ func (s *Service) summaryLayoutPositions(ctx context.Context, state QueryState) 
 	bytesVisibleEdges, _ := limitEdges(bytesEdges, cacheState.EdgeLimit, "")
 	connectionVisibleEdges, _ := limitEdges(connectionEdges, cacheState.EdgeLimit, "")
 
-	positions := buildStableLayoutPositions(
+	graphLayout := buildStableLayout(
 		bytesNodeTotals,
 		connectionNodeTotals,
 		bytesVisibleEdges,
 		connectionVisibleEdges,
+		keepEntities,
+		cacheState.SelectedEntity,
 	)
-	s.layoutCache.Set(cacheKey, positions)
-	return positions, nil
+	s.layoutCache.Set(cacheKey, graphLayout)
+	return graphLayout, nil
 }
 
 func (s *Service) summaryGraphSnapshotForCurrentSpan(ctx context.Context, state QueryState, metric Metric) (*summaryGraphSnapshotData, error) {

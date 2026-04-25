@@ -983,10 +983,8 @@ func topBar(dashboard DashboardData) g.Node {
 					Select(
 						ID("node-limit"),
 						Name("node_limit"),
-						optionValue("10", "Top 10", state.NodeLimit == 10 || state.NodeLimit == 0),
-						optionValue("50", "Top 50", state.NodeLimit == 50),
-						optionValue("200", "Top 200", state.NodeLimit == 200),
-						optionValue("500", "Top 500", state.NodeLimit == 500),
+						optionValue(strconv.Itoa(defaultGraphNodeLimit), "Top 10", state.NodeLimit == defaultGraphNodeLimit || state.NodeLimit == 0),
+						optionValue(strconv.Itoa(maxNodeLimit), "Top 50", state.NodeLimit == maxNodeLimit),
 					),
 				),
 				Div(
@@ -995,9 +993,7 @@ func topBar(dashboard DashboardData) g.Node {
 					Select(
 						ID("edge-limit"),
 						Name("edge_limit"),
-						optionValue("100", "Important", state.EdgeLimit == 100),
-						optionValue("250", "Top 250", state.EdgeLimit == 250),
-						optionValue("0", "All", state.EdgeLimit == 0),
+						optionValue(strconv.Itoa(defaultEdgeLimit), "Important", state.EdgeLimit == defaultEdgeLimit),
 					),
 				),
 				navLink(ignoreRulesURL(stateURL(state), "Back to graph"), actionButtonClass, fmt.Sprintf("Ignored Rules (%d)", dashboard.IgnoreRuleCount)),
@@ -1081,16 +1077,17 @@ func sectionToggleAriaLabel(title string, expanded bool) string {
 func graphSVGMarkup(state QueryState, graph GraphData) string {
 	var builder strings.Builder
 
-	fmt.Fprintf(&builder, `<svg class="%s" viewBox="0 0 %d %d" role="img" aria-label="Traffic graph">`, graphSVGClass(state, graph), graphWidthPx, graphHeightPx)
+	layoutWidthPx, layoutHeightPx := graphLayoutDimensions(graph)
+	fmt.Fprintf(&builder, `<svg class="%s" viewBox="0 0 %d %d" role="img" aria-label="Traffic graph">`, graphSVGClass(state, graph), layoutWidthPx, layoutHeightPx)
 	if len(graph.Nodes) == 0 {
-		builder.WriteString(labelTextMarkup(float64(graphWidthPx)/2, float64(graphHeightPx)/2, "No graph data", "middle"))
+		builder.WriteString(labelTextMarkup(float64(layoutWidthPx)/2, float64(layoutHeightPx)/2, "No graph data", "middle"))
 		builder.WriteString(`</svg>`)
 		return builder.String()
 	}
 
 	positions := graph.NodePositions
 	if len(positions) == 0 {
-		positions = computeNodePositions(graph.Nodes, graphWidthPx, graphHeightPx)
+		positions = computeNodePositions(graph.Nodes, layoutWidthPx, layoutHeightPx)
 	}
 	builder.WriteString(`<g class="graph-scene">`)
 	builder.WriteString(`<g class="graph-edges">`)
@@ -1158,6 +1155,18 @@ func graphSVGMarkup(state QueryState, graph GraphData) string {
 
 	builder.WriteString(`</g></g></svg>`)
 	return builder.String()
+}
+
+func graphLayoutDimensions(graph GraphData) (int, int) {
+	widthPx := graph.LayoutWidthPx
+	if widthPx <= 0 {
+		widthPx = graphWidthPx
+	}
+	heightPx := graph.LayoutHeightPx
+	if heightPx <= 0 {
+		heightPx = graphHeightPx
+	}
+	return widthPx, heightPx
 }
 
 func edgeTitle(metric Metric, edge Edge) string {

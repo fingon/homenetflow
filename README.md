@@ -181,6 +181,7 @@ The UI includes:
 - a local identity toggle that can group local/private endpoints by inferred device while keeping public endpoints grouped by the selected granularity
 - entity selection, include/exclude filtering, and a sortable flows table
 - capped node counts at granular levels with a `Rest` bucket
+- graph layout is capped for interactive use; layout delays over one second are unacceptable to users
 - private-aware graph coloring: private nodes are green, mixed nodes are yellow, public nodes use the default blue
 
 The UI uses htmx for navigation and filter updates, with only a small amount of custom JavaScript for histogram brushing and request status handling.
