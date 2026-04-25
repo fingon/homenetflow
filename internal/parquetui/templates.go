@@ -160,16 +160,20 @@ func AppShell(dashboard DashboardData) g.Node {
 			Class("dashboard-main"),
 			Div(
 				Class("dashboard-primary"),
-				Section(
-					Class("histogram-panel"),
-					Div(
-						Class("panel-heading"),
-						H2(g.Text("Timeline")),
-						Span(Class("panel-subtle hover-help timeline-help"), g.Text("Drag to zoom")),
-					),
-					Div(
-						Class("timeline-layout"),
+				Div(
+					Class("timeline-row"),
+					Section(
+						Class("section-panel section-block totals-panel"),
+						Div(Class("panel-heading section-heading"), H2(g.Text("Totals"))),
 						TotalsPanel(state, dashboard.Graph),
+					),
+					Section(
+						Class("histogram-panel"),
+						Div(
+							Class("panel-heading"),
+							H2(g.Text("Timeline")),
+							Span(Class("panel-subtle hover-help timeline-help"), g.Text("Drag to zoom")),
+						),
 						Div(
 							ID("histogram"),
 							Class("histogram"),
@@ -263,10 +267,10 @@ func ActiveFiltersOverlay(state QueryState) g.Node {
 }
 
 func TotalsPanel(state QueryState, graph GraphData) g.Node {
-	return Aside(
-		Class("timeline-totals-panel"),
+	return Div(
+		Class("totals-panel-content"),
 		g.Attr("aria-label", "Totals"),
-		Div(append([]g.Node{Class("stats-grid timeline-stats-grid")}, totalStatBlocks(state, graph)...)...),
+		Div(append([]g.Node{Class("stats-grid totals-stats-grid")}, totalStatBlocks(state, graph)...)...),
 	)
 }
 
@@ -460,6 +464,19 @@ func selectedPanelAt(state QueryState, graph GraphData, now time.Time) g.Node {
 	}
 
 	if graph.SelectedNode == nil {
+		if !state.EntityActionsEnabled() {
+			return Div(
+				Class("selected-item-panel selected-item-panel-unavailable"),
+				Div(
+					Class("selected-item-row"),
+					Div(
+						Class("selected-item-main"),
+						Span(Class("selected-item-kind"), g.Text("Selection")),
+						Span(Class("chip"), g.Text(entityActionsUnavailableMessage)),
+					),
+				),
+			)
+		}
 		return nil
 	}
 	if !state.EntityActionsEnabled() {

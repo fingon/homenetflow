@@ -895,6 +895,19 @@ func TestSelectedPanelOmitsPlaceholderWhenNothingSelected(t *testing.T) {
 	assert.Assert(t, !strings.Contains(markup, "Click a node to highlight it"))
 }
 
+func TestSelectedPanelExplainsSelectionUnavailableForLongRange(t *testing.T) {
+	t.Parallel()
+
+	markup := renderNodeString(t, selectedPanelAt(QueryState{
+		FromNs: 1,
+		Metric: MetricBytes,
+		ToNs:   1 + int64(8*24*time.Hour),
+	}, GraphData{ActiveMetric: MetricBytes}, time.Date(2026, time.April, 15, 12, 0, 0, 0, time.UTC)))
+
+	assert.Assert(t, strings.Contains(markup, `class="selected-item-panel selected-item-panel-unavailable"`))
+	assert.Assert(t, strings.Contains(markup, entityActionsUnavailableMessage))
+}
+
 func TestBreakdownPanelRendersTrafficBreakdown(t *testing.T) {
 	t.Parallel()
 
@@ -1302,7 +1315,7 @@ func TestAppShellRendersRankingsInSidebar(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `data-rankings-tab="flows"`))
 	assert.Assert(t, strings.Contains(markup, `id="rankings-panel-entities"`))
 	assert.Assert(t, strings.Contains(markup, `id="rankings-panel-flows"`))
-	assert.Assert(t, strings.Contains(markup, `class="timeline-totals-panel"`))
+	assert.Assert(t, strings.Contains(markup, `class="section-panel section-block totals-panel"`))
 	assert.Assert(t, strings.Contains(markup, `class="graph-filter-overlay"`))
 	assert.Assert(t, !strings.Contains(markup, `id="summary-panel"`))
 	assert.Assert(t, !strings.Contains(markup, `class="side-panel"`))
@@ -1387,8 +1400,8 @@ func TestAppShellRendersBreakdownBesideTimelineAndGraph(t *testing.T) {
 	assert.Assert(t, strings.Contains(markup, `class="dashboard-main"`))
 	assert.Assert(t, strings.Contains(markup, `class="dashboard-primary"`))
 	assert.Assert(t, strings.Contains(markup, `class="dashboard-sidebar has-breakdown"`))
-	assert.Assert(t, strings.Contains(markup, `class="timeline-layout"`))
-	assert.Assert(t, strings.Contains(markup, `class="timeline-totals-panel"`))
+	assert.Assert(t, strings.Contains(markup, `class="timeline-row"`))
+	assert.Assert(t, strings.Contains(markup, `class="section-panel section-block totals-panel"`))
 	assert.Assert(t, strings.Contains(markup, `id="histogram"`))
 	assert.Assert(t, strings.Contains(markup, `id="graph-section"`))
 	assert.Assert(t, strings.Contains(markup, `class="graph-filter-overlay"`))

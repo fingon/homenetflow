@@ -307,7 +307,7 @@ input[type="search"] {
 
 .graph-canvas {
   position: relative;
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 4 / 3;
   width: 100%;
   overflow: hidden;
   border-radius: 0.5rem;
@@ -325,15 +325,24 @@ input[type="search"] {
   position: relative;
 }
 
-.timeline-layout {
+.timeline-row {
   display: grid;
-  grid-template-columns: minmax(8.5rem, 11rem) minmax(0, 1fr);
+  grid-template-columns: minmax(7rem, 9rem) minmax(0, 1fr);
   gap: 0.5rem;
-  align-items: stretch;
+  align-items: start;
 }
 
-.timeline-totals-panel {
+.totals-panel {
   min-width: 0;
+  padding: 0.4rem;
+}
+
+.totals-panel .panel-heading {
+  margin-bottom: 0.2rem;
+}
+
+.totals-panel h2 {
+  font-size: 0.9rem;
 }
 
 .histogram {
@@ -524,9 +533,23 @@ input[type="search"] {
   gap: 0.3rem;
 }
 
-.timeline-stats-grid {
+.totals-stats-grid {
   grid-template-columns: 1fr;
   align-content: start;
+  gap: 0.2rem;
+}
+
+.totals-stats-grid .stat-block {
+  padding: 0.25rem 0.35rem;
+}
+
+.totals-stats-grid .stat-label {
+  font-size: 0.74rem;
+}
+
+.totals-stats-grid .stat-value {
+  margin-top: 0.04rem;
+  font-size: 0.86rem;
 }
 
 .stat-block {
@@ -994,11 +1017,11 @@ svg.histogram-svg {
     grid-template-columns: 1fr;
   }
 
-  .timeline-layout {
+  .timeline-row {
     grid-template-columns: 1fr;
   }
 
-  .timeline-stats-grid {
+  .totals-stats-grid {
     grid-template-columns: repeat(auto-fit, minmax(5.8rem, 1fr));
   }
 
